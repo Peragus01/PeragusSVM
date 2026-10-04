@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::{constants::SETTLEMENT_SEED, state::Settlement};
+use crate::{constants::SETTLEMENT_SEED, error::ErrorCode, state::{Settlement, SettlementStatus}};
 
 #[derive(Accounts)]
 #[instruction(settlement_id: [u8; 32])]
@@ -26,6 +26,11 @@ pub fn handle_create_settlement(
     amount_in: u64,
     amount_out: u64,
 ) -> Result<()> {
+    require!(
+        amount_in > 0 && amount_out > 0,
+        ErrorCode::InvalidAmount
+    );
+
     let settlement = &mut ctx.accounts.settlement;
 
     settlement.settlement_id = settlement_id;
@@ -33,7 +38,7 @@ pub fn handle_create_settlement(
     settlement.amount_in = amount_in;
     settlement.amount_out = amount_out;
     settlement.created_at = Clock::get()?.unix_timestamp;
-    settlement.status = 0;
+    settlement.status = SettlementStatus::Pending;
     settlement.bump = ctx.bumps.settlement;
 
     msg!(

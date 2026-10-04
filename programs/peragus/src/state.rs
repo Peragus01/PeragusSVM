@@ -1,5 +1,11 @@
 use anchor_lang::prelude::*;
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+pub enum SettlementStatus {
+    Pending,
+    Settled,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Settlement {
@@ -8,6 +14,6 @@ pub struct Settlement {
     pub amount_in: u64,
     pub amount_out: u64,
     pub created_at: i64,
-    pub status: u8,
+    pub status: SettlementStatus,
     pub bump: u8,
 }

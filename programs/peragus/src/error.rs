@@ -2,8 +2,15 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum ErrorCode {
-    #[msg("Only the counter authority can update this counter")]
+    #[msg("Unauthorized operation")]
     Unauthorized,
-    #[msg("Counter has reached the maximum value")]
-    CounterOverflow,
+
+    #[msg("Settlement amounts must be greater than zero")]
+    InvalidAmount,
+
+    #[msg("Settlement has already been settled")]
+    AlreadySettled,
+
+    #[msg("Settlement is in an invalid status for this operation")]
+    InvalidSettlementStatus,
 }
