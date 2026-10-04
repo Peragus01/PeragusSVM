@@ -28,4 +28,10 @@ pub mod peragus {
             amount_out,
         )
     }
+
+    pub fn execute_settlement(
+        ctx: Context<ExecuteSettlement>,
+    ) -> Result<()> {
+        crate::instructions::execute_settlement::handle_execute_settlement(ctx)
+    }
 }
