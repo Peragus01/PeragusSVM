@@ -15,11 +15,17 @@ declare_id!("6Auy8BXWNaWQCAEbDkusoDkAjWvyzhkKw2LbfiVvvb1w");
 pub mod peragus {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        crate::instructions::initialize::handle_initialize(ctx)
-    }
-
-    pub fn increment(ctx: Context<Increment>) -> Result<()> {
-        crate::instructions::increment::handle_increment(ctx)
+    pub fn create_settlement(
+        ctx: Context<CreateSettlement>,
+        settlement_id: [u8; 32],
+        amount_in: u64,
+        amount_out: u64,
+    ) -> Result<()> {
+        crate::instructions::create_settlement::handle_create_settlement(
+            ctx,
+            settlement_id,
+            amount_in,
+            amount_out,
+        )
     }
 }
