@@ -25,6 +25,10 @@ pub fn handle_create_settlement(
     settlement_id: [u8; 32],
     amount_in: u64,
     amount_out: u64,
+    source_mint: Pubkey,
+    destination_mint: Pubkey,
+    recipient: Pubkey,
+    liquidity_authority: Pubkey,
 ) -> Result<()> {
     require!(
         amount_in > 0 && amount_out > 0,
@@ -35,6 +39,10 @@ pub fn handle_create_settlement(
 
     settlement.settlement_id = settlement_id;
     settlement.payer = ctx.accounts.payer.key();
+    settlement.source_mint = source_mint;
+    settlement.destination_mint = destination_mint;
+    settlement.recipient = recipient;
+    settlement.liquidity_authority = liquidity_authority;
     settlement.amount_in = amount_in;
     settlement.amount_out = amount_out;
     settlement.created_at = Clock::get()?.unix_timestamp;

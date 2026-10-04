@@ -13,4 +13,13 @@ pub enum ErrorCode {
 
     #[msg("Settlement is in an invalid status for this operation")]
     InvalidSettlementStatus,
+
+    #[msg("Invalid settlement mint")]
+    InvalidMint,
+
+    #[msg("Invalid settlement token account")]
+    InvalidTokenAccount,
+
+    #[msg("This demo currently supports only mints without extensions")]
+    UnsupportedMintExtensions,
 }

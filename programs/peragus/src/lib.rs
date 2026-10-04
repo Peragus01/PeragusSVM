@@ -20,12 +20,20 @@ pub mod peragus {
         settlement_id: [u8; 32],
         amount_in: u64,
         amount_out: u64,
+        source_mint: Pubkey,
+        destination_mint: Pubkey,
+        recipient: Pubkey,
+        liquidity_authority: Pubkey,
     ) -> Result<()> {
         crate::instructions::create_settlement::handle_create_settlement(
             ctx,
             settlement_id,
             amount_in,
             amount_out,
+            source_mint,
+            destination_mint,
+            recipient,
+            liquidity_authority,
         )
     }
 
