@@ -372,6 +372,48 @@ async function main() {
     };
   }
 
+  function eventWasEmitted(logs, name) {
+    const normalize = value =>
+      value.replaceAll('_', '').toLowerCase();
+
+    const definition = (idl.events ?? []).find(event =>
+      normalize(event.name) === normalize(name)
+    );
+
+    assert(definition, `Evento ausente na IDL: ${name}`);
+
+    const discriminator = Buffer.from(definition.discriminator);
+
+    return logs.some(line => {
+      const prefix = 'Program data: ';
+      if (!line.startsWith(prefix)) return false;
+
+      const data = Buffer.from(
+        line.slice(prefix.length),
+        'base64'
+      );
+
+      return data.length >= discriminator.length &&
+        data
+          .subarray(0, discriminator.length)
+          .equals(discriminator);
+    });
+  }
+
+  function assertEvent(logs, name) {
+    assert(
+      eventWasEmitted(logs, name),
+      `Evento ausente: ${name}`
+    );
+  }
+
+  function assertNoEvent(logs, name) {
+    assert(
+      !eventWasEmitted(logs, name),
+      `Evento indevido: ${name}`
+    );
+  }
+
   const existingConfig = await connection.getAccountInfo(
     config,
     'confirmed'
@@ -598,6 +640,7 @@ async function main() {
   );
 
   assertNoTokenCpi(rejectedCorridorLogs);
+  assertNoEvent(rejectedCorridorLogs, 'CorridorCreated');
 
   assert.equal(
     await connection.getAccountInfo(corridor, {
@@ -626,6 +669,11 @@ async function main() {
     commitment: 'confirmed',
     minContextSlot: createdCorridor.slot,
   });
+
+  assertEvent(
+    createdCorridor.meta.logMessages ?? [],
+    'CorridorCreated'
+  );
 
   assert.deepEqual(decodeAccount(corridorInfo, 'Corridor'), {
     corridor_id: corridorId,
@@ -728,6 +776,7 @@ async function main() {
 
     anchorError(errorName, accountName)(result.meta.err, logs);
     assertNoTokenCpi(logs);
+    assertNoEvent(logs, 'SettlementCreated');
 
     assert.equal(
       await connection.getAccountInfo(address, {
@@ -811,6 +860,11 @@ async function main() {
       creation.slot
     );
 
+    assertEvent(
+      creation.meta.logMessages ?? [],
+      'SettlementCreated'
+    );
+
     assert.deepEqual(before.state.settlement_id, id);
     assert.equal(before.state.corridor, corridor.toBase58());
     assert.equal(
@@ -875,6 +929,7 @@ async function main() {
 
   assert(happyLogs.includes('Program log: Leg A CPI succeeded'));
   assert(happyLogs.includes('Program log: Leg B CPI succeeded'));
+  assertEvent(happyLogs, 'SettlementExecuted');
 
   showBalances(happy.before, settled);
   console.log('PASS: duas pernas e status Settled confirmados.');
@@ -939,6 +994,8 @@ async function main() {
   assert(
     !logs.includes('Program log: Leg B CPI succeeded')
   );
+
+  assertNoEvent(logs, 'SettlementExecuted');
 
   const reverted = await snapshot(
     accounts,
@@ -1011,6 +1068,9 @@ async function main() {
     console.log(rejectionLogs.join('\n'));
 
     verifyError(result.meta.err, rejectionLogs);
+
+    assertNoEvent(rejectionLogs, 'SettlementCreated');
+    assertNoEvent(rejectionLogs, 'SettlementExecuted');
 
     assert(
       !rejectionLogs.some(line =>
@@ -1344,6 +1404,11 @@ async function main() {
   assert(
     (executed.meta.logMessages ?? [])
       .includes('Program log: Leg B CPI succeeded')
+  );
+
+  assertEvent(
+    executed.meta.logMessages ?? [],
+    'SettlementExecuted'
   );
 
   assert.deepEqual(

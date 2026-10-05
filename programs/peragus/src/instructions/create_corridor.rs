@@ -8,6 +8,7 @@ use anchor_spl::{
 use crate::{
     constants::{CONFIG_SEED, CORRIDOR_SEED},
     error::ErrorCode,
+    events::CorridorCreated,
     state::{Config, Corridor},
 };
 
@@ -83,6 +84,14 @@ pub fn handle_create_corridor(
         corridor.destination_mint,
         corridor.liquidity_authority
     );
+
+    emit!(CorridorCreated {
+        corridor: corridor.key(),
+        corridor_id: corridor.corridor_id,
+        source_mint: corridor.source_mint,
+        destination_mint: corridor.destination_mint,
+        liquidity_authority: corridor.liquidity_authority,
+    });
 
     Ok(())
 }

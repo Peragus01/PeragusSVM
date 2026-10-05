@@ -8,6 +8,7 @@ use anchor_spl::{
 use crate::{
     constants::{CONFIG_SEED, CORRIDOR_SEED, SETTLEMENT_SEED},
     error::ErrorCode,
+    events::SettlementExecuted,
     state::{Config, Corridor, Settlement, SettlementStatus},
 };
 
@@ -190,6 +191,23 @@ pub fn handle_execute_settlement(
 
     // Somente apos as duas CPIs terem sucesso.
     ctx.accounts.settlement.status = SettlementStatus::Settled;
+
+    let executed_at = Clock::get()?.unix_timestamp;
+
+    emit!(SettlementExecuted {
+        settlement: ctx.accounts.settlement.key(),
+        settlement_id: ctx.accounts.settlement.settlement_id,
+        corridor: ctx.accounts.settlement.corridor,
+        payer: ctx.accounts.settlement.payer,
+        recipient: ctx.accounts.settlement.recipient,
+        source_mint: ctx.accounts.settlement.source_mint,
+        destination_mint: ctx.accounts.settlement.destination_mint,
+        liquidity_authority:
+            ctx.accounts.settlement.liquidity_authority,
+        amount_in,
+        amount_out,
+        executed_at,
+    });
 
     msg!(
         "Settlement completed: amount_in={}, amount_out={}",

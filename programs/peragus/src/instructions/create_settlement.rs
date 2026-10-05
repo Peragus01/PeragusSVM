@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{CONFIG_SEED, CORRIDOR_SEED, SETTLEMENT_SEED},
     error::ErrorCode,
+    events::SettlementCreated,
     state::{Config, Corridor, Settlement, SettlementStatus},
 };
 
@@ -106,6 +107,22 @@ pub fn handle_create_settlement(
         amount_out,
         expires_at
     );
+
+    emit!(SettlementCreated {
+        settlement: settlement.key(),
+        settlement_id: settlement.settlement_id,
+        corridor: settlement.corridor,
+        payer: settlement.payer,
+        recipient: settlement.recipient,
+        source_mint: settlement.source_mint,
+        destination_mint: settlement.destination_mint,
+        liquidity_authority: settlement.liquidity_authority,
+        attestation_authority: settlement.attestation_authority,
+        amount_in: settlement.amount_in,
+        amount_out: settlement.amount_out,
+        expires_at: settlement.expires_at,
+        created_at: settlement.created_at,
+    });
 
     Ok(())
 }
