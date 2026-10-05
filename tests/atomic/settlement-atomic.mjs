@@ -1,4 +1,4 @@
-// Peragus: dois testes de integracao em um validator LOCAL ja iniciado.
+// Peragus: seis testes de integracao em um validator LOCAL ja iniciado.
 // Coloque este arquivo em tests/atomic/settlement-atomic.mjs.
 // Demo assets only. No real fiat value or redemption.
 import assert from 'node:assert/strict';
@@ -122,11 +122,24 @@ async function transactionDetails(signature) {
   throw new Error(`Metadados indisponiveis para ${signature}`);
 }
 
+const submittedSignatures = new Set();
 async function send(ix, payer, extraSigners = [], expectedFailure = false) {
-  const lifetime = await connection.getLatestBlockhash('confirmed');
-  const tx = new Transaction({ feePayer: payer.publicKey, ...lifetime }).add(ix);
-  tx.sign(payer, ...extraSigners);
-  // Somente o caso de rollback pula preflight para registrar a falha na rede LOCAL.
+  let lifetime;
+  let tx;
+  let signatureBytes;
+  // Mesma instrucao e mesmos signers precisam de uma NOVA transacao.
+  // Se o blockhash ainda for igual, aguardar evita testar apenas o cache da rede.
+  for (let attempt = 0; attempt < 120; attempt++) {
+    lifetime = await connection.getLatestBlockhash('confirmed');
+    tx = new Transaction({ feePayer: payer.publicKey, ...lifetime }).add(ix);
+    tx.sign(payer, ...extraSigners);
+    signatureBytes = tx.signature.toString('hex');
+    if (!submittedSignatures.has(signatureBytes)) break;
+    await delay(250);
+  }
+  assert(!submittedSignatures.has(signatureBytes), 'Nao foi possivel obter uma transacao nova');
+  submittedSignatures.add(signatureBytes);
+  // As rejeicoes esperadas pulam preflight para registrar a falha na rede LOCAL.
   const signature = await connection.sendRawTransaction(tx.serialize(), {
     skipPreflight: expectedFailure,
     preflightCommitment: 'confirmed',
@@ -229,7 +242,7 @@ async function main() {
     assert.equal(before.state.amount_out, amountOut);
     assert.equal(before.state.bump, bump);
     assert.equal(before.state.status, 'Pending');
-    return { address, before };
+    return { id, address, before };
   }
 
   console.log('\nTESTE 1: happy path');
@@ -272,7 +285,80 @@ async function main() {
   assert.equal(reverted.state.status, 'Pending');
   showBalances(rollback.before, reverted);
   console.log('PASS: Leg A executou, Leg B falhou, quatro contas e Settlement preservadas.');
-  console.log('\n2/2 testes passaram. Happy path e rollback verificados no validator local.');
+  // Repor a liquidez antes dos testes de protecao: falta de saldo nao pode
+  // mascarar a ausencia de verificacao de status ou de autorizacao.
+  await mintTo(connection, payer, pypyg, accounts.liquidity_pypyg, payer,
+    amountOut, [], OPTIONS, TOKEN_2022_PROGRAM_ID);
+
+  async function expectRejected(label, ix, signers, settlement, status, verifyError) {
+    console.log(`\n${label}`);
+    const before = await snapshot(accounts, settlement);
+    assert.equal(before.state.status, status);
+    assert(before.balances[0] >= amountIn, 'Leg A deve ter saldo suficiente');
+    assert(before.balances[2] >= amountOut, 'Leg B deve ter liquidez suficiente');
+    const result = await send(ix, payer, signers, true);
+    const rejectionLogs = result.meta.logMessages ?? [];
+    console.log(rejectionLogs.join('\n'));
+    verifyError(result.meta.err, rejectionLogs);
+    assert(!rejectionLogs.some(line => line.startsWith(`Program ${TOKEN_2022_PROGRAM_ID} invoke [`)),
+      'A rejeicao deveria ocorrer antes de chamar Token-2022');
+    const after = await snapshot(accounts, settlement, result.slot);
+    assert.deepEqual(after.balances, before.balances, 'Rejeicao alterou saldos');
+    assert.deepEqual(after.raw, before.raw, 'Rejeicao alterou dados de alguma conta');
+    assert.deepEqual(after.state, before.state, 'Rejeicao alterou Settlement');
+    showBalances(before, after);
+    console.log('PASS: rejeicao esperada e contas preservadas.');
+  }
+
+  function anchorError(name, accountName) {
+    const definition = idl.errors.find(item => item.name === name);
+    assert(definition, `Erro ausente na IDL: ${name}`);
+    return (error, rejectionLogs) => {
+      assert.deepEqual(error, { InstructionError: [0, { Custom: definition.code }] });
+      assert(rejectionLogs.some(line => line.includes(`Error Code: ${name}.`)),
+        `O log nao identifica ${name}`);
+      if (accountName) {
+        assert(rejectionLogs.some(line => line.includes(`caused by account: ${accountName}.`)),
+          `A rejeicao nao veio da verificacao de ${accountName}`);
+      }
+    };
+  }
+
+  await expectRejected('TESTE 3: executar novamente uma Settlement liquidada',
+    instruction('execute_settlement', { ...accounts, settlement: happy.address }),
+    [liquidity], happy.address, 'Settled', anchorError('AlreadySettled'));
+
+  await expectRejected('TESTE 4: criar novamente o mesmo settlement_id',
+    instruction('create_settlement', {
+      payer: payer.publicKey, settlement: happy.address, system_program: SystemProgram.programId,
+    }, {
+      settlement_id: happy.id, amount_in: amountIn, amount_out: amountOut,
+      source_mint: pgbrl, destination_mint: pypyg,
+      recipient: recipient.publicKey, liquidity_authority: liquidity.publicKey,
+    }), [], happy.address, 'Settled', (error, rejectionLogs) => {
+      // A protecao aqui e o init da PDA, nao AlreadySettled do handler de execucao.
+      assert.deepEqual(error, { InstructionError: [0, { Custom: 0 }] });
+      assert(rejectionLogs.some(line => /already in use/i.test(line)
+        && line.includes(happy.address.toBase58())),
+        'Falta evidencia de que a PDA existente impediu a criacao');
+      assert(rejectionLogs.some(line => line.startsWith(`Program ${SystemProgram.programId} failed:`)),
+        'A falha esperada deve vir da tentativa de inicializacao pelo System Program');
+    });
+
+  const intruder = Keypair.generate();
+  // O payer original paga a taxa, mas a conta "payer" da instrucao e outra.
+  // O intruso assina com sua propria chave: verificamos identidade, nao falta de assinatura.
+  await expectRejected('TESTE 5: payer nao autorizado',
+    instruction('execute_settlement', {
+      ...accounts, settlement: rollback.address, payer: intruder.publicKey,
+    }), [intruder, liquidity], rollback.address, 'Pending', anchorError('Unauthorized', 'payer'));
+
+  await expectRejected('TESTE 6: provedor nao autorizado',
+    instruction('execute_settlement', {
+      ...accounts, settlement: rollback.address, liquidity_authority: intruder.publicKey,
+    }), [intruder], rollback.address, 'Pending', anchorError('Unauthorized', 'liquidity_authority'));
+
+  console.log('\n6/6 testes passaram: settlement, rollback, repeticao e autorizacao verificados localmente.');
 }
 
 main().catch(error => {
