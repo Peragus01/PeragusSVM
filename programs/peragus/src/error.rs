@@ -34,4 +34,10 @@ pub enum ErrorCode {
 
     #[msg("Settlement does not belong to this corridor")]
     InvalidCorridor,
+
+    #[msg("Invalid attestation authority")]
+    InvalidAttestationAuthority,
+
+    #[msg("Settlement attestation has expired")]
+    AttestationExpired,
 }

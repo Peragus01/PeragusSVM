@@ -36,6 +36,17 @@ function encode(type, value) {
     data.writeBigUInt64LE(value);
     return data;
   }
+  if (type === 'i64') {
+    assert.equal(typeof value, 'bigint', 'Timestamps devem ser bigint');
+    assert(
+      value >= -0x8000000000000000n &&
+        value <= 0x7fffffffffffffffn,
+      'i64 fora do intervalo'
+    );
+    const data = Buffer.alloc(8);
+    data.writeBigInt64LE(value);
+    return data;
+  }
   if (type === 'pubkey') return new PublicKey(value).toBuffer();
   if (type?.array?.[0] === 'u8') {
     const data = Buffer.from(value);
@@ -255,6 +266,7 @@ async function main() {
   const payer = Keypair.generate();
   const liquidity = Keypair.generate();
   const recipient = Keypair.generate();
+  const attestor = Keypair.generate();
 
   await waitForAirdrop(
     await connection.requestAirdrop(
@@ -318,6 +330,7 @@ async function main() {
   function checkConfig(state, paused) {
     assert.deepEqual(state, {
       admin: admin.publicKey.toBase58(),
+      attestation_authority: attestor.publicKey.toBase58(),
       paused,
       bump: configBump,
     });
@@ -371,6 +384,8 @@ async function main() {
       instruction('initialize_config', {
         ...initAccounts,
         admin: payer.publicKey,
+      }, {
+        attestation_authority: attestor.publicKey,
       }),
       payer,
       [],
@@ -411,7 +426,9 @@ async function main() {
     );
 
     const initialized = await send(
-      instruction('initialize_config', initAccounts),
+      instruction('initialize_config', initAccounts, {
+        attestation_authority: attestor.publicKey,
+      }),
       payer,
       [admin]
     );
@@ -434,7 +451,9 @@ async function main() {
   const configBeforeReinit = await configSnapshot();
 
   const reinit = await send(
-    instruction('initialize_config', initAccounts),
+    instruction('initialize_config', initAccounts, {
+      attestation_authority: attestor.publicKey,
+    }),
     payer,
     [admin],
     true
@@ -635,6 +654,9 @@ async function main() {
 
   const amountIn = 25_000_000n;
   const amountOut = 37_500n;
+  const futureExpiry = BigInt(
+    Math.floor(Date.now() / 1000) + 3600
+  );
 
   await mintTo(
     connection,
@@ -664,7 +686,10 @@ async function main() {
   async function expectSettlementCreationRejected(
     label,
     overrides,
-    errorName
+    errorName,
+    attestationAuthority = attestor.publicKey,
+    signers = [attestor],
+    accountName
   ) {
     console.log(`\n${label}`);
 
@@ -676,6 +701,8 @@ async function main() {
 
     const result = await send(
       instruction('create_settlement', {
+        config,
+        attestation_authority: attestationAuthority,
         corridor,
         payer: payer.publicKey,
         settlement: address,
@@ -684,6 +711,7 @@ async function main() {
         settlement_id: id,
         amount_in: amountIn,
         amount_out: amountOut,
+        expires_at: futureExpiry,
         source_mint: pgbrl,
         destination_mint: pypyg,
         recipient: recipient.publicKey,
@@ -691,14 +719,14 @@ async function main() {
         ...overrides,
       }),
       payer,
-      [],
+      signers,
       true
     );
 
     const logs = result.meta.logMessages ?? [];
     console.log(logs.join('\n'));
 
-    anchorError(errorName)(result.meta.err, logs);
+    anchorError(errorName, accountName)(result.meta.err, logs);
     assertNoTokenCpi(logs);
 
     assert.equal(
@@ -732,7 +760,22 @@ async function main() {
     'InvalidLiquidityAuthority'
   );
 
-  async function createSettlement() {
+  await expectSettlementCreationRejected(
+    'ATTESTATION A: autoridade nao configurada e rejeitada',
+    {},
+    'InvalidAttestationAuthority',
+    payer.publicKey,
+    [],
+    'config'
+  );
+
+  await expectSettlementCreationRejected(
+    'ATTESTATION B: autorizacao ja expirada e rejeitada',
+    { expires_at: 0n },
+    'AttestationExpired'
+  );
+
+  async function createSettlement(expiresAt = futureExpiry) {
     const id = randomBytes(32);
 
     const [address, bump] = PublicKey.findProgramAddressSync(
@@ -742,6 +785,8 @@ async function main() {
 
     const creation = await send(
       instruction('create_settlement', {
+        config,
+        attestation_authority: attestor.publicKey,
         corridor,
         payer: payer.publicKey,
         settlement: address,
@@ -750,12 +795,14 @@ async function main() {
         settlement_id: id,
         amount_in: amountIn,
         amount_out: amountOut,
+        expires_at: expiresAt,
         source_mint: pgbrl,
         destination_mint: pypyg,
         recipient: recipient.publicKey,
         liquidity_authority: liquidity.publicKey,
       }),
-      payer
+      payer,
+      [attestor]
     );
 
     const before = await snapshot(
@@ -766,6 +813,10 @@ async function main() {
 
     assert.deepEqual(before.state.settlement_id, id);
     assert.equal(before.state.corridor, corridor.toBase58());
+    assert.equal(
+      before.state.attestation_authority,
+      attestor.publicKey.toBase58()
+    );
 
     for (const [field, value] of Object.entries({
       payer: payer.publicKey,
@@ -779,6 +830,7 @@ async function main() {
 
     assert.equal(before.state.amount_in, amountIn);
     assert.equal(before.state.amount_out, amountOut);
+    assert.equal(before.state.expires_at, expiresAt);
     assert.equal(before.state.bump, bump);
     assert.equal(before.state.status, 'Pending');
 
@@ -995,8 +1047,28 @@ async function main() {
     console.log('PASS: rejeicao esperada e contas preservadas.');
   }
 
+  const shortExpiry = BigInt(
+    Math.floor(Date.now() / 1000) + 5
+  );
+
+  const expiring = await createSettlement(shortExpiry);
+
+  await delay(6000);
+
   await expectRejected(
-    'TESTE 3: troca de corredor na execucao e rejeitada',
+    'TESTE 3: autorizacao expira antes da execucao',
+    instruction('execute_settlement', {
+      ...accounts,
+      settlement: expiring.address,
+    }),
+    [liquidity],
+    expiring.address,
+    'Pending',
+    anchorError('AttestationExpired')
+  );
+
+  await expectRejected(
+    'TESTE 4: troca de corredor na execucao e rejeitada',
     instruction('execute_settlement', {
       ...accounts,
       corridor: alternateCorridor,
@@ -1009,7 +1081,7 @@ async function main() {
   );
 
   await expectRejected(
-    'TESTE 4: executar novamente uma Settlement liquidada',
+    'TESTE 5: executar novamente uma Settlement liquidada',
     instruction('execute_settlement', {
       ...accounts,
       settlement: happy.address,
@@ -1021,8 +1093,10 @@ async function main() {
   );
 
   await expectRejected(
-    'TESTE 5: criar novamente o mesmo settlement_id',
+    'TESTE 6: criar novamente o mesmo settlement_id',
     instruction('create_settlement', {
+      config,
+      attestation_authority: attestor.publicKey,
       corridor,
       payer: payer.publicKey,
       settlement: happy.address,
@@ -1031,12 +1105,13 @@ async function main() {
       settlement_id: happy.id,
       amount_in: amountIn,
       amount_out: amountOut,
+      expires_at: futureExpiry,
       source_mint: pgbrl,
       destination_mint: pypyg,
       recipient: recipient.publicKey,
       liquidity_authority: liquidity.publicKey,
     }),
-    [],
+    [attestor],
     happy.address,
     'Settled',
     (error, rejectionLogs) => {
@@ -1066,7 +1141,7 @@ async function main() {
   const intruder = Keypair.generate();
 
   await expectRejected(
-    'TESTE 6: payer nao autorizado',
+    'TESTE 7: payer nao autorizado',
     instruction('execute_settlement', {
       ...accounts,
       settlement: rollback.address,
@@ -1079,7 +1154,7 @@ async function main() {
   );
 
   await expectRejected(
-    'TESTE 7: provedor nao autorizado',
+    'TESTE 8: provedor nao autorizado',
     instruction('execute_settlement', {
       ...accounts,
       settlement: rollback.address,
@@ -1091,7 +1166,7 @@ async function main() {
     anchorError('Unauthorized', 'liquidity_authority')
   );
 
-  passed += 7;
+  passed += 8;
 
   const pauseIx = (signer, paused) =>
     instruction('set_paused', {
@@ -1105,7 +1180,7 @@ async function main() {
   checkConfig(beforeUnauthorizedPause.state, false);
 
   await expectRejected(
-    'TESTE 8: intruso nao pode pausar',
+    'TESTE 9: intruso nao pode pausar',
     pauseIx(intruder, true),
     [intruder],
     rollback.address,
@@ -1120,7 +1195,7 @@ async function main() {
 
   passed++;
 
-  console.log('\nTESTE 9: admin pausa a execucao');
+  console.log('\nTESTE 10: admin pausa a execucao');
 
   const beforePause = await snapshot(
     accounts,
@@ -1160,7 +1235,7 @@ async function main() {
   const beforePausedExecution = await configSnapshot();
 
   await expectRejected(
-    'TESTE 10: execucao pausada falha antes das transferencias',
+    'TESTE 11: execucao pausada falha antes das transferencias',
     instruction('execute_settlement', {
       ...accounts,
       settlement: rollback.address,
@@ -1179,7 +1254,7 @@ async function main() {
   passed++;
 
   await expectRejected(
-    'TESTE 11: intruso nao pode retirar a pausa',
+    'TESTE 12: intruso nao pode retirar a pausa',
     pauseIx(intruder, false),
     [intruder],
     rollback.address,
@@ -1195,7 +1270,7 @@ async function main() {
   passed++;
 
   console.log(
-    '\nTESTE 12: admin retoma e a mesma Settlement pode ser executada'
+    '\nTESTE 13: admin retoma e a mesma Settlement pode ser executada'
   );
 
   const beforeResume = await snapshot(
@@ -1284,7 +1359,7 @@ async function main() {
 
   passed++;
 
-  const expected = existingConfig ? 18 : 20;
+  const expected = existingConfig ? 21 : 23;
 
   assert.equal(passed, expected);
 

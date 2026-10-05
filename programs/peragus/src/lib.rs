@@ -36,8 +36,12 @@ pub mod peragus {
 
     pub fn initialize_config(
         ctx: Context<InitializeConfig>,
+        attestation_authority: Pubkey,
     ) -> Result<()> {
-        crate::instructions::initialize_config::handle_initialize_config(ctx)
+        crate::instructions::initialize_config::handle_initialize_config(
+            ctx,
+            attestation_authority,
+        )
     }
 
     pub fn create_settlement(
@@ -45,6 +49,7 @@ pub mod peragus {
         settlement_id: [u8; 32],
         amount_in: u64,
         amount_out: u64,
+        expires_at: i64,
         source_mint: Pubkey,
         destination_mint: Pubkey,
         recipient: Pubkey,
@@ -55,6 +60,7 @@ pub mod peragus {
             settlement_id,
             amount_in,
             amount_out,
+            expires_at,
             source_mint,
             destination_mint,
             recipient,

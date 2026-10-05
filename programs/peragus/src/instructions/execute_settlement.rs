@@ -127,6 +127,12 @@ pub fn handle_execute_settlement(
         ErrorCode::AlreadySettled
     );
 
+    require!(
+        Clock::get()?.unix_timestamp
+            < ctx.accounts.settlement.expires_at,
+        ErrorCode::AttestationExpired
+    );
+
     let amount_in = ctx.accounts.settlement.amount_in;
     let amount_out = ctx.accounts.settlement.amount_out;
 

@@ -42,14 +42,25 @@ pub struct InitializeConfig<'info> {
 
 pub fn handle_initialize_config(
     ctx: Context<InitializeConfig>,
+    attestation_authority: Pubkey,
 ) -> Result<()> {
+    require!(
+        attestation_authority != Pubkey::default(),
+        ErrorCode::InvalidAttestationAuthority
+    );
+
     let config = &mut ctx.accounts.config;
 
     config.admin = ctx.accounts.admin.key();
+    config.attestation_authority = attestation_authority;
     config.paused = false;
     config.bump = ctx.bumps.config;
 
-    msg!("Config initialized: admin={}", config.admin);
+    msg!(
+        "Config initialized: admin={}, attestation_authority={}",
+        config.admin,
+        config.attestation_authority
+    );
 
     Ok(())
 }
