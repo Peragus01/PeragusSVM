@@ -1,8 +1,10 @@
-// Peragus: seis testes de integracao em um validator LOCAL ja iniciado.
+// Peragus: settlement e controle administrativo em um validator LOCAL.
 // Coloque este arquivo em tests/atomic/settlement-atomic.mjs.
 // Demo assets only. No real fiat value or redemption.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
@@ -13,7 +15,7 @@ import {
   TOKEN_2022_PROGRAM_ID, createMint, createAccount, mintTo, unpackAccount,
 } from '@solana/spl-token';
 
-// Endpoint fixo: este teste nao aceita RPC externo ou wallet de arquivo.
+// Endpoint fixo. A unica chave lida de arquivo e o admin LOCAL de teste.
 const RPC = 'http://127.0.0.1:18899';
 const PROGRAM = new PublicKey('6Auy8BXWNaWQCAEbDkusoDkAjWvyzhkKw2LbfiVvvb1w');
 const OPTIONS = { commitment: 'confirmed', preflightCommitment: 'confirmed' };
@@ -21,8 +23,12 @@ const connection = new Connection(RPC, OPTIONS.commitment);
 const idl = JSON.parse(readFileSync(new URL('../../target/idl/peragus.json', import.meta.url), 'utf8'));
 assert.equal(idl.address, PROGRAM.toBase58(), 'Program ID inesperado na IDL');
 
-// Apenas os tipos usados por create_settlement. A ordem vem da IDL.
+// A ordem dos argumentos vem da IDL.
 function encode(type, value) {
+  if (type === 'bool') {
+    assert.equal(typeof value, 'boolean', 'Esperado boolean');
+    return Buffer.from([value ? 1 : 0]);
+  }
   if (type === 'u64') {
     assert.equal(typeof value, 'bigint', 'Quantidades devem ser bigint');
     assert(value >= 0n && value <= 0xffffffffffffffffn, 'u64 fora do intervalo');
@@ -61,21 +67,28 @@ function instruction(name, accounts, args = {}) {
 }
 
 // Leitura Borsh orientada pela IDL; sem offsets fixos para o status.
-function decodeSettlement(info) {
-  assert(info, 'Settlement nao encontrada');
-  assert(info.owner.equals(PROGRAM), 'Owner da Settlement incorreto');
-  const account = idl.accounts.find(item => item.name === 'Settlement');
-  assert(account, 'Discriminador de Settlement ausente');
+function decodeAccount(info, accountName) {
+  assert(info, `${accountName} nao encontrada`);
+  assert(info.owner.equals(PROGRAM), `Owner de ${accountName} incorreto`);
+  const account = idl.accounts.find(item => item.name === accountName);
+  assert(account, `Discriminador de ${accountName} ausente`);
   const discriminator = Buffer.from(account.discriminator);
   assert.deepEqual(info.data.subarray(0, discriminator.length), discriminator);
   let offset = discriminator.length;
+
   function take(length) {
-    assert(offset + length <= info.data.length, 'Settlement truncada');
+    assert(offset + length <= info.data.length, `${accountName} truncada`);
     const value = info.data.subarray(offset, offset + length);
     offset += length;
     return value;
   }
+
   function decode(type) {
+    if (type === 'bool') {
+      const value = take(1)[0];
+      assert(value === 0 || value === 1, 'Boolean Borsh invalido');
+      return value === 1;
+    }
     if (type === 'u8') return take(1)[0];
     if (type === 'u64') return take(8).readBigUInt64LE();
     if (type === 'i64') return take(8).readBigInt64LE();
@@ -91,10 +104,13 @@ function decodeSettlement(info) {
     }
     throw new Error(`Tipo de estado nao suportado: ${JSON.stringify(type)}`);
   }
-  const definition = idl.types.find(item => item.name === 'Settlement')?.type;
+
+  const definition = idl.types.find(item => item.name === accountName)?.type;
   assert.equal(definition?.kind, 'struct');
-  const result = Object.fromEntries(definition.fields.map(field => [field.name, decode(field.type)]));
-  assert.equal(offset, info.data.length, 'Layout da Settlement diverge da IDL');
+  const result = Object.fromEntries(
+    definition.fields.map(field => [field.name, decode(field.type)])
+  );
+  assert.equal(offset, info.data.length, `Layout de ${accountName} diverge da IDL`);
   return result;
 }
 
@@ -114,7 +130,8 @@ async function waitForAirdrop(signature) {
 async function transactionDetails(signature) {
   for (let attempt = 0; attempt < 120; attempt++) {
     const result = await connection.getTransaction(signature, {
-      commitment: 'confirmed', maxSupportedTransactionVersion: 0,
+      commitment: 'confirmed',
+      maxSupportedTransactionVersion: 0,
     });
     if (result?.meta) return result;
     await delay(250);
@@ -123,10 +140,12 @@ async function transactionDetails(signature) {
 }
 
 const submittedSignatures = new Set();
+
 async function send(ix, payer, extraSigners = [], expectedFailure = false) {
   let lifetime;
   let tx;
   let signatureBytes;
+
   // Mesma instrucao e mesmos signers precisam de uma NOVA transacao.
   // Se o blockhash ainda for igual, aguardar evita testar apenas o cache da rede.
   for (let attempt = 0; attempt < 120; attempt++) {
@@ -137,41 +156,87 @@ async function send(ix, payer, extraSigners = [], expectedFailure = false) {
     if (!submittedSignatures.has(signatureBytes)) break;
     await delay(250);
   }
-  assert(!submittedSignatures.has(signatureBytes), 'Nao foi possivel obter uma transacao nova');
+
+  assert(
+    !submittedSignatures.has(signatureBytes),
+    'Nao foi possivel obter uma transacao nova'
+  );
   submittedSignatures.add(signatureBytes);
+
   // As rejeicoes esperadas pulam preflight para registrar a falha na rede LOCAL.
   const signature = await connection.sendRawTransaction(tx.serialize(), {
     skipPreflight: expectedFailure,
     preflightCommitment: 'confirmed',
     maxRetries: 3,
   });
+
   console.log(`  tx: ${signature}`);
-  const confirmation = await connection.confirmTransaction({ signature, ...lifetime }, 'confirmed');
+
+  const confirmation = await connection.confirmTransaction(
+    { signature, ...lifetime },
+    'confirmed'
+  );
   const result = await transactionDetails(signature);
-  assert.deepEqual(result.meta.err, confirmation.value.err, 'Confirmacao e metadados divergentes');
+
+  assert.deepEqual(
+    result.meta.err,
+    confirmation.value.err,
+    'Confirmacao e metadados divergentes'
+  );
+
   if (expectedFailure) {
     assert.notEqual(result.meta.err, null, 'A transacao deveria ter falhado');
   } else {
-    assert.equal(result.meta.err, null, `Transacao falhou: ${JSON.stringify(result.meta.err)}`);
+    assert.equal(
+      result.meta.err,
+      null,
+      `Transacao falhou: ${JSON.stringify(result.meta.err)}`
+    );
   }
+
   return { signature, ...result };
 }
 
-const accountNames = ['payer_pgbrl', 'liquidity_pgbrl', 'liquidity_pypyg', 'recipient_pypyg'];
+const accountNames = [
+  'payer_pgbrl',
+  'liquidity_pgbrl',
+  'liquidity_pypyg',
+  'recipient_pypyg',
+];
+
 async function snapshot(accounts, settlement, minContextSlot = 0) {
-  const addresses = [...accountNames.map(name => accounts[name]), settlement];
+  const addresses = [
+    ...accountNames.map(name => accounts[name]),
+    settlement,
+  ];
+
   const infos = await connection.getMultipleAccountsInfo(addresses, {
-    commitment: 'confirmed', minContextSlot,
+    commitment: 'confirmed',
+    minContextSlot,
   });
+
   const balances = infos.slice(0, 4).map((info, index) =>
-    unpackAccount(addresses[index], info, TOKEN_2022_PROGRAM_ID).amount);
-  const state = decodeSettlement(infos[4]);
-  return { balances, state, raw: infos.map(info => Buffer.from(info.data)) };
+    unpackAccount(
+      addresses[index],
+      info,
+      TOKEN_2022_PROGRAM_ID
+    ).amount
+  );
+
+  const state = decodeAccount(infos[4], 'Settlement');
+
+  return {
+    balances,
+    state,
+    raw: infos.map(info => Buffer.from(info.data)),
+  };
 }
 
 function showBalances(before, after) {
   console.table(accountNames.map((account, index) => ({
-    account, before: before.balances[index].toString(), after: after.balances[index].toString(),
+    account,
+    before: before.balances[index].toString(),
+    after: after.balances[index].toString(),
   })));
   console.log(`  status: ${before.state.status} -> ${after.state.status}`);
 }
@@ -180,191 +245,876 @@ async function main() {
   console.log('Peragus | Demo assets only. No real fiat value or redemption.');
   console.log(`RPC: ${RPC}`);
   console.log('Valores nas tabelas em unidades inteiras dos tokens.');
+
   for (const address of [PROGRAM, TOKEN_2022_PROGRAM_ID]) {
     const info = await connection.getAccountInfo(address);
     assert(info?.executable, `Programa indisponivel: ${address.toBase58()}`);
   }
 
-  // Todas as chaves ficam em memoria; nenhum id.json e acessado ou criado.
+  // Payer, provedor e destinatario sao novos a cada execucao.
   const payer = Keypair.generate();
   const liquidity = Keypair.generate();
   const recipient = Keypair.generate();
-  await waitForAirdrop(await connection.requestAirdrop(payer.publicKey, 2 * LAMPORTS_PER_SOL));
 
-  console.log('Criando dois mints Token-2022 sem extensoes e quatro token accounts...');
-  const pgbrl = await createMint(connection, payer, payer.publicKey, null, 6,
-    Keypair.generate(), OPTIONS, TOKEN_2022_PROGRAM_ID);
-  const pypyg = await createMint(connection, payer, payer.publicKey, null, 0,
-    Keypair.generate(), OPTIONS, TOKEN_2022_PROGRAM_ID);
+  await waitForAirdrop(
+    await connection.requestAirdrop(
+      payer.publicKey,
+      2 * LAMPORTS_PER_SOL
+    )
+  );
+
+  const adminFile = join(
+    homedir(),
+    '.local',
+    'share',
+    'peragus-local-tests',
+    'admin-keypair.json'
+  );
+
+  const admin = Keypair.fromSecretKey(
+    Uint8Array.from(
+      JSON.parse(readFileSync(adminFile, 'utf8'))
+    )
+  );
+
+  console.log(`Admin local de teste: ${admin.publicKey.toBase58()}`);
+
+  const [config, configBump] = PublicKey.findProgramAddressSync(
+    [Buffer.from('config')],
+    PROGRAM
+  );
+
+  const loader = new PublicKey(
+    'BPFLoaderUpgradeab1e11111111111111111111111'
+  );
+
+  const [programData] = PublicKey.findProgramAddressSync(
+    [PROGRAM.toBuffer()],
+    loader
+  );
+
+  const initAccounts = {
+    admin: admin.publicKey,
+    peragus_program: PROGRAM,
+    program_data: programData,
+    config,
+    system_program: SystemProgram.programId,
+  };
+
+  let passed = 0;
+
+  async function configSnapshot(minContextSlot = 0) {
+    const info = await connection.getAccountInfo(config, {
+      commitment: 'confirmed',
+      minContextSlot,
+    });
+
+    return {
+      state: decodeAccount(info, 'Config'),
+      raw: Buffer.from(info.data),
+    };
+  }
+
+  function checkConfig(state, paused) {
+    assert.deepEqual(state, {
+      admin: admin.publicKey.toBase58(),
+      paused,
+      bump: configBump,
+    });
+  }
+
+  function assertNoTokenCpi(logs) {
+    assert(
+      !logs.some(line =>
+        line.startsWith(`Program ${TOKEN_2022_PROGRAM_ID} invoke [`)
+      ),
+      'Nao deveria haver CPI Token-2022'
+    );
+  }
+
+  function anchorError(name, accountName) {
+    const definition = idl.errors.find(item => item.name === name);
+    assert(definition, `Erro ausente na IDL: ${name}`);
+
+    return (error, rejectionLogs) => {
+      assert.deepEqual(error, {
+        InstructionError: [0, { Custom: definition.code }],
+      });
+
+      assert(
+        rejectionLogs.some(line =>
+          line.includes(`Error Code: ${name}.`)
+        ),
+        `O log nao identifica ${name}`
+      );
+
+      if (accountName) {
+        assert(
+          rejectionLogs.some(line =>
+            line.includes(`caused by account: ${accountName}.`)
+          ),
+          `A rejeicao nao veio da verificacao de ${accountName}`
+        );
+      }
+    };
+  }
+
+  const existingConfig = await connection.getAccountInfo(
+    config,
+    'confirmed'
+  );
+
+  if (!existingConfig) {
+    console.log('\nCONFIG A: intruso nao pode inicializar a Config');
+
+    const rejected = await send(
+      instruction('initialize_config', {
+        ...initAccounts,
+        admin: payer.publicKey,
+      }),
+      payer,
+      [],
+      true
+    );
+
+    const logs = rejected.meta.logMessages ?? [];
+    console.log(logs.join('\n'));
+
+    anchorError('Unauthorized', 'program_data')(
+      rejected.meta.err,
+      logs
+    );
+
+    assertNoTokenCpi(logs);
+
+    assert.equal(
+      await connection.getAccountInfo(config, {
+        commitment: 'confirmed',
+        minContextSlot: rejected.slot,
+      }),
+      null,
+      'Intruso criou a Config'
+    );
+
+    console.log(
+      'PASS: inicializacao nao autorizada rejeitada; Config continua ausente.'
+    );
+    passed++;
+
+    console.log('\nCONFIG B: upgrade authority inicializa a Config');
+
+    await waitForAirdrop(
+      await connection.requestAirdrop(
+        admin.publicKey,
+        LAMPORTS_PER_SOL
+      )
+    );
+
+    const initialized = await send(
+      instruction('initialize_config', initAccounts),
+      payer,
+      [admin]
+    );
+
+    checkConfig(
+      (await configSnapshot(initialized.slot)).state,
+      false
+    );
+
+    console.log('PASS: admin correto, paused=false e bump correto.');
+    passed++;
+  } else {
+    checkConfig(decodeAccount(existingConfig, 'Config'), false);
+    console.log('\nConfig existente validada. CONFIG A e B nao foram repetidos.');
+    console.log('Para testar novamente a primeira inicializacao, use um ledger novo.');
+  }
+
+  console.log('\nCONFIG C: nem o admin pode reinicializar a Config');
+
+  const configBeforeReinit = await configSnapshot();
+
+  const reinit = await send(
+    instruction('initialize_config', initAccounts),
+    payer,
+    [admin],
+    true
+  );
+
+  const reinitLogs = reinit.meta.logMessages ?? [];
+  console.log(reinitLogs.join('\n'));
+
+  assert.deepEqual(reinit.meta.err, {
+    InstructionError: [0, { Custom: 0 }],
+  });
+
+  assert(
+    reinitLogs.some(line =>
+      /already in use/i.test(line) &&
+      line.includes(config.toBase58())
+    ),
+    'Reinicializacao deve falhar porque a PDA ja existe'
+  );
+
+  assert(
+    reinitLogs.some(line =>
+      line.startsWith(`Program ${SystemProgram.programId} failed:`)
+    )
+  );
+
+  assert.deepEqual(
+    (await configSnapshot(reinit.slot)).raw,
+    configBeforeReinit.raw
+  );
+
+  assertNoTokenCpi(reinitLogs);
+  console.log('PASS: reinicializacao rejeitada; Config preservada.');
+  passed++;
+
+  console.log(
+    'Criando dois mints Token-2022 sem extensoes e quatro token accounts...'
+  );
+
+  const pgbrl = await createMint(
+    connection,
+    payer,
+    payer.publicKey,
+    null,
+    6,
+    Keypair.generate(),
+    OPTIONS,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  const pypyg = await createMint(
+    connection,
+    payer,
+    payer.publicKey,
+    null,
+    0,
+    Keypair.generate(),
+    OPTIONS,
+    TOKEN_2022_PROGRAM_ID
+  );
+
   const accounts = {
+    config,
     payer: payer.publicKey,
     liquidity_authority: liquidity.publicKey,
     source_mint: pgbrl,
     destination_mint: pypyg,
     token_program: TOKEN_2022_PROGRAM_ID,
   };
+
   for (const [name, mint, authority] of [
     ['payer_pgbrl', pgbrl, payer.publicKey],
     ['liquidity_pgbrl', pgbrl, liquidity.publicKey],
     ['liquidity_pypyg', pypyg, liquidity.publicKey],
     ['recipient_pypyg', pypyg, recipient.publicKey],
   ]) {
-    accounts[name] = await createAccount(connection, payer, mint, authority,
-      Keypair.generate(), OPTIONS, TOKEN_2022_PROGRAM_ID);
+    accounts[name] = await createAccount(
+      connection,
+      payer,
+      mint,
+      authority,
+      Keypair.generate(),
+      OPTIONS,
+      TOKEN_2022_PROGRAM_ID
+    );
   }
 
-  const amountIn = 25_000_000n; // 25 pgBRL, com 6 decimais.
-  const amountOut = 37_500n;   // 37.500 pyPYG, com 0 decimais. Cotacao ficticia.
-  await mintTo(connection, payer, pgbrl, accounts.payer_pgbrl, payer,
-    100_000_000n, [], OPTIONS, TOKEN_2022_PROGRAM_ID);
+  const amountIn = 25_000_000n;
+  const amountOut = 37_500n;
+
+  await mintTo(
+    connection,
+    payer,
+    pgbrl,
+    accounts.payer_pgbrl,
+    payer,
+    100_000_000n,
+    [],
+    OPTIONS,
+    TOKEN_2022_PROGRAM_ID
+  );
+
   // Liquidez suficiente para exatamente UMA operacao.
-  await mintTo(connection, payer, pypyg, accounts.liquidity_pypyg, payer,
-    amountOut, [], OPTIONS, TOKEN_2022_PROGRAM_ID);
+  await mintTo(
+    connection,
+    payer,
+    pypyg,
+    accounts.liquidity_pypyg,
+    payer,
+    amountOut,
+    [],
+    OPTIONS,
+    TOKEN_2022_PROGRAM_ID
+  );
 
   async function createSettlement() {
     const id = randomBytes(32);
-    const [address, bump] = PublicKey.findProgramAddressSync([Buffer.from('settlement'), id], PROGRAM);
-    // Criacao confirmada separadamente: rollback da execucao deve preservar Pending.
-    const creation = await send(instruction('create_settlement', {
-      payer: payer.publicKey, settlement: address, system_program: SystemProgram.programId,
-    }, {
-      settlement_id: id, amount_in: amountIn, amount_out: amountOut,
-      source_mint: pgbrl, destination_mint: pypyg,
-      recipient: recipient.publicKey, liquidity_authority: liquidity.publicKey,
-    }), payer);
-    const before = await snapshot(accounts, address, creation.slot);
+
+    const [address, bump] = PublicKey.findProgramAddressSync(
+      [Buffer.from('settlement'), id],
+      PROGRAM
+    );
+
+    const creation = await send(
+      instruction('create_settlement', {
+        payer: payer.publicKey,
+        settlement: address,
+        system_program: SystemProgram.programId,
+      }, {
+        settlement_id: id,
+        amount_in: amountIn,
+        amount_out: amountOut,
+        source_mint: pgbrl,
+        destination_mint: pypyg,
+        recipient: recipient.publicKey,
+        liquidity_authority: liquidity.publicKey,
+      }),
+      payer
+    );
+
+    const before = await snapshot(
+      accounts,
+      address,
+      creation.slot
+    );
+
     assert.deepEqual(before.state.settlement_id, id);
+
     for (const [field, value] of Object.entries({
-      payer: payer.publicKey, source_mint: pgbrl, destination_mint: pypyg,
-      recipient: recipient.publicKey, liquidity_authority: liquidity.publicKey,
-    })) assert.equal(before.state[field], value.toBase58());
+      payer: payer.publicKey,
+      source_mint: pgbrl,
+      destination_mint: pypyg,
+      recipient: recipient.publicKey,
+      liquidity_authority: liquidity.publicKey,
+    })) {
+      assert.equal(before.state[field], value.toBase58());
+    }
+
     assert.equal(before.state.amount_in, amountIn);
     assert.equal(before.state.amount_out, amountOut);
     assert.equal(before.state.bump, bump);
     assert.equal(before.state.status, 'Pending');
+
     return { id, address, before };
   }
 
   console.log('\nTESTE 1: happy path');
+
   const happy = await createSettlement();
-  assert.deepEqual(happy.before.balances, [100_000_000n, 0n, amountOut, 0n]);
-  const completed = await send(instruction('execute_settlement', {
-    ...accounts, settlement: happy.address,
-  }), payer, [liquidity]);
-  const settled = await snapshot(accounts, happy.address, completed.slot);
-  assert.deepEqual(settled.balances, [75_000_000n, amountIn, 0n, amountOut]);
-  assert.deepEqual(settled.state, { ...happy.before.state, status: 'Settled' });
+
+  assert.deepEqual(
+    happy.before.balances,
+    [100_000_000n, 0n, amountOut, 0n]
+  );
+
+  const completed = await send(
+    instruction('execute_settlement', {
+      ...accounts,
+      settlement: happy.address,
+    }),
+    payer,
+    [liquidity]
+  );
+
+  const settled = await snapshot(
+    accounts,
+    happy.address,
+    completed.slot
+  );
+
+  assert.deepEqual(
+    settled.balances,
+    [75_000_000n, amountIn, 0n, amountOut]
+  );
+
+  assert.deepEqual(settled.state, {
+    ...happy.before.state,
+    status: 'Settled',
+  });
+
   const happyLogs = completed.meta.logMessages ?? [];
+
   assert(happyLogs.includes('Program log: Leg A CPI succeeded'));
   assert(happyLogs.includes('Program log: Leg B CPI succeeded'));
+
   showBalances(happy.before, settled);
   console.log('PASS: duas pernas e status Settled confirmados.');
 
   console.log('\nTESTE 2: rollback por falta de pyPYG na segunda perna');
+
   const rollback = await createSettlement();
-  assert(rollback.before.balances[0] >= amountIn, 'Leg A precisa ter saldo suficiente');
-  assert.equal(rollback.before.balances[2], 0n, 'Leg B deve estar sem liquidez');
-  const failed = await send(instruction('execute_settlement', {
-    ...accounts, settlement: rollback.address,
-  }), payer, [liquidity], true);
+
+  assert(
+    rollback.before.balances[0] >= amountIn,
+    'Leg A precisa ter saldo suficiente'
+  );
+
+  assert.equal(
+    rollback.before.balances[2],
+    0n,
+    'Leg B deve estar sem liquidez'
+  );
+
+  const failed = await send(
+    instruction('execute_settlement', {
+      ...accounts,
+      settlement: rollback.address,
+    }),
+    payer,
+    [liquidity],
+    true
+  );
+
   const logs = failed.meta.logMessages ?? [];
   console.log(logs.join('\n'));
-  // SPL Token: Custom(1) = InsufficientFunds. Nao aceitar qualquer erro como sucesso.
-  assert.deepEqual(failed.meta.err, { InstructionError: [0, { Custom: 1 }] });
-  const legAIndex = logs.indexOf('Program log: Leg A CPI succeeded');
-  assert(legAIndex >= 0, 'Leg A nao chegou a completar a CPI');
-  const legBLogs = logs.slice(legAIndex + 1);
-  assert(legBLogs.some(line => line.startsWith(`Program ${TOKEN_2022_PROGRAM_ID} invoke [`)),
-    'A segunda CPI Token-2022 nao foi chamada');
-  assert(legBLogs.some(line => line.startsWith(`Program ${TOKEN_2022_PROGRAM_ID} failed:`)),
-    'Falta evidencia de falha na segunda CPI Token-2022');
-  assert(!logs.includes('Program log: Leg B CPI succeeded'));
-  const reverted = await snapshot(accounts, rollback.address, failed.slot);
-  assert.deepEqual(reverted.balances, rollback.before.balances, 'Saldos nao reverteram');
-  assert.deepEqual(reverted.raw, rollback.before.raw, 'Dados de alguma conta nao reverteram');
-  assert.equal(reverted.state.status, 'Pending');
-  showBalances(rollback.before, reverted);
-  console.log('PASS: Leg A executou, Leg B falhou, quatro contas e Settlement preservadas.');
-  // Repor a liquidez antes dos testes de protecao: falta de saldo nao pode
-  // mascarar a ausencia de verificacao de status ou de autorizacao.
-  await mintTo(connection, payer, pypyg, accounts.liquidity_pypyg, payer,
-    amountOut, [], OPTIONS, TOKEN_2022_PROGRAM_ID);
 
-  async function expectRejected(label, ix, signers, settlement, status, verifyError) {
+  assert.deepEqual(failed.meta.err, {
+    InstructionError: [0, { Custom: 1 }],
+  });
+
+  const legAIndex = logs.indexOf(
+    'Program log: Leg A CPI succeeded'
+  );
+
+  assert(
+    legAIndex >= 0,
+    'Leg A nao chegou a completar a CPI'
+  );
+
+  const legBLogs = logs.slice(legAIndex + 1);
+
+  assert(
+    legBLogs.some(line =>
+      line.startsWith(`Program ${TOKEN_2022_PROGRAM_ID} invoke [`)
+    ),
+    'A segunda CPI Token-2022 nao foi chamada'
+  );
+
+  assert(
+    legBLogs.some(line =>
+      line.startsWith(`Program ${TOKEN_2022_PROGRAM_ID} failed:`)
+    ),
+    'Falta evidencia de falha na segunda CPI Token-2022'
+  );
+
+  assert(
+    !logs.includes('Program log: Leg B CPI succeeded')
+  );
+
+  const reverted = await snapshot(
+    accounts,
+    rollback.address,
+    failed.slot
+  );
+
+  assert.deepEqual(
+    reverted.balances,
+    rollback.before.balances,
+    'Saldos nao reverteram'
+  );
+
+  assert.deepEqual(
+    reverted.raw,
+    rollback.before.raw,
+    'Dados de alguma conta nao reverteram'
+  );
+
+  assert.equal(reverted.state.status, 'Pending');
+
+  showBalances(rollback.before, reverted);
+
+  console.log(
+    'PASS: Leg A executou, Leg B falhou, quatro contas e Settlement preservadas.'
+  );
+
+  await mintTo(
+    connection,
+    payer,
+    pypyg,
+    accounts.liquidity_pypyg,
+    payer,
+    amountOut,
+    [],
+    OPTIONS,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  async function expectRejected(
+    label,
+    ix,
+    signers,
+    settlement,
+    status,
+    verifyError
+  ) {
     console.log(`\n${label}`);
+
     const before = await snapshot(accounts, settlement);
+
     assert.equal(before.state.status, status);
-    assert(before.balances[0] >= amountIn, 'Leg A deve ter saldo suficiente');
-    assert(before.balances[2] >= amountOut, 'Leg B deve ter liquidez suficiente');
-    const result = await send(ix, payer, signers, true);
+    assert(
+      before.balances[0] >= amountIn,
+      'Leg A deve ter saldo suficiente'
+    );
+    assert(
+      before.balances[2] >= amountOut,
+      'Leg B deve ter liquidez suficiente'
+    );
+
+    const result = await send(
+      ix,
+      payer,
+      signers,
+      true
+    );
+
     const rejectionLogs = result.meta.logMessages ?? [];
     console.log(rejectionLogs.join('\n'));
+
     verifyError(result.meta.err, rejectionLogs);
-    assert(!rejectionLogs.some(line => line.startsWith(`Program ${TOKEN_2022_PROGRAM_ID} invoke [`)),
-      'A rejeicao deveria ocorrer antes de chamar Token-2022');
-    const after = await snapshot(accounts, settlement, result.slot);
-    assert.deepEqual(after.balances, before.balances, 'Rejeicao alterou saldos');
-    assert.deepEqual(after.raw, before.raw, 'Rejeicao alterou dados de alguma conta');
-    assert.deepEqual(after.state, before.state, 'Rejeicao alterou Settlement');
+
+    assert(
+      !rejectionLogs.some(line =>
+        line.startsWith(`Program ${TOKEN_2022_PROGRAM_ID} invoke [`)
+      ),
+      'A rejeicao deveria ocorrer antes de chamar Token-2022'
+    );
+
+    const after = await snapshot(
+      accounts,
+      settlement,
+      result.slot
+    );
+
+    assert.deepEqual(
+      after.balances,
+      before.balances,
+      'Rejeicao alterou saldos'
+    );
+
+    assert.deepEqual(
+      after.raw,
+      before.raw,
+      'Rejeicao alterou dados de alguma conta'
+    );
+
+    assert.deepEqual(
+      after.state,
+      before.state,
+      'Rejeicao alterou Settlement'
+    );
+
     showBalances(before, after);
     console.log('PASS: rejeicao esperada e contas preservadas.');
   }
 
-  function anchorError(name, accountName) {
-    const definition = idl.errors.find(item => item.name === name);
-    assert(definition, `Erro ausente na IDL: ${name}`);
-    return (error, rejectionLogs) => {
-      assert.deepEqual(error, { InstructionError: [0, { Custom: definition.code }] });
-      assert(rejectionLogs.some(line => line.includes(`Error Code: ${name}.`)),
-        `O log nao identifica ${name}`);
-      if (accountName) {
-        assert(rejectionLogs.some(line => line.includes(`caused by account: ${accountName}.`)),
-          `A rejeicao nao veio da verificacao de ${accountName}`);
-      }
-    };
-  }
+  await expectRejected(
+    'TESTE 3: executar novamente uma Settlement liquidada',
+    instruction('execute_settlement', {
+      ...accounts,
+      settlement: happy.address,
+    }),
+    [liquidity],
+    happy.address,
+    'Settled',
+    anchorError('AlreadySettled')
+  );
 
-  await expectRejected('TESTE 3: executar novamente uma Settlement liquidada',
-    instruction('execute_settlement', { ...accounts, settlement: happy.address }),
-    [liquidity], happy.address, 'Settled', anchorError('AlreadySettled'));
-
-  await expectRejected('TESTE 4: criar novamente o mesmo settlement_id',
+  await expectRejected(
+    'TESTE 4: criar novamente o mesmo settlement_id',
     instruction('create_settlement', {
-      payer: payer.publicKey, settlement: happy.address, system_program: SystemProgram.programId,
+      payer: payer.publicKey,
+      settlement: happy.address,
+      system_program: SystemProgram.programId,
     }, {
-      settlement_id: happy.id, amount_in: amountIn, amount_out: amountOut,
-      source_mint: pgbrl, destination_mint: pypyg,
-      recipient: recipient.publicKey, liquidity_authority: liquidity.publicKey,
-    }), [], happy.address, 'Settled', (error, rejectionLogs) => {
-      // A protecao aqui e o init da PDA, nao AlreadySettled do handler de execucao.
-      assert.deepEqual(error, { InstructionError: [0, { Custom: 0 }] });
-      assert(rejectionLogs.some(line => /already in use/i.test(line)
-        && line.includes(happy.address.toBase58())),
-        'Falta evidencia de que a PDA existente impediu a criacao');
-      assert(rejectionLogs.some(line => line.startsWith(`Program ${SystemProgram.programId} failed:`)),
-        'A falha esperada deve vir da tentativa de inicializacao pelo System Program');
-    });
+      settlement_id: happy.id,
+      amount_in: amountIn,
+      amount_out: amountOut,
+      source_mint: pgbrl,
+      destination_mint: pypyg,
+      recipient: recipient.publicKey,
+      liquidity_authority: liquidity.publicKey,
+    }),
+    [],
+    happy.address,
+    'Settled',
+    (error, rejectionLogs) => {
+      assert.deepEqual(error, {
+        InstructionError: [0, { Custom: 0 }],
+      });
+
+      assert(
+        rejectionLogs.some(line =>
+          /already in use/i.test(line) &&
+          line.includes(happy.address.toBase58())
+        ),
+        'Falta evidencia de que a PDA existente impediu a criacao'
+      );
+
+      assert(
+        rejectionLogs.some(line =>
+          line.startsWith(
+            `Program ${SystemProgram.programId} failed:`
+          )
+        ),
+        'A falha esperada deve vir da tentativa de inicializacao pelo System Program'
+      );
+    }
+  );
 
   const intruder = Keypair.generate();
-  // O payer original paga a taxa, mas a conta "payer" da instrucao e outra.
-  // O intruso assina com sua propria chave: verificamos identidade, nao falta de assinatura.
-  await expectRejected('TESTE 5: payer nao autorizado',
-    instruction('execute_settlement', {
-      ...accounts, settlement: rollback.address, payer: intruder.publicKey,
-    }), [intruder, liquidity], rollback.address, 'Pending', anchorError('Unauthorized', 'payer'));
 
-  await expectRejected('TESTE 6: provedor nao autorizado',
+  await expectRejected(
+    'TESTE 5: payer nao autorizado',
     instruction('execute_settlement', {
-      ...accounts, settlement: rollback.address, liquidity_authority: intruder.publicKey,
-    }), [intruder], rollback.address, 'Pending', anchorError('Unauthorized', 'liquidity_authority'));
+      ...accounts,
+      settlement: rollback.address,
+      payer: intruder.publicKey,
+    }),
+    [intruder, liquidity],
+    rollback.address,
+    'Pending',
+    anchorError('Unauthorized', 'payer')
+  );
 
-  console.log('\n6/6 testes passaram: settlement, rollback, repeticao e autorizacao verificados localmente.');
+  await expectRejected(
+    'TESTE 6: provedor nao autorizado',
+    instruction('execute_settlement', {
+      ...accounts,
+      settlement: rollback.address,
+      liquidity_authority: intruder.publicKey,
+    }),
+    [intruder],
+    rollback.address,
+    'Pending',
+    anchorError('Unauthorized', 'liquidity_authority')
+  );
+
+  passed += 6;
+
+  const pauseIx = (signer, paused) =>
+    instruction('set_paused', {
+      config,
+      admin: signer.publicKey,
+    }, {
+      paused,
+    });
+
+  const beforeUnauthorizedPause = await configSnapshot();
+  checkConfig(beforeUnauthorizedPause.state, false);
+
+  await expectRejected(
+    'TESTE 7: intruso nao pode pausar',
+    pauseIx(intruder, true),
+    [intruder],
+    rollback.address,
+    'Pending',
+    anchorError('Unauthorized', 'config')
+  );
+
+  assert.deepEqual(
+    (await configSnapshot()).raw,
+    beforeUnauthorizedPause.raw
+  );
+
+  passed++;
+
+  console.log('\nTESTE 8: admin pausa a execucao');
+
+  const beforePause = await snapshot(
+    accounts,
+    rollback.address
+  );
+
+  const paused = await send(
+    pauseIx(admin, true),
+    payer,
+    [admin]
+  );
+
+  checkConfig(
+    (await configSnapshot(paused.slot)).state,
+    true
+  );
+
+  assertNoTokenCpi(paused.meta.logMessages ?? []);
+
+  assert.deepEqual(
+    (
+      await snapshot(
+        accounts,
+        rollback.address,
+        paused.slot
+      )
+    ).raw,
+    beforePause.raw
+  );
+
+  console.log(
+    'PASS: paused=true; Settlement e quatro contas de tokens preservadas.'
+  );
+
+  passed++;
+
+  const beforePausedExecution = await configSnapshot();
+
+  await expectRejected(
+    'TESTE 9: execucao pausada falha antes das transferencias',
+    instruction('execute_settlement', {
+      ...accounts,
+      settlement: rollback.address,
+    }),
+    [liquidity],
+    rollback.address,
+    'Pending',
+    anchorError('ProgramPaused')
+  );
+
+  assert.deepEqual(
+    (await configSnapshot()).raw,
+    beforePausedExecution.raw
+  );
+
+  passed++;
+
+  await expectRejected(
+    'TESTE 10: intruso nao pode retirar a pausa',
+    pauseIx(intruder, false),
+    [intruder],
+    rollback.address,
+    'Pending',
+    anchorError('Unauthorized', 'config')
+  );
+
+  assert.deepEqual(
+    (await configSnapshot()).raw,
+    beforePausedExecution.raw
+  );
+
+  passed++;
+
+  console.log(
+    '\nTESTE 11: admin retoma e a mesma Settlement pode ser executada'
+  );
+
+  const beforeResume = await snapshot(
+    accounts,
+    rollback.address
+  );
+
+  const resumed = await send(
+    pauseIx(admin, false),
+    payer,
+    [admin]
+  );
+
+  const configAfterResume = await configSnapshot(
+    resumed.slot
+  );
+
+  checkConfig(configAfterResume.state, false);
+  assertNoTokenCpi(resumed.meta.logMessages ?? []);
+
+  assert.deepEqual(
+    (
+      await snapshot(
+        accounts,
+        rollback.address,
+        resumed.slot
+      )
+    ).raw,
+    beforeResume.raw
+  );
+
+  const executed = await send(
+    instruction('execute_settlement', {
+      ...accounts,
+      settlement: rollback.address,
+    }),
+    payer,
+    [liquidity]
+  );
+
+  const afterResume = await snapshot(
+    accounts,
+    rollback.address,
+    executed.slot
+  );
+
+  const [
+    payerBalance,
+    lpIn,
+    lpOut,
+    recipientBalance,
+  ] = beforeResume.balances;
+
+  assert.deepEqual(afterResume.balances, [
+    payerBalance - amountIn,
+    lpIn + amountIn,
+    lpOut - amountOut,
+    recipientBalance + amountOut,
+  ]);
+
+  assert.deepEqual(afterResume.state, {
+    ...beforeResume.state,
+    status: 'Settled',
+  });
+
+  assert(
+    (executed.meta.logMessages ?? [])
+      .includes('Program log: Leg A CPI succeeded')
+  );
+
+  assert(
+    (executed.meta.logMessages ?? [])
+      .includes('Program log: Leg B CPI succeeded')
+  );
+
+  assert.deepEqual(
+    (await configSnapshot(executed.slot)).raw,
+    configAfterResume.raw
+  );
+
+  showBalances(beforeResume, afterResume);
+
+  console.log(
+    'PASS: paused=false; duas pernas confirmadas; mesma Settlement agora Settled.'
+  );
+
+  passed++;
+
+  const expected = existingConfig ? 12 : 14;
+
+  assert.equal(passed, expected);
+
+  console.log(
+    `\n${passed}/${expected} testes passaram no validator local.`
+  );
+
+  if (existingConfig) {
+    console.log(
+      'Os dois casos de primeira inicializacao nao foram executados nesta rodada.'
+    );
+  }
 }
 
 main().catch(error => {
   console.error('\nFAIL:', error.message);
-  if (error.logs) console.error(error.logs.join('\n'));
-  if (error.actual !== undefined) console.error('Actual:', error.actual);
-  if (error.expected !== undefined) console.error('Expected:', error.expected);
+
+  if (error.logs) {
+    console.error(error.logs.join('\n'));
+  }
+
+  if (error.actual !== undefined) {
+    console.error('Actual:', error.actual);
+  }
+
+  if (error.expected !== undefined) {
+    console.error('Expected:', error.expected);
+  }
+
   process.exitCode = 1;
 });

@@ -15,6 +15,19 @@ declare_id!("6Auy8BXWNaWQCAEbDkusoDkAjWvyzhkKw2LbfiVvvb1w");
 pub mod peragus {
     use super::*;
 
+    pub fn set_paused(
+        ctx: Context<SetPaused>,
+        paused: bool,
+    ) -> Result<()> {
+        crate::instructions::set_paused::handle_set_paused(ctx, paused)
+    }
+
+    pub fn initialize_config(
+        ctx: Context<InitializeConfig>,
+    ) -> Result<()> {
+        crate::instructions::initialize_config::handle_initialize_config(ctx)
+    }
+
     pub fn create_settlement(
         ctx: Context<CreateSettlement>,
         settlement_id: [u8; 32],

@@ -22,4 +22,10 @@ pub enum ErrorCode {
 
     #[msg("This demo currently supports only mints without extensions")]
     UnsupportedMintExtensions,
+
+    #[msg("ProgramData does not belong to the Peragus program")]
+    InvalidProgramData,
+
+    #[msg("Settlement execution is paused")]
+    ProgramPaused,
 }

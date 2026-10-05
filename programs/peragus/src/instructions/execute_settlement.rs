@@ -6,13 +6,19 @@ use anchor_spl::{
 };
 
 use crate::{
-    constants::SETTLEMENT_SEED,
+    constants::{CONFIG_SEED, SETTLEMENT_SEED},
     error::ErrorCode,
-    state::{Settlement, SettlementStatus},
+    state::{Config, Settlement, SettlementStatus},
 };
 
 #[derive(Accounts)]
 pub struct ExecuteSettlement<'info> {
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, Config>,
+
     #[account(
         mut,
         seeds = [
@@ -98,6 +104,11 @@ pub struct ExecuteSettlement<'info> {
 pub fn handle_execute_settlement(
     ctx: Context<ExecuteSettlement>,
 ) -> Result<()> {
+    require!(
+        !ctx.accounts.config.paused,
+        ErrorCode::ProgramPaused
+    );
+
     require!(
         ctx.accounts.settlement.status == SettlementStatus::Pending,
         ErrorCode::AlreadySettled

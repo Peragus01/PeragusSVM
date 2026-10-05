@@ -21,3 +21,11 @@ pub struct Settlement {
     pub status: SettlementStatus,
     pub bump: u8,
 }
+
+#[account]
+#[derive(InitSpace)]
+pub struct Config {
+    pub admin: Pubkey,
+    pub paused: bool,
+    pub bump: u8,
+}
