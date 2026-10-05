@@ -28,4 +28,10 @@ pub enum ErrorCode {
 
     #[msg("Settlement execution is paused")]
     ProgramPaused,
+
+    #[msg("Invalid liquidity authority")]
+    InvalidLiquidityAuthority,
+
+    #[msg("Settlement does not belong to this corridor")]
+    InvalidCorridor,
 }

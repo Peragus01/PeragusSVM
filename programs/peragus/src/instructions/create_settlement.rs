@@ -1,10 +1,16 @@
 use anchor_lang::prelude::*;
 
-use crate::{constants::SETTLEMENT_SEED, error::ErrorCode, state::{Settlement, SettlementStatus}};
+use crate::{constants::{CORRIDOR_SEED, SETTLEMENT_SEED}, error::ErrorCode, state::{Corridor, Settlement, SettlementStatus}};
 
 #[derive(Accounts)]
 #[instruction(settlement_id: [u8; 32])]
 pub struct CreateSettlement<'info> {
+    #[account(
+        seeds = [CORRIDOR_SEED, corridor.corridor_id.as_ref()],
+        bump = corridor.bump
+    )]
+    pub corridor: Account<'info, Corridor>,
+
     #[account(mut)]
     pub payer: Signer<'info>,
 
@@ -35,7 +41,27 @@ pub fn handle_create_settlement(
         ErrorCode::InvalidAmount
     );
 
+    require_keys_eq!(
+        source_mint,
+        ctx.accounts.corridor.source_mint,
+        ErrorCode::InvalidMint
+    );
+
+    require_keys_eq!(
+        destination_mint,
+        ctx.accounts.corridor.destination_mint,
+        ErrorCode::InvalidMint
+    );
+
+    require_keys_eq!(
+        liquidity_authority,
+        ctx.accounts.corridor.liquidity_authority,
+        ErrorCode::InvalidLiquidityAuthority
+    );
+
     let settlement = &mut ctx.accounts.settlement;
+
+    settlement.corridor = ctx.accounts.corridor.key();
 
     settlement.settlement_id = settlement_id;
     settlement.payer = ctx.accounts.payer.key();

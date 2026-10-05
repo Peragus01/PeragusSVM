@@ -6,9 +6,9 @@ use anchor_spl::{
 };
 
 use crate::{
-    constants::{CONFIG_SEED, SETTLEMENT_SEED},
+    constants::{CONFIG_SEED, CORRIDOR_SEED, SETTLEMENT_SEED},
     error::ErrorCode,
-    state::{Config, Settlement, SettlementStatus},
+    state::{Config, Corridor, Settlement, SettlementStatus},
 };
 
 #[derive(Accounts)]
@@ -27,7 +27,20 @@ pub struct ExecuteSettlement<'info> {
         ],
         bump = settlement.bump
     )]
-    pub settlement: Account<'info, Settlement>,
+    pub settlement: Box<Account<'info, Settlement>>,
+
+    #[account(
+        seeds = [CORRIDOR_SEED, corridor.corridor_id.as_ref()],
+        bump = corridor.bump,
+        address = settlement.corridor @ ErrorCode::InvalidCorridor,
+        constraint = corridor.source_mint == settlement.source_mint
+            @ ErrorCode::InvalidMint,
+        constraint = corridor.destination_mint == settlement.destination_mint
+            @ ErrorCode::InvalidMint,
+        constraint = corridor.liquidity_authority == settlement.liquidity_authority
+            @ ErrorCode::InvalidLiquidityAuthority
+    )]
+    pub corridor: Box<Account<'info, Corridor>>,
 
     #[account(
         address = settlement.payer @ ErrorCode::Unauthorized

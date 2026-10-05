@@ -15,6 +15,18 @@ declare_id!("6Auy8BXWNaWQCAEbDkusoDkAjWvyzhkKw2LbfiVvvb1w");
 pub mod peragus {
     use super::*;
 
+    pub fn create_corridor(
+        ctx: Context<CreateCorridor>,
+        corridor_id: [u8; 32],
+        liquidity_authority: Pubkey,
+    ) -> Result<()> {
+        crate::instructions::create_corridor::handle_create_corridor(
+            ctx,
+            corridor_id,
+            liquidity_authority,
+        )
+    }
+
     pub fn set_paused(
         ctx: Context<SetPaused>,
         paused: bool,

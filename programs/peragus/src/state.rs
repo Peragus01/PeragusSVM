@@ -9,6 +9,7 @@ pub enum SettlementStatus {
 #[account]
 #[derive(InitSpace)]
 pub struct Settlement {
+    pub corridor: Pubkey,
     pub settlement_id: [u8; 32],
     pub payer: Pubkey,
     pub source_mint: Pubkey,
@@ -27,5 +28,15 @@ pub struct Settlement {
 pub struct Config {
     pub admin: Pubkey,
     pub paused: bool,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Corridor {
+    pub corridor_id: [u8; 32],
+    pub source_mint: Pubkey,
+    pub destination_mint: Pubkey,
+    pub liquidity_authority: Pubkey,
     pub bump: u8,
 }
