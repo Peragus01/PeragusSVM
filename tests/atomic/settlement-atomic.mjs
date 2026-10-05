@@ -1,4 +1,4 @@
-// Peragus: settlement e controle administrativo em um validator LOCAL.
+// Peragus: corredores, settlement e controle administrativo em validator LOCAL.
 // Coloque este arquivo em tests/atomic/settlement-atomic.mjs.
 // Demo assets only. No real fiat value or redemption.
 import assert from 'node:assert/strict';
@@ -471,7 +471,7 @@ async function main() {
   passed++;
 
   console.log(
-    'Criando dois mints Token-2022 sem extensoes e quatro token accounts...'
+    'Criando tres mints Token-2022 sem extensoes e quatro token accounts...'
   );
 
   const pgbrl = await createMint(
@@ -496,8 +496,32 @@ async function main() {
     TOKEN_2022_PROGRAM_ID
   );
 
+  const otherMint = await createMint(
+    connection,
+    payer,
+    payer.publicKey,
+    null,
+    6,
+    Keypair.generate(),
+    OPTIONS,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  const corridorId = randomBytes(32);
+  const [corridor, corridorBump] = PublicKey.findProgramAddressSync(
+    [Buffer.from('corridor'), corridorId],
+    PROGRAM
+  );
+
+  const alternateCorridorId = randomBytes(32);
+  const [alternateCorridor] = PublicKey.findProgramAddressSync(
+    [Buffer.from('corridor'), alternateCorridorId],
+    PROGRAM
+  );
+
   const accounts = {
     config,
+    corridor,
     payer: payer.publicKey,
     liquidity_authority: liquidity.publicKey,
     source_mint: pgbrl,
@@ -521,6 +545,93 @@ async function main() {
       TOKEN_2022_PROGRAM_ID
     );
   }
+
+  const corridorAccounts = {
+    admin: admin.publicKey,
+    config,
+    source_mint: pgbrl,
+    destination_mint: pypyg,
+    corridor,
+    system_program: SystemProgram.programId,
+  };
+
+  console.log('\nCORRIDOR A: nao-admin nao pode cadastrar corredor');
+
+  const rejectedCorridor = await send(
+    instruction('create_corridor', {
+      ...corridorAccounts,
+      admin: payer.publicKey,
+    }, {
+      corridor_id: corridorId,
+      liquidity_authority: liquidity.publicKey,
+    }),
+    payer,
+    [],
+    true
+  );
+
+  const rejectedCorridorLogs = rejectedCorridor.meta.logMessages ?? [];
+  console.log(rejectedCorridorLogs.join('\n'));
+
+  anchorError('Unauthorized', 'config')(
+    rejectedCorridor.meta.err,
+    rejectedCorridorLogs
+  );
+
+  assertNoTokenCpi(rejectedCorridorLogs);
+
+  assert.equal(
+    await connection.getAccountInfo(corridor, {
+      commitment: 'confirmed',
+      minContextSlot: rejectedCorridor.slot,
+    }),
+    null,
+    'Nao-admin criou o corredor'
+  );
+
+  console.log('PASS: cadastro nao autorizado rejeitado; Corridor ausente.');
+  passed++;
+
+  console.log('\nCORRIDOR B: admin cadastra corredor');
+
+  const createdCorridor = await send(
+    instruction('create_corridor', corridorAccounts, {
+      corridor_id: corridorId,
+      liquidity_authority: liquidity.publicKey,
+    }),
+    payer,
+    [admin]
+  );
+
+  const corridorInfo = await connection.getAccountInfo(corridor, {
+    commitment: 'confirmed',
+    minContextSlot: createdCorridor.slot,
+  });
+
+  assert.deepEqual(decodeAccount(corridorInfo, 'Corridor'), {
+    corridor_id: corridorId,
+    source_mint: pgbrl.toBase58(),
+    destination_mint: pypyg.toBase58(),
+    liquidity_authority: liquidity.publicKey.toBase58(),
+    bump: corridorBump,
+  });
+
+  console.log('PASS: Corridor PDA, mints, provedor e bump confirmados.');
+  passed++;
+
+  // Segundo corredor valido, usado somente para provar que uma Settlement
+  // nao aceita a troca de sua Corridor PDA durante a execucao.
+  await send(
+    instruction('create_corridor', {
+      ...corridorAccounts,
+      corridor: alternateCorridor,
+    }, {
+      corridor_id: alternateCorridorId,
+      liquidity_authority: liquidity.publicKey,
+    }),
+    payer,
+    [admin]
+  );
 
   const amountIn = 25_000_000n;
   const amountOut = 37_500n;
@@ -550,6 +661,77 @@ async function main() {
     TOKEN_2022_PROGRAM_ID
   );
 
+  async function expectSettlementCreationRejected(
+    label,
+    overrides,
+    errorName
+  ) {
+    console.log(`\n${label}`);
+
+    const id = randomBytes(32);
+    const [address] = PublicKey.findProgramAddressSync(
+      [Buffer.from('settlement'), id],
+      PROGRAM
+    );
+
+    const result = await send(
+      instruction('create_settlement', {
+        corridor,
+        payer: payer.publicKey,
+        settlement: address,
+        system_program: SystemProgram.programId,
+      }, {
+        settlement_id: id,
+        amount_in: amountIn,
+        amount_out: amountOut,
+        source_mint: pgbrl,
+        destination_mint: pypyg,
+        recipient: recipient.publicKey,
+        liquidity_authority: liquidity.publicKey,
+        ...overrides,
+      }),
+      payer,
+      [],
+      true
+    );
+
+    const logs = result.meta.logMessages ?? [];
+    console.log(logs.join('\n'));
+
+    anchorError(errorName)(result.meta.err, logs);
+    assertNoTokenCpi(logs);
+
+    assert.equal(
+      await connection.getAccountInfo(address, {
+        commitment: 'confirmed',
+        minContextSlot: result.slot,
+      }),
+      null,
+      'Settlement divergente foi criada'
+    );
+
+    console.log('PASS: parametros divergentes rejeitados; Settlement ausente.');
+    passed++;
+  }
+
+  await expectSettlementCreationRejected(
+    'CORRIDOR C: source_mint divergente e rejeitado',
+    { source_mint: otherMint },
+    'InvalidMint'
+  );
+
+  await expectSettlementCreationRejected(
+    'CORRIDOR D: destination_mint divergente e rejeitado',
+    { destination_mint: otherMint },
+    'InvalidMint'
+  );
+
+  await expectSettlementCreationRejected(
+    'CORRIDOR E: provedor divergente e rejeitado',
+    { liquidity_authority: payer.publicKey },
+    'InvalidLiquidityAuthority'
+  );
+
   async function createSettlement() {
     const id = randomBytes(32);
 
@@ -560,6 +742,7 @@ async function main() {
 
     const creation = await send(
       instruction('create_settlement', {
+        corridor,
         payer: payer.publicKey,
         settlement: address,
         system_program: SystemProgram.programId,
@@ -582,6 +765,7 @@ async function main() {
     );
 
     assert.deepEqual(before.state.settlement_id, id);
+    assert.equal(before.state.corridor, corridor.toBase58());
 
     for (const [field, value] of Object.entries({
       payer: payer.publicKey,
@@ -812,7 +996,20 @@ async function main() {
   }
 
   await expectRejected(
-    'TESTE 3: executar novamente uma Settlement liquidada',
+    'TESTE 3: troca de corredor na execucao e rejeitada',
+    instruction('execute_settlement', {
+      ...accounts,
+      corridor: alternateCorridor,
+      settlement: rollback.address,
+    }),
+    [liquidity],
+    rollback.address,
+    'Pending',
+    anchorError('InvalidCorridor', 'corridor')
+  );
+
+  await expectRejected(
+    'TESTE 4: executar novamente uma Settlement liquidada',
     instruction('execute_settlement', {
       ...accounts,
       settlement: happy.address,
@@ -824,8 +1021,9 @@ async function main() {
   );
 
   await expectRejected(
-    'TESTE 4: criar novamente o mesmo settlement_id',
+    'TESTE 5: criar novamente o mesmo settlement_id',
     instruction('create_settlement', {
+      corridor,
       payer: payer.publicKey,
       settlement: happy.address,
       system_program: SystemProgram.programId,
@@ -868,7 +1066,7 @@ async function main() {
   const intruder = Keypair.generate();
 
   await expectRejected(
-    'TESTE 5: payer nao autorizado',
+    'TESTE 6: payer nao autorizado',
     instruction('execute_settlement', {
       ...accounts,
       settlement: rollback.address,
@@ -881,7 +1079,7 @@ async function main() {
   );
 
   await expectRejected(
-    'TESTE 6: provedor nao autorizado',
+    'TESTE 7: provedor nao autorizado',
     instruction('execute_settlement', {
       ...accounts,
       settlement: rollback.address,
@@ -893,7 +1091,7 @@ async function main() {
     anchorError('Unauthorized', 'liquidity_authority')
   );
 
-  passed += 6;
+  passed += 7;
 
   const pauseIx = (signer, paused) =>
     instruction('set_paused', {
@@ -907,7 +1105,7 @@ async function main() {
   checkConfig(beforeUnauthorizedPause.state, false);
 
   await expectRejected(
-    'TESTE 7: intruso nao pode pausar',
+    'TESTE 8: intruso nao pode pausar',
     pauseIx(intruder, true),
     [intruder],
     rollback.address,
@@ -922,7 +1120,7 @@ async function main() {
 
   passed++;
 
-  console.log('\nTESTE 8: admin pausa a execucao');
+  console.log('\nTESTE 9: admin pausa a execucao');
 
   const beforePause = await snapshot(
     accounts,
@@ -962,7 +1160,7 @@ async function main() {
   const beforePausedExecution = await configSnapshot();
 
   await expectRejected(
-    'TESTE 9: execucao pausada falha antes das transferencias',
+    'TESTE 10: execucao pausada falha antes das transferencias',
     instruction('execute_settlement', {
       ...accounts,
       settlement: rollback.address,
@@ -981,7 +1179,7 @@ async function main() {
   passed++;
 
   await expectRejected(
-    'TESTE 10: intruso nao pode retirar a pausa',
+    'TESTE 11: intruso nao pode retirar a pausa',
     pauseIx(intruder, false),
     [intruder],
     rollback.address,
@@ -997,7 +1195,7 @@ async function main() {
   passed++;
 
   console.log(
-    '\nTESTE 11: admin retoma e a mesma Settlement pode ser executada'
+    '\nTESTE 12: admin retoma e a mesma Settlement pode ser executada'
   );
 
   const beforeResume = await snapshot(
@@ -1086,7 +1284,7 @@ async function main() {
 
   passed++;
 
-  const expected = existingConfig ? 12 : 14;
+  const expected = existingConfig ? 18 : 20;
 
   assert.equal(passed, expected);
 
