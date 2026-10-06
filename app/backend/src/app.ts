@@ -4,6 +4,10 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 
+import {
+  NoopSettlementJobPublisher,
+  type SettlementJobPublisher,
+} from "./jobs/settlement-orchestration.js";
 import { InMemorySettlementRepository } from "./repositories/in-memory-settlement-repository.js";
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
@@ -11,6 +15,7 @@ import { registerSettlementRoutes } from "./routes/settlements.js";
 export interface BuildAppOptions {
   logger?: FastifyServerOptions["logger"];
   settlementRepository?: SettlementRepository;
+  settlementJobPublisher?: SettlementJobPublisher;
   now?: () => Date;
 }
 
@@ -36,6 +41,9 @@ export async function buildApp(
     repository:
       options.settlementRepository
       ?? new InMemorySettlementRepository(),
+    settlementJobPublisher:
+      options.settlementJobPublisher
+      ?? new NoopSettlementJobPublisher(),
     now: options.now ?? (() => new Date()),
   });
 

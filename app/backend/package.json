@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "audit:prod": "npm audit --omit=dev",
-    "db:migrate": "node scripts/migrate.mjs"
+    "db:migrate": "node scripts/migrate.mjs",
+    "dev:worker": "tsx watch src/worker.ts",
+    "start:worker": "node dist/worker.js"
   },
   "keywords": [],
   "author": "",

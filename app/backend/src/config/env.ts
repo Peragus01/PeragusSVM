@@ -16,6 +16,18 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  JOB_POLL_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(60)
+    .default(2),
+  JOB_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(25)
+    .default(3),
   SOLANA_RPC_URL: z
     .string()
     .url()

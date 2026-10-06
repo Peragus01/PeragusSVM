@@ -8,6 +8,9 @@ import {
   SettlementExpiredError,
 } from "../application/create-settlement.js";
 import type { Settlement } from "../domain/settlement.js";
+import type {
+  SettlementJobPublisher,
+} from "../jobs/settlement-orchestration.js";
 import type { SettlementRepository } from "../repositories/settlement-repository.js";
 
 const U64_MAX = 18_446_744_073_709_551_615n;
@@ -68,6 +71,7 @@ const settlementParamsSchema = z
 
 export interface SettlementRoutesOptions {
   repository: SettlementRepository;
+  settlementJobPublisher: SettlementJobPublisher;
   now: () => Date;
 }
 
@@ -154,6 +158,11 @@ export async function registerSettlementRoutes(
         sourceAmount: parsed.data.source_amount,
         destinationAmount: parsed.data.destination_amount,
         expiresAt: parsed.data.expires_at,
+      });
+
+      await options.settlementJobPublisher.enqueue({
+        settlementId: result.settlement.id,
+        requestId: result.settlement.requestId,
       });
 
       reply.header(
