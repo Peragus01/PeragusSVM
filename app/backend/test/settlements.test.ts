@@ -19,7 +19,7 @@ afterEach(async () => {
   await Promise.all(applications.splice(0).map((app) => app.close()));
 });
 
-describe("POST /v1/settlements", () => {
+describe("settlement API", () => {
   it("creates a settlement request", async () => {
     const app = await buildApp();
     applications.push(app);
@@ -41,7 +41,8 @@ describe("POST /v1/settlements", () => {
         recipient_wallet: validRequest.recipient_wallet,
         source_amount: validRequest.source_amount,
         destination_amount: validRequest.destination_amount,
-        status: "received",
+        status: "created",
+        version: 0,
       },
       meta: {
         idempotent_replay: false,
@@ -73,6 +74,40 @@ describe("POST /v1/settlements", () => {
     expect(second.json().meta.idempotent_replay).toBe(true);
   });
 
+  it("replays an existing request even after its expiration", async () => {
+    let now = new Date("2030-01-01T00:00:00.000Z");
+
+    const app = await buildApp({
+      now: () => now,
+    });
+    applications.push(app);
+
+    const expiringRequest = {
+      ...validRequest,
+      request_id: "expiring-idempotency-1001",
+      expires_at: "2030-01-01T00:01:00.000Z",
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/settlements",
+      payload: expiringRequest,
+    });
+
+    now = new Date("2030-01-01T00:02:00.000Z");
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/settlements",
+      payload: expiringRequest,
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data.id).toBe(first.json().data.id);
+    expect(replay.json().meta.idempotent_replay).toBe(true);
+  });
+
   it("rejects reuse of request_id with a different payload", async () => {
     const app = await buildApp();
     applications.push(app);
@@ -102,6 +137,28 @@ describe("POST /v1/settlements", () => {
     });
   });
 
+  it("returns a settlement by ID", async () => {
+    const app = await buildApp();
+    applications.push(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/settlements",
+      payload: validRequest,
+    });
+
+    const settlementId = created.json().data.id;
+
+    const fetched = await app.inject({
+      method: "GET",
+      url: `/v1/settlements/${settlementId}`,
+    });
+
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json().data.id).toBe(settlementId);
+    expect(fetched.json().data.status).toBe("created");
+  });
+
   it("rejects invalid amounts", async () => {
     const app = await buildApp();
     applications.push(app);
@@ -119,7 +176,7 @@ describe("POST /v1/settlements", () => {
     expect(response.json().error.code).toBe("VALIDATION_ERROR");
   });
 
-  it("rejects an expired request", async () => {
+  it("rejects an expired new request", async () => {
     const app = await buildApp({
       now: () => new Date("2030-01-01T00:00:00.000Z"),
     });

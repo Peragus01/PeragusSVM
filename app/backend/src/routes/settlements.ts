@@ -60,6 +60,12 @@ const createSettlementSchema = z
   })
   .strict();
 
+const settlementParamsSchema = z
+  .object({
+    id: z.string().uuid(),
+  })
+  .strict();
+
 export interface SettlementRoutesOptions {
   repository: SettlementRepository;
   now: () => Date;
@@ -76,6 +82,7 @@ function serializeSettlement(settlement: Settlement) {
     destination_amount: settlement.destinationAmount,
     expires_at: settlement.expiresAt.toISOString(),
     status: settlement.status,
+    version: settlement.version,
     created_at: settlement.createdAt.toISOString(),
     updated_at: settlement.updatedAt.toISOString(),
   };
@@ -89,6 +96,38 @@ export async function registerSettlementRoutes(
     options.repository,
     options.now,
   );
+
+  app.get("/v1/settlements/:id", async (request, reply) => {
+    const parsed = settlementParamsSchema.safeParse(
+      request.params,
+    );
+
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Settlement ID is invalid",
+        },
+      });
+    }
+
+    const settlement = await options.repository.findById(
+      parsed.data.id,
+    );
+
+    if (!settlement) {
+      return reply.code(404).send({
+        error: {
+          code: "SETTLEMENT_NOT_FOUND",
+          message: "Settlement was not found",
+        },
+      });
+    }
+
+    return reply.code(200).send({
+      data: serializeSettlement(settlement),
+    });
+  });
 
   app.post("/v1/settlements", async (request, reply) => {
     const parsed = createSettlementSchema.safeParse(request.body);

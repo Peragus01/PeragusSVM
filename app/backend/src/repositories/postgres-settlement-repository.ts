@@ -8,6 +8,7 @@ import type {
 import type {
   CreateOrGetSettlementResult,
   SettlementRepository,
+  UpdateSettlementStatusInput,
 } from "./settlement-repository.js";
 
 interface SettlementRow {
@@ -22,6 +23,7 @@ interface SettlementRow {
   destination_amount: string;
   expires_at: Date;
   status: SettlementStatus;
+  version: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -38,6 +40,7 @@ const settlementColumns = `
   destination_amount,
   expires_at,
   status,
+  version,
   created_at,
   updated_at
 `;
@@ -60,6 +63,7 @@ function mapSettlementRow(row: SettlementRow): Settlement {
     destinationAmount: row.destination_amount,
     expiresAt: row.expires_at,
     status: row.status,
+    version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -85,11 +89,12 @@ export class PostgresSettlementRepository
           recipient_wallet,
           source_amount,
           destination_amount,
-          expires_at
+          expires_at,
+          status
         )
         values (
-          $1, $2, $3, $4, $5,
-          $6, $7, $8, $9, $10
+          $1, $2, $3, $4, $5, $6,
+          $7, $8, $9, $10, $11
         )
         on conflict (request_id) do nothing
         returning ${settlementColumns}
@@ -105,6 +110,7 @@ export class PostgresSettlementRepository
         settlement.sourceAmount,
         settlement.destinationAmount,
         settlement.expiresAt,
+        settlement.status,
       ],
     );
 
@@ -117,27 +123,75 @@ export class PostgresSettlementRepository
       };
     }
 
-    const existing = await this.pool.query<SettlementRow>(
-      `
-        select ${settlementColumns}
-        from settlements
-        where request_id = $1
-        limit 1
-      `,
-      [settlement.requestId],
+    const existing = await this.findByRequestId(
+      settlement.requestId,
     );
 
-    const existingRow = existing.rows[0];
-
-    if (!existingRow) {
+    if (!existing) {
       throw new Error(
         `Settlement disappeared after request_id conflict: ${settlement.requestId}`,
       );
     }
 
     return {
-      settlement: mapSettlementRow(existingRow),
+      settlement: existing,
       created: false,
     };
+  }
+
+  async findById(id: string): Promise<Settlement | null> {
+    const result = await this.pool.query<SettlementRow>(
+      `
+        select ${settlementColumns}
+        from settlements
+        where id = $1
+        limit 1
+      `,
+      [id],
+    );
+
+    const row = result.rows[0];
+    return row ? mapSettlementRow(row) : null;
+  }
+
+  async findByRequestId(
+    requestId: string,
+  ): Promise<Settlement | null> {
+    const result = await this.pool.query<SettlementRow>(
+      `
+        select ${settlementColumns}
+        from settlements
+        where request_id = $1
+        limit 1
+      `,
+      [requestId],
+    );
+
+    const row = result.rows[0];
+    return row ? mapSettlementRow(row) : null;
+  }
+
+  async updateStatus(
+    input: UpdateSettlementStatusInput,
+  ): Promise<Settlement | null> {
+    const result = await this.pool.query<SettlementRow>(
+      `
+        update settlements
+        set status = $4
+        where id = $1
+          and status = $2
+          and version = $3
+        returning ${settlementColumns}
+      `,
+      [
+        input.id,
+        input.expectedStatus,
+        input.expectedVersion,
+        input.nextStatus,
+      ],
+    );
+
+    const row = result.rows[0];
+    return row ? mapSettlementRow(row) : null;
   }
 }

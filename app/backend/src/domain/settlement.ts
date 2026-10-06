@@ -1,11 +1,14 @@
 export const settlementStatuses = [
-  "received",
-  "attested",
-  "submitted",
+  "created",
+  "awaiting_pix",
+  "pix_confirmed",
+  "tokenized",
+  "settling",
   "settled",
+  "offramping",
+  "paid_out",
   "failed",
-  "expired",
-  "manual_review",
+  "revoked",
 ] as const;
 
 export type SettlementStatus = (typeof settlementStatuses)[number];
@@ -32,6 +35,7 @@ export interface Settlement {
   destinationAmount: string;
   expiresAt: Date;
   status: SettlementStatus;
+  version: number;
   createdAt: Date;
   updatedAt: Date;
 }

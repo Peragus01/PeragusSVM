@@ -60,14 +60,35 @@ export class CreateSettlementService {
     input: SettlementRequestPayload,
   ): Promise<CreateOrGetSettlementResult> {
     const payload = normalizePayload(input);
-    const expiresAt = new Date(payload.expiresAt);
+    const requestPayloadHash = fingerprintPayload(payload);
 
-    if (expiresAt.getTime() <= this.now().getTime()) {
-      throw new SettlementExpiredError();
+    const existing =
+      await this.repository.findByRequestId(
+        payload.requestId,
+      );
+
+    if (existing) {
+      if (
+        existing.requestPayloadHash
+        !== requestPayloadHash
+      ) {
+        throw new IdempotencyConflictError(
+          payload.requestId,
+        );
+      }
+
+      return {
+        settlement: existing,
+        created: false,
+      };
     }
 
-    const requestPayloadHash = fingerprintPayload(payload);
     const timestamp = this.now();
+    const expiresAt = new Date(payload.expiresAt);
+
+    if (expiresAt.getTime() <= timestamp.getTime()) {
+      throw new SettlementExpiredError();
+    }
 
     const candidate: Settlement = {
       id: randomUUID(),
@@ -80,7 +101,8 @@ export class CreateSettlementService {
       sourceAmount: payload.sourceAmount,
       destinationAmount: payload.destinationAmount,
       expiresAt,
-      status: "received",
+      status: "created",
+      version: 0,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
