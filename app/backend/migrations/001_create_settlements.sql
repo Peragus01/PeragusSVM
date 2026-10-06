@@ -57,6 +57,8 @@ create table if not exists settlements (
         )
 );
 
+alter table settlements enable row level security;
+
 create index if not exists settlements_status_created_at_idx
     on settlements (status, created_at);
 

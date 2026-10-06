@@ -1,5 +1,3 @@
-begin;
-
 alter table settlements
     drop constraint if exists settlements_status_valid;
 
@@ -33,4 +31,8 @@ alter table settlements
         )
     );
 
-commit;
+drop index if exists settlements_expires_at_idx;
+
+create index settlements_expires_at_idx
+    on settlements (expires_at)
+    where status not in ('paid_out', 'failed', 'revoked');

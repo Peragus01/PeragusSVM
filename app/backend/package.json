@@ -10,7 +10,8 @@
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "audit:prod": "npm audit --omit=dev"
+    "audit:prod": "npm audit --omit=dev",
+    "db:migrate": "node scripts/migrate.mjs"
   },
   "keywords": [],
   "author": "",
