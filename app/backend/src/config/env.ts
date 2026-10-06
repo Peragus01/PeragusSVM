@@ -12,6 +12,10 @@ const envSchema = z.object({
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
   DATABASE_URL: z.string().url().optional(),
+  DATABASE_SSL: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   SOLANA_RPC_URL: z
     .string()
     .url()

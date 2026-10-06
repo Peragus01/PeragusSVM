@@ -4,8 +4,14 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 
+import { InMemorySettlementRepository } from "./repositories/in-memory-settlement-repository.js";
+import type { SettlementRepository } from "./repositories/settlement-repository.js";
+import { registerSettlementRoutes } from "./routes/settlements.js";
+
 export interface BuildAppOptions {
   logger?: FastifyServerOptions["logger"];
+  settlementRepository?: SettlementRepository;
+  now?: () => Date;
 }
 
 export async function buildApp(
@@ -13,6 +19,7 @@ export async function buildApp(
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: options.logger ?? false,
+    bodyLimit: 64 * 1024,
   });
 
   await app.register(sensible);
@@ -24,6 +31,13 @@ export async function buildApp(
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
   }));
+
+  await registerSettlementRoutes(app, {
+    repository:
+      options.settlementRepository
+      ?? new InMemorySettlementRepository(),
+    now: options.now ?? (() => new Date()),
+  });
 
   return app;
 }
