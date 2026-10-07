@@ -1,3 +1,7 @@
+import {
+  Connection,
+  PublicKey,
+} from "@solana/web3.js";
 import type { Pool } from "pg";
 import type { PgBoss } from "pg-boss";
 
@@ -6,6 +10,10 @@ import {
   GetOzavOnrampService,
   type OzavOnrampReader,
 } from "./application/get-ozav-onramp.js";
+import {
+  PrepareSolanaSettlementService,
+  type SolanaSettlementPreparer,
+} from "./application/prepare-solana-settlement.js";
 import { getEnv } from "./config/env.js";
 import { createDatabasePool } from "./database/pool.js";
 import {
@@ -17,10 +25,12 @@ import {
   NoopSettlementJobPublisher,
   type SettlementJobPublisher,
 } from "./jobs/settlement-orchestration.js";
+import { loadLocalSolanaAuthority } from "./providers/local-solana-authority.js";
 import { InMemorySettlementRepository } from "./repositories/in-memory-settlement-repository.js";
 import { PostgresOzavOnrampIntentRepository } from "./repositories/postgres-ozav-onramp-intent-repository.js";
 import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "./repositories/postgres-settlement-repository.js";
+import { PostgresSolanaSettlementPreparationRepository } from "./repositories/solana-settlement-preparation-repository.js";
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
 
 const env = getEnv();
@@ -29,6 +39,9 @@ let pool: Pool | undefined;
 let boss: PgBoss | undefined;
 let settlementRepository: SettlementRepository;
 let ozavOnrampReader: OzavOnrampReader | undefined;
+let solanaSettlementPreparer:
+  | SolanaSettlementPreparer
+  | undefined;
 let settlementJobPublisher: SettlementJobPublisher =
   new NoopSettlementJobPublisher();
 
@@ -70,6 +83,51 @@ if (env.DATABASE_URL) {
       new PostgresOzavOnrampRepository(databasePool),
   });
 
+  if (env.SOLANA_COSIGNING_ENABLED) {
+    if (env.NODE_ENV === "production") {
+      throw new Error(
+        "Local Solana keypair signers cannot be enabled in production; configure an HSM/KMS signer adapter",
+      );
+    }
+
+    if (
+      !env.SOLANA_SOURCE_MINT
+      || !env.SOLANA_DESTINATION_MINT
+      || !env.SOLANA_ATTESTATION_KEYPAIR_PATH
+      || !env.SOLANA_LIQUIDITY_KEYPAIR_PATH
+    ) {
+      throw new Error(
+        "Solana cosigning configuration is incomplete",
+      );
+    }
+
+    solanaSettlementPreparer =
+      new PrepareSolanaSettlementService({
+        settlements: settlementRepository,
+        preparations:
+          new PostgresSolanaSettlementPreparationRepository(
+            databasePool,
+          ),
+        connection: new Connection(
+          env.SOLANA_RPC_URL,
+          "confirmed",
+        ),
+        programId: new PublicKey(env.SOLANA_PROGRAM_ID),
+        sourceMint: new PublicKey(env.SOLANA_SOURCE_MINT),
+        destinationMint: new PublicKey(
+          env.SOLANA_DESTINATION_MINT,
+        ),
+        attestationAuthority: loadLocalSolanaAuthority(
+          env.SOLANA_ATTESTATION_KEYPAIR_PATH,
+          "SOLANA_ATTESTATION_KEYPAIR_PATH",
+        ),
+        liquidityAuthority: loadLocalSolanaAuthority(
+          env.SOLANA_LIQUIDITY_KEYPAIR_PATH,
+          "SOLANA_LIQUIDITY_KEYPAIR_PATH",
+        ),
+      });
+  }
+
   settlementJobPublisher =
     new PgBossSettlementJobPublisher(jobQueue);
 } else {
@@ -90,6 +148,7 @@ const app = await buildApp({
   settlementRepository,
   settlementJobPublisher,
   ozavOnrampReader,
+  solanaSettlementPreparer,
 });
 
 const databasePool = pool;

@@ -80,6 +80,40 @@ const envSchema = z.object({
     .string()
     .min(32)
     .default("6Auy8BXWNaWQCAEbDkusoDkAjWvyzhkKw2LbfiVvvb1w"),
+  SOLANA_COSIGNING_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  SOLANA_SOURCE_MINT: z.string().min(32).max(44).optional(),
+  SOLANA_DESTINATION_MINT: z.string().min(32).max(44).optional(),
+  SOLANA_ATTESTATION_KEYPAIR_PATH: z
+    .string()
+    .min(1)
+    .optional(),
+  SOLANA_LIQUIDITY_KEYPAIR_PATH: z
+    .string()
+    .min(1)
+    .optional(),
+}).superRefine((env, context) => {
+  if (!env.SOLANA_COSIGNING_ENABLED) {
+    return;
+  }
+
+  for (const field of [
+    "SOLANA_SOURCE_MINT",
+    "SOLANA_DESTINATION_MINT",
+    "SOLANA_ATTESTATION_KEYPAIR_PATH",
+    "SOLANA_LIQUIDITY_KEYPAIR_PATH",
+  ] as const) {
+    if (!env[field]) {
+      context.addIssue({
+        code: "custom",
+        path: [field],
+        message:
+          `${field} is required when SOLANA_COSIGNING_ENABLED=true`,
+      });
+    }
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;
