@@ -6,4 +6,9 @@ export interface OzavOnrampRepository {
   findBinding(settlementId: string): Promise<OzavOnrampBinding | null>;
   recordEvent(binding: OzavOnrampBinding, event: OzavEvent): Promise<{ inserted: boolean }>;
   listEvents(settlementId: string): Promise<OzavStoredEvent[]>;
+  markEventsProcessed(
+    settlementId: string,
+    eventIds: string[],
+    processedAt: Date,
+  ): Promise<number>;
 }

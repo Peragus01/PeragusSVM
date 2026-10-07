@@ -32,6 +32,7 @@ class MemoryRepository implements OzavOnrampRepository {
   readonly bindings = new Map<string, OzavOnrampBinding>();
   readonly records = new Map<string, OzavStoredEvent>();
   readonly insertionOrder: string[] = [];
+  readonly processed = new Set<string>();
   async createBinding(input: OzavOnrampBinding) {
     const normalized = normalizeOzavBinding(input);
     const existing = this.bindings.get(normalized.settlementId);
@@ -53,6 +54,16 @@ class MemoryRepository implements OzavOnrampRepository {
     return { inserted: !existing };
   }
   async listEvents(id: string) { return [...this.records.values()].filter((row) => row.settlementId === id); }
+  async markEventsProcessed(id: string, eventIds: string[]) {
+    let count = 0;
+    for (const eventId of eventIds) {
+      if (this.records.get(eventId)?.settlementId === id && !this.processed.has(eventId)) {
+        this.processed.add(eventId);
+        count += 1;
+      }
+    }
+    return count;
+  }
 }
 
 function setup() {

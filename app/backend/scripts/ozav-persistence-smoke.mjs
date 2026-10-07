@@ -5,6 +5,8 @@ import { Pool } from "pg";
 import { OzavClient } from "../dist/providers/ozav-client.js";
 import { OzavPersistenceError } from "../dist/domain/ozav-onramp.js";
 import { ImportOzavOnrampEventsService } from "../dist/application/import-ozav-onramp-events.js";
+import { ReconcileOzavOnrampService } from "../dist/application/reconcile-ozav-onramp.js";
+import { TransitionSettlementService } from "../dist/application/transition-settlement.js";
 import { PostgresOzavOnrampRepository } from "../dist/repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "../dist/repositories/postgres-settlement-repository.js";
 
@@ -84,6 +86,32 @@ try {
   `, [settlementId]);
   assert.equal(unprocessed.rows[0].count, stored.length);
 
+  const reconciler = new ReconcileOzavOnrampService({
+    importer: service,
+    ozavRepository: repository,
+    settlements,
+    transitioner: new TransitionSettlementService(settlements),
+  });
+  console.log("Reconciliando o estado atual da OZAV com o settlement...");
+  const reconciled = await reconciler.execute(settlementId);
+  assert.deepEqual(reconciled.transitions, ["awaiting_pix", "pix_confirmed", "tokenized"]);
+  assert.equal(reconciled.settlementStatus, "tokenized");
+  assert.equal(reconciled.eventsProcessed, stored.length);
+  const reconciledSettlement = await settlements.findById(settlementId);
+  assert.equal(reconciledSettlement?.status, "tokenized");
+  assert.equal(reconciledSettlement?.version, 3);
+  const reconciliationReplay = await reconciler.execute(settlementId);
+  assert.deepEqual(reconciliationReplay.transitions, []);
+  assert.equal(reconciliationReplay.eventsProcessed, 0);
+  const afterReplay = await settlements.findById(settlementId);
+  assert.equal(afterReplay?.status, "tokenized");
+  assert.equal(afterReplay?.version, 3);
+  const remainingUnprocessed = await connection.query(`
+    select count(*)::int as count from settlement_ozav_events
+    where settlement_id = $1 and processed_at is null
+  `, [settlementId]);
+  assert.equal(remainingUnprocessed.rows[0].count, 0);
+
   const firstStored = stored[0];
   const tampered = { id: firstStored.eventId, type: firstStored.eventType,
     createdAt: firstStored.occurredAt, transfer: { ...transfer, status: "smoke_conflict_probe" } };
@@ -113,7 +141,9 @@ try {
   assert.deepEqual(leftovers.rows[0], { settlements: 0, bindings: 0, events: 0 });
   console.log("PERSISTENCIA OZAV COM POSTGRESQL: OK");
   console.table([{ transfer_id: transferId, eventos_inseridos: first.inserted,
-    repetidos_no_replay: replay.duplicates, status_settlement: settlement.status,
+    repetidos_no_replay: replay.duplicates, status_settlement: reconciledSettlement.status,
+    transicoes_aplicadas: reconciled.transitions.join(" -> "),
+    eventos_processados: reconciled.eventsProcessed,
     conflito_de_evento_bloqueado: true, transferencia_unica: true, rollback_confirmado: true }]);
   console.log("Somente as tabelas da migration permanecem; os registros de teste foram revertidos.");
 } catch (error) {

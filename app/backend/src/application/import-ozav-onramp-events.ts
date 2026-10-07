@@ -19,7 +19,9 @@ export class ImportOzavOnrampEventsService {
 
   async execute(input: OzavOnrampBinding): Promise<{
     settlementId: string; transferId: string; bindingCreated: boolean;
-    currentTransferStatus: string; eventsFound: number; inserted: number; duplicates: number;
+    currentTransferStatus: string; currentSourceLegStatus: string | null;
+    currentDestinationLegStatus: string | null; eventIds: string[];
+    eventsFound: number; inserted: number; duplicates: number;
   }> {
     const binding = normalizeOzavBinding(input);
     const { client, repository, settlements } = this.dependencies;
@@ -67,6 +69,9 @@ export class ImportOzavOnrampEventsService {
     }
     return { settlementId: binding.settlementId, transferId: binding.transferId,
       bindingCreated: attached.created, currentTransferStatus: current.status,
+      currentSourceLegStatus: current.sourceLegStatus,
+      currentDestinationLegStatus: current.destinationLegStatus,
+      eventIds: [...new Set(events.map((event) => event.id))],
       eventsFound: events.length, inserted, duplicates };
   }
 }

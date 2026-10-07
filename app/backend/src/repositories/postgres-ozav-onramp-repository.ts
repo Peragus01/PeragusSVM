@@ -93,4 +93,21 @@ export class PostgresOzavOnrampRepository implements OzavOnrampRepository {
       transferId: row.transfer_id, eventType: row.event_type, occurredAt: row.occurred_at.toISOString(),
       contentHash: row.content_hash, snapshot: row.snapshot }));
   }
+
+  async markEventsProcessed(
+    settlementId: string,
+    eventIds: string[],
+    processedAt: Date,
+  ): Promise<number> {
+    if (!eventIds.length) return 0;
+    const result = await this.database.query(`
+      update settlement_ozav_events
+      set processed_at = $3
+      where settlement_id = $1
+        and event_id = any($2::varchar[])
+        and processed_at is null
+      returning event_id
+    `, [settlementId, eventIds, processedAt]);
+    return result.rowCount ?? 0;
+  }
 }

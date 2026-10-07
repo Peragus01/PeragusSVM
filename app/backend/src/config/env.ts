@@ -28,6 +28,10 @@ const envSchema = z.object({
     .min(1)
     .max(25)
     .default(3),
+  OZAV_API_KEY: z
+    .string()
+    .regex(/^ozav_sk_test_[A-Za-z0-9_-]+$/)
+    .optional(),
   SOLANA_RPC_URL: z
     .string()
     .url()
