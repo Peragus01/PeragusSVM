@@ -1,6 +1,15 @@
 import { PgBoss } from "pg-boss";
 
 import {
+  OZAV_RECONCILIATION_DEAD_LETTER_QUEUE,
+  OZAV_RECONCILIATION_QUEUE,
+  ozavReconciliationJobId,
+  ozavReconciliationJobSchema,
+  type OzavReconciliationJob,
+  type OzavReconciliationScheduleResult,
+  type OzavReconciliationScheduler,
+} from "./ozav-reconciliation.js";
+import {
   SETTLEMENT_ORCHESTRATION_DEAD_LETTER_QUEUE,
   SETTLEMENT_ORCHESTRATION_QUEUE,
   settlementOrchestrationJobSchema,
@@ -88,6 +97,59 @@ export async function ensureSettlementQueues(
       + `must use the ${QUEUE_POLICY} policy`,
     );
   }
+
+  const ozavDeadLetterQueue = await boss.getQueue(
+    OZAV_RECONCILIATION_DEAD_LETTER_QUEUE,
+  );
+
+  if (!ozavDeadLetterQueue) {
+    await boss.createQueue(
+      OZAV_RECONCILIATION_DEAD_LETTER_QUEUE,
+      {
+        policy: QUEUE_POLICY,
+        retryLimit: 0,
+        expireInSeconds: 60,
+        retentionSeconds: 30 * 24 * 60 * 60,
+        deleteAfterSeconds: 30 * 24 * 60 * 60,
+        warningQueueSize: 50,
+      },
+    );
+  } else if (
+    ozavDeadLetterQueue.policy !== QUEUE_POLICY
+  ) {
+    throw new Error(
+      `${OZAV_RECONCILIATION_DEAD_LETTER_QUEUE} `
+      + `must use the ${QUEUE_POLICY} policy`,
+    );
+  }
+
+  const ozavQueue = await boss.getQueue(
+    OZAV_RECONCILIATION_QUEUE,
+  );
+
+  if (!ozavQueue) {
+    await boss.createQueue(
+      OZAV_RECONCILIATION_QUEUE,
+      {
+        policy: QUEUE_POLICY,
+        retryLimit: 5,
+        retryDelay: 5,
+        retryBackoff: true,
+        retryDelayMax: 300,
+        expireInSeconds: 120,
+        retentionSeconds: 7 * 24 * 60 * 60,
+        deleteAfterSeconds: 30 * 24 * 60 * 60,
+        deadLetter:
+          OZAV_RECONCILIATION_DEAD_LETTER_QUEUE,
+        warningQueueSize: 1_000,
+      },
+    );
+  } else if (ozavQueue.policy !== QUEUE_POLICY) {
+    throw new Error(
+      `${OZAV_RECONCILIATION_QUEUE} `
+      + `must use the ${QUEUE_POLICY} policy`,
+    );
+  }
 }
 
 export class PgBossSettlementJobPublisher
@@ -112,6 +174,57 @@ export class PgBossSettlementJobPublisher
     return {
       jobId: jobId ?? job.settlementId,
       enqueued: jobId !== null,
+    };
+  }
+}
+
+export class PgBossOzavReconciliationScheduler
+  implements OzavReconciliationScheduler
+{
+  constructor(
+    private readonly boss: PgBoss,
+    private readonly delaySeconds: number,
+    private readonly maxAttempts: number,
+  ) {
+    if (
+      !Number.isInteger(delaySeconds)
+      || delaySeconds < 1
+      || !Number.isInteger(maxAttempts)
+      || maxAttempts < 1
+    ) {
+      throw new Error(
+        "Invalid OZAV reconciliation schedule configuration",
+      );
+    }
+  }
+
+  async schedule(
+    input: OzavReconciliationJob,
+  ): Promise<OzavReconciliationScheduleResult> {
+    const job = ozavReconciliationJobSchema.parse(input);
+    const deterministicId = ozavReconciliationJobId(job);
+
+    if (job.attempt > this.maxAttempts) {
+      return {
+        jobId: deterministicId,
+        attempt: job.attempt,
+        scheduled: false,
+        exhausted: true,
+      };
+    }
+
+    const jobId = await this.boss.sendAfter(
+      OZAV_RECONCILIATION_QUEUE,
+      job,
+      { id: deterministicId },
+      this.delaySeconds,
+    );
+
+    return {
+      jobId: jobId ?? deterministicId,
+      attempt: job.attempt,
+      scheduled: jobId !== null,
+      exhausted: false,
     };
   }
 }

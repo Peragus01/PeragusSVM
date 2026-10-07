@@ -7,7 +7,14 @@ import { createDatabasePool } from "./database/pool.js";
 import {
   createJobQueue,
   ensureSettlementQueues,
+  PgBossOzavReconciliationScheduler,
 } from "./jobs/pg-boss.js";
+import {
+  OZAV_RECONCILIATION_QUEUE,
+  OzavReconciliationJobHandler,
+  shouldContinueOzavReconciliation,
+  type OzavReconciliationJob,
+} from "./jobs/ozav-reconciliation.js";
 import {
   SETTLEMENT_ORCHESTRATION_QUEUE,
   SettlementOrchestrationHandler,
@@ -94,6 +101,13 @@ const boss = createJobQueue(
   env.DATABASE_SSL,
 );
 
+const ozavReconciliationScheduler =
+  new PgBossOzavReconciliationScheduler(
+    boss,
+    env.OZAV_RECONCILIATION_INTERVAL_SECONDS,
+    env.OZAV_RECONCILIATION_MAX_ATTEMPTS,
+  );
+
 boss.on("error", (error) => {
   console.error("PG-BOSS ERROR:", error);
 });
@@ -140,6 +154,13 @@ try {
   const handler =
     new SettlementOrchestrationHandler(repository);
 
+  const ozavReconciliationHandler =
+    new OzavReconciliationJobHandler(
+      repository,
+      ozavReconciler,
+      ozavReconciliationScheduler,
+    );
+
   await boss.work<SettlementOrchestrationJob>(
     SETTLEMENT_ORCHESTRATION_QUEUE,
     {
@@ -163,6 +184,14 @@ try {
       const ozav = await ozavReconciler.execute(
         result.settlementId,
       );
+      const nextOzavReconciliation =
+        shouldContinueOzavReconciliation(ozav)
+          ? await ozavReconciliationScheduler.schedule({
+              settlementId: result.settlementId,
+              requestId: result.requestId,
+              attempt: 1,
+            })
+          : null;
 
       console.info(
         JSON.stringify({
@@ -172,6 +201,7 @@ try {
           status: ozav.settlementStatus,
           ozavInitiation: initiation,
           ozav,
+          nextOzavReconciliation,
         }),
       );
 
@@ -180,7 +210,37 @@ try {
         status: ozav.settlementStatus,
         ozavInitiation: initiation,
         ozav,
+        nextOzavReconciliation,
       };
+    },
+  );
+
+  await boss.work<OzavReconciliationJob>(
+    OZAV_RECONCILIATION_QUEUE,
+    {
+      pollingIntervalSeconds:
+        env.JOB_POLL_INTERVAL_SECONDS,
+      localConcurrency: env.JOB_CONCURRENCY,
+    },
+    async ([job]) => {
+      if (!job) {
+        throw new Error(
+          "OZAV reconciliation worker received an empty batch",
+        );
+      }
+
+      const result =
+        await ozavReconciliationHandler.execute(job.data);
+
+      console.info(
+        JSON.stringify({
+          event: "ozav_reconciliation_job_processed",
+          jobId: job.id,
+          ...result,
+        }),
+      );
+
+      return result;
     },
   );
 
@@ -192,6 +252,12 @@ try {
       ozavEnvironment: "test",
       ozavOnrampWritesEnabled:
         env.OZAV_ONRAMP_WRITES_ENABLED,
+      ozavReconciliationQueue:
+        OZAV_RECONCILIATION_QUEUE,
+      ozavReconciliationIntervalSeconds:
+        env.OZAV_RECONCILIATION_INTERVAL_SECONDS,
+      ozavReconciliationMaxAttempts:
+        env.OZAV_RECONCILIATION_MAX_ATTEMPTS,
     }),
   );
 } catch (error) {

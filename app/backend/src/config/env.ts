@@ -60,6 +60,18 @@ const envSchema = z.object({
     .string()
     .regex(/^\d+(?:\.\d{1,2})?$/)
     .default("400"),
+  OZAV_RECONCILIATION_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(3_600)
+    .default(30),
+  OZAV_RECONCILIATION_MAX_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10_000)
+    .default(120),
   SOLANA_RPC_URL: z
     .string()
     .url()
