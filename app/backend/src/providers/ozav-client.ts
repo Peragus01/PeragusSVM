@@ -3,10 +3,23 @@ import https from "node:https";
 export interface OzavResponse {
   statusCode: number;
   body: unknown;
+  headers?: Readonly<Record<string, string | undefined>>;
 }
 
 export type OzavTransport = (
   path: string,
+  apiKey: string,
+  timeoutMs: number,
+) => Promise<OzavResponse>;
+
+export interface OzavWriteRequest {
+  path: string;
+  body: Readonly<Record<string, unknown>>;
+  idempotencyKey?: string;
+}
+
+export type OzavWriteTransport = (
+  request: OzavWriteRequest,
   apiKey: string,
   timeoutMs: number,
 ) => Promise<OzavResponse>;
@@ -28,7 +41,12 @@ export interface OzavTransfer {
   status: string;
   customerId: string;
   quoteId: string | null;
-  source: { type: string; currency: string | null; rail: string | null };
+  source: {
+    type: string;
+    currency: string | null;
+    rail: string | null;
+    paymentInstructions?: OzavPaymentInstructions | null;
+  };
   destination: { type: string; walletId: string | null };
   sourceLegStatus: string | null;
   destinationLegStatus: string | null;
@@ -36,6 +54,39 @@ export interface OzavTransfer {
     source: { amount: string; currency: string };
     target: { amount: string; currency: string };
   };
+}
+
+export interface OzavPaymentInstructions {
+  intentId: string;
+  brCode: string;
+  qrCodeImage: string | null;
+  expiresAt: string;
+}
+
+export interface OzavQuote {
+  id: string;
+  customerId: string;
+  rateType: "floating" | "locked";
+  rate: string;
+  source: { amount: string; currency: string };
+  target: { amount: string; currency: string };
+  spreadBps: number;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+export interface CreateOzavQuoteInput {
+  customerId: string;
+  sourceAmountBrl: string;
+  spreadBps: number;
+}
+
+export interface CreateOzavTransferInput {
+  customerId: string;
+  walletId: string;
+  quoteId: string;
+  idempotencyKey: string;
+  metadata: Readonly<Record<string, string>>;
 }
 
 export interface OzavEvent {
@@ -87,6 +138,54 @@ function amount(value: unknown): { amount: string; currency: string } {
   return { amount: decimal, currency: text(row.currency) };
 }
 
+function timestamp(value: unknown): string {
+  const result = text(value);
+  if (Number.isNaN(Date.parse(result))) return invalidResponse();
+  return result;
+}
+
+function paymentInstructions(value: unknown): OzavPaymentInstructions | null {
+  if (value == null) return null;
+  const row = object(value);
+  if (row.rail !== "pix") return invalidResponse();
+  return {
+    intentId: text(row.intent_id),
+    brCode: text(row.br_code),
+    qrCodeImage: optionalText(row.qr_code_image),
+    expiresAt: timestamp(row.expires_at),
+  };
+}
+
+function quote(value: unknown): OzavQuote {
+  const row = object(value);
+  if (row.object !== "quote") return invalidResponse();
+  const rateType = text(row.rate_type);
+  if (rateType !== "floating" && rateType !== "locked") {
+    return invalidResponse();
+  }
+  const exchangeConditions = object(row.exchange_conditions);
+  const spreadBps = exchangeConditions.spread_bps;
+  if (typeof spreadBps !== "number"
+    || !Number.isInteger(spreadBps)
+    || spreadBps < 0
+    || spreadBps > 10_000) {
+    return invalidResponse();
+  }
+  const result: OzavQuote = {
+    id: identifier(row.id, "ozav_q_"),
+    customerId: identifier(row.customer_id, "ozav_cus_"),
+    rateType,
+    rate: text(row.rate),
+    source: amount(row.source),
+    target: amount(row.target),
+    spreadBps,
+    expiresAt: row.expires_at == null ? null : timestamp(row.expires_at),
+    createdAt: timestamp(row.created_at),
+  };
+  if (!/^\d+(?:\.\d{1,12})?$/.test(result.rate)) return invalidResponse();
+  return result;
+}
+
 function transfer(value: unknown): OzavTransfer {
   const row = object(value);
   if (row.object !== "transfer") return invalidResponse();
@@ -102,6 +201,7 @@ function transfer(value: unknown): OzavTransfer {
       type: text(source.type),
       currency: optionalText(source.currency),
       rail: optionalText(source.rail),
+      paymentInstructions: paymentInstructions(source.payment_instructions),
     },
     destination: {
       type: text(destination.type),
@@ -164,18 +264,104 @@ export const httpsOzavTransport: OzavTransport = (path, apiKey, timeoutMs) =>
     request.end();
   });
 
+export const httpsOzavWriteTransport: OzavWriteTransport = (
+  input,
+  apiKey,
+  timeoutMs,
+) => new Promise((resolve, reject) => {
+  const payload = JSON.stringify(input.body);
+  const headers: Record<string, string | number> = {
+    "X-API-Key": apiKey,
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(payload),
+  };
+  if (input.idempotencyKey !== undefined) {
+    headers["Idempotency-Key"] = input.idempotencyKey;
+  }
+  const request = https.request({
+    hostname: "developers.ozav.io",
+    port: 443,
+    path: input.path,
+    method: "POST",
+    family: 4,
+    headers,
+  }, (response) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    response.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 2 * 1024 * 1024) {
+        request.destroy(
+          new OzavClientError("OZAV response too large", false),
+        );
+        return;
+      }
+      chunks.push(chunk);
+    });
+    response.on("error", () => {
+      request.destroy(
+        new OzavClientError("OZAV response interrupted", true),
+      );
+    });
+    response.on("end", () => {
+      clearTimeout(deadline);
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body: unknown = null;
+      if (raw.length) {
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          reject(
+            new OzavClientError(
+              "Invalid OZAV JSON response",
+              false,
+            ),
+          );
+          return;
+        }
+      }
+      const replayed = response.headers["idempotent-replayed"];
+      resolve({
+        statusCode: response.statusCode ?? 0,
+        body,
+        headers: {
+          "idempotent-replayed":
+            typeof replayed === "string" ? replayed : undefined,
+        },
+      });
+    });
+  });
+  const deadline = setTimeout(() => {
+    request.destroy(
+      new OzavClientError("OZAV connection timeout", true),
+    );
+  }, timeoutMs);
+  request.on("error", (error: Error) => {
+    clearTimeout(deadline);
+    reject(
+      error instanceof OzavClientError
+        ? error
+        : new OzavClientError("OZAV connection failed", true),
+    );
+  });
+  request.end(payload);
+});
+
 export interface OzavClientOptions {
   apiKey: string;
   transport?: OzavTransport;
+  writeTransport?: OzavWriteTransport;
   timeoutMs?: number;
   attempts?: number;
   wait?: (milliseconds: number) => Promise<void>;
 }
 
-/** Sandbox-only, read-only client. Does not change Peragus settlement states. */
+/** Sandbox-only OZAV client. State changes require explicit method calls. */
 export class OzavClient {
   private readonly apiKey: string;
   private readonly transport: OzavTransport;
+  private readonly writeTransport: OzavWriteTransport;
   private readonly timeoutMs: number;
   private readonly attempts: number;
   private readonly wait: (milliseconds: number) => Promise<void>;
@@ -186,6 +372,8 @@ export class OzavClient {
     }
     this.apiKey = options.apiKey;
     this.transport = options.transport ?? httpsOzavTransport;
+    this.writeTransport =
+      options.writeTransport ?? httpsOzavWriteTransport;
     this.timeoutMs = options.timeoutMs ?? 15_000;
     this.attempts = options.attempts ?? 3;
     this.wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -209,6 +397,45 @@ export class OzavClient {
         const safeError = error instanceof OzavClientError
           ? error : new OzavClientError("OZAV connection failed", true);
         if (!safeError.retryable || attempt === this.attempts) throw safeError;
+        await this.wait(1_000 * attempt);
+      }
+    }
+    throw new OzavClientError("OZAV request failed", true);
+  }
+
+  private async post(
+    request: OzavWriteRequest,
+  ): Promise<OzavResponse> {
+    for (let attempt = 1; attempt <= this.attempts; attempt += 1) {
+      try {
+        const result = await this.writeTransport(
+          request,
+          this.apiKey,
+          this.timeoutMs,
+        );
+        if (result.statusCode === 202) {
+          throw new OzavClientError(
+            "OZAV HTTP 202",
+            true,
+            result.statusCode,
+          );
+        }
+        if (result.statusCode < 200 || result.statusCode >= 300) {
+          throw new OzavClientError(
+            `OZAV HTTP ${result.statusCode}`,
+            [408, 429].includes(result.statusCode)
+              || result.statusCode >= 500,
+            result.statusCode,
+          );
+        }
+        return result;
+      } catch (error) {
+        const safeError = error instanceof OzavClientError
+          ? error
+          : new OzavClientError("OZAV connection failed", true);
+        if (!safeError.retryable || attempt === this.attempts) {
+          throw safeError;
+        }
         await this.wait(1_000 * attempt);
       }
     }
@@ -256,6 +483,80 @@ export class OzavClient {
       }),
       hasMore: row.has_more,
       nextCursor,
+    };
+  }
+
+  async createQuote(input: CreateOzavQuoteInput): Promise<OzavQuote> {
+    identifier(input.customerId, "ozav_cus_");
+    if (!/^\d+(?:\.\d{1,2})?$/.test(input.sourceAmountBrl)
+      || !Number.isInteger(input.spreadBps)
+      || input.spreadBps < 0
+      || input.spreadBps > 10_000) {
+      throw new OzavClientError(
+        "Invalid OZAV quote input",
+        false,
+      );
+    }
+    const response = await this.post({
+      path: "/v2/quotes",
+      body: {
+        customer_id: input.customerId,
+        source: {
+          currency: "BRL",
+          amount: input.sourceAmountBrl,
+        },
+        target: {
+          currency: "USDT",
+          chain: "solana",
+        },
+        source_rail: "pix",
+        spread_bps: input.spreadBps,
+      },
+    });
+    return quote(response.body);
+  }
+
+  async createTransfer(
+    input: CreateOzavTransferInput,
+  ): Promise<{
+    transfer: OzavTransfer;
+    idempotentReplayed: boolean;
+  }> {
+    identifier(input.customerId, "ozav_cus_");
+    identifier(input.walletId, "ozav_wal_");
+    identifier(input.quoteId, "ozav_q_");
+    if (!/^[A-Za-z0-9_-]{16,256}$/.test(input.idempotencyKey)
+      || Object.keys(input.metadata).length > 50
+      || Object.values(input.metadata).some(
+        (value) => typeof value !== "string",
+      )) {
+      throw new OzavClientError(
+        "Invalid OZAV transfer input",
+        false,
+      );
+    }
+    const response = await this.post({
+      path: "/v2/transfers",
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        customer_id: input.customerId,
+        quote_id: input.quoteId,
+        source: {
+          type: "fiat_payment",
+          currency: "BRL",
+          rail: "pix",
+        },
+        destination: {
+          type: "wallet",
+          wallet_id: input.walletId,
+        },
+        metadata: input.metadata,
+      },
+    });
+    return {
+      transfer: transfer(response.body),
+      idempotentReplayed:
+        response.headers?.["idempotent-replayed"] === "true",
     };
   }
 }

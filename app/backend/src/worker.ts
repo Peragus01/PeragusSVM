@@ -1,4 +1,5 @@
 import { ImportOzavOnrampEventsService } from "./application/import-ozav-onramp-events.js";
+import { InitiateOzavOnrampService } from "./application/initiate-ozav-onramp.js";
 import { ReconcileOzavOnrampService } from "./application/reconcile-ozav-onramp.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
@@ -13,6 +14,7 @@ import {
   type SettlementOrchestrationJob,
 } from "./jobs/settlement-orchestration.js";
 import { OzavClient } from "./providers/ozav-client.js";
+import { PostgresOzavOnrampIntentRepository } from "./repositories/postgres-ozav-onramp-intent-repository.js";
 import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "./repositories/postgres-settlement-repository.js";
 
@@ -30,6 +32,16 @@ if (!env.OZAV_API_KEY) {
   );
 }
 
+if (
+  env.OZAV_ONRAMP_WRITES_ENABLED
+  && (!env.OZAV_CUSTOMER_ID || !env.OZAV_WALLET_ID)
+) {
+  throw new Error(
+    "OZAV_CUSTOMER_ID and OZAV_WALLET_ID are required "
+    + "when OZAV on-ramp writes are enabled",
+  );
+}
+
 const pool = createDatabasePool(
   env.DATABASE_URL,
   env.DATABASE_SSL,
@@ -40,6 +52,9 @@ const repository =
 
 const ozavRepository =
   new PostgresOzavOnrampRepository(pool);
+
+const ozavIntentRepository =
+  new PostgresOzavOnrampIntentRepository(pool);
 
 const ozavClient = new OzavClient({
   apiKey: env.OZAV_API_KEY,
@@ -57,6 +72,22 @@ const ozavReconciler = new ReconcileOzavOnrampService({
   settlements: repository,
   transitioner: new TransitionSettlementService(repository),
 });
+
+const ozavInitiator =
+  env.OZAV_ONRAMP_WRITES_ENABLED
+    ? new InitiateOzavOnrampService({
+        client: ozavClient,
+        intents: ozavIntentRepository,
+        onramps: ozavRepository,
+        settlements: repository,
+        customerId: env.OZAV_CUSTOMER_ID!,
+        walletId: env.OZAV_WALLET_ID!,
+        sourceDecimals: env.OZAV_SOURCE_DECIMALS,
+        spreadBps: env.OZAV_SPREAD_BPS,
+        minimumSourceAmountBrl:
+          env.OZAV_MIN_SOURCE_AMOUNT_BRL,
+      })
+    : undefined;
 
 const boss = createJobQueue(
   env.DATABASE_URL,
@@ -124,6 +155,11 @@ try {
       }
 
       const result = await handler.execute(job.data);
+      const initiation = ozavInitiator
+        ? await ozavInitiator.execute(result.settlementId)
+        : {
+            enabled: false as const,
+          };
       const ozav = await ozavReconciler.execute(
         result.settlementId,
       );
@@ -134,6 +170,7 @@ try {
           jobId: job.id,
           ...result,
           status: ozav.settlementStatus,
+          ozavInitiation: initiation,
           ozav,
         }),
       );
@@ -141,6 +178,7 @@ try {
       return {
         ...result,
         status: ozav.settlementStatus,
+        ozavInitiation: initiation,
         ozav,
       };
     },
@@ -152,6 +190,8 @@ try {
       queue: SETTLEMENT_ORCHESTRATION_QUEUE,
       concurrency: env.JOB_CONCURRENCY,
       ozavEnvironment: "test",
+      ozavOnrampWritesEnabled:
+        env.OZAV_ONRAMP_WRITES_ENABLED,
     }),
   );
 } catch (error) {

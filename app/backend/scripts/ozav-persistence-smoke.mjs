@@ -8,6 +8,7 @@ import { ImportOzavOnrampEventsService } from "../dist/application/import-ozav-o
 import { ReconcileOzavOnrampService } from "../dist/application/reconcile-ozav-onramp.js";
 import { TransitionSettlementService } from "../dist/application/transition-settlement.js";
 import { PostgresOzavOnrampRepository } from "../dist/repositories/postgres-ozav-onramp-repository.js";
+import { PostgresOzavOnrampIntentRepository } from "../dist/repositories/postgres-ozav-onramp-intent-repository.js";
 import { PostgresSettlementRepository } from "../dist/repositories/postgres-settlement-repository.js";
 
 async function insertDemoSettlement(connection, id) {
@@ -49,9 +50,13 @@ try {
     select c.relname, c.relrowsecurity from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public'
-      and c.relname in ('settlement_ozav_onramps', 'settlement_ozav_events')
+      and c.relname in (
+        'settlement_ozav_onramps',
+        'settlement_ozav_events',
+        'settlement_ozav_onramp_intents'
+      )
   `);
-  assert.equal(protectedTables.rowCount, 2, "Execute npm run db:migrate primeiro");
+  assert.equal(protectedTables.rowCount, 3, "Execute npm run db:migrate primeiro");
   assert(protectedTables.rows.every((row) => row.relrowsecurity), "RLS precisa estar habilitado");
   const existing = await connection.query(`
     select settlement_id from settlement_ozav_onramps where transfer_id = $1
@@ -64,7 +69,40 @@ try {
   inTransaction = true;
   await insertDemoSettlement(connection, settlementId);
   const repository = new PostgresOzavOnrampRepository(connection);
+  const intentRepository =
+    new PostgresOzavOnrampIntentRepository(connection);
   const settlements = new PostgresSettlementRepository(connection);
+  const intentRequest = {
+    settlementId,
+    customerId,
+    walletId,
+    sourceAmountBrl: transfer.amounts.source.amount,
+    spreadBps: 0,
+    idempotencyKey:
+      `peragus_smoke_${settlementId.replaceAll("-", "")}`,
+  };
+  const reservedIntent =
+    await intentRepository.reserve(intentRequest);
+  assert.equal(reservedIntent.created, true);
+  const quotedIntent = await intentRepository.saveQuote({
+    settlementId,
+    quoteId: transfer.quoteId,
+    quoteTargetAmountUsdt:
+      transfer.amounts.target.amount,
+    updatedAt: new Date(),
+  });
+  assert.equal(quotedIntent.quoteId, transfer.quoteId);
+  const intentReplay =
+    await intentRepository.reserve(intentRequest);
+  assert.equal(intentReplay.created, false);
+  assert.equal(intentReplay.intent.quoteId, transfer.quoteId);
+  await assert.rejects(
+    () => intentRepository.reserve({
+      ...intentRequest,
+      sourceAmountBrl: "501",
+    }),
+    /different OZAV on-ramp intent/,
+  );
   const service = new ImportOzavOnrampEventsService({ client, repository, settlements });
   console.log("Importando eventos no teste transacional...");
   const first = await service.execute(binding);
@@ -135,15 +173,23 @@ try {
   const leftovers = await connection.query(`
     select
       (select count(*) from settlements where id = $1)::int as settlements,
+      (select count(*) from settlement_ozav_onramp_intents
+        where settlement_id = $1)::int as intents,
       (select count(*) from settlement_ozav_onramps where settlement_id = $1)::int as bindings,
       (select count(*) from settlement_ozav_events where settlement_id = $1)::int as events
   `, [settlementId]);
-  assert.deepEqual(leftovers.rows[0], { settlements: 0, bindings: 0, events: 0 });
+  assert.deepEqual(leftovers.rows[0], {
+    settlements: 0,
+    intents: 0,
+    bindings: 0,
+    events: 0,
+  });
   console.log("PERSISTENCIA OZAV COM POSTGRESQL: OK");
   console.table([{ transfer_id: transferId, eventos_inseridos: first.inserted,
     repetidos_no_replay: replay.duplicates, status_settlement: reconciledSettlement.status,
     transicoes_aplicadas: reconciled.transitions.join(" -> "),
     eventos_processados: reconciled.eventsProcessed,
+    intencao_idempotente: !intentReplay.created,
     conflito_de_evento_bloqueado: true, transferencia_unica: true, rollback_confirmado: true }]);
   console.log("Somente as tabelas da migration permanecem; os registros de teste foram revertidos.");
 } catch (error) {
