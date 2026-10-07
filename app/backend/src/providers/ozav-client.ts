@@ -1,0 +1,261 @@
+import https from "node:https";
+
+export interface OzavResponse {
+  statusCode: number;
+  body: unknown;
+}
+
+export type OzavTransport = (
+  path: string,
+  apiKey: string,
+  timeoutMs: number,
+) => Promise<OzavResponse>;
+
+export class OzavClientError extends Error {
+  readonly statusCode: number | undefined;
+  readonly retryable: boolean;
+
+  constructor(message: string, retryable: boolean, statusCode?: number) {
+    super(message);
+    this.name = "OzavClientError";
+    this.retryable = retryable;
+    this.statusCode = statusCode;
+  }
+}
+
+export interface OzavTransfer {
+  id: string;
+  status: string;
+  customerId: string;
+  quoteId: string | null;
+  source: { type: string; currency: string | null; rail: string | null };
+  destination: { type: string; walletId: string | null };
+  sourceLegStatus: string | null;
+  destinationLegStatus: string | null;
+  amounts: {
+    source: { amount: string; currency: string };
+    target: { amount: string; currency: string };
+  };
+}
+
+export interface OzavEvent {
+  id: string;
+  type: string;
+  createdAt: string;
+  transfer: OzavTransfer | null;
+}
+
+export interface OzavEventPage {
+  data: OzavEvent[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
+function invalidResponse(): never {
+  throw new OzavClientError("Invalid OZAV response", false);
+}
+
+function object(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return invalidResponse();
+  }
+  return value as Record<string, unknown>;
+}
+
+function text(value: unknown): string {
+  if (typeof value !== "string" || !value.length) return invalidResponse();
+  return value;
+}
+
+function optionalText(value: unknown): string | null {
+  return value == null ? null : text(value);
+}
+
+function identifier(value: unknown, prefix: string): string {
+  const result = text(value);
+  if (!result.startsWith(prefix) || result.length === prefix.length
+    || !/^[a-zA-Z0-9_]+$/.test(result)) {
+    return invalidResponse();
+  }
+  return result;
+}
+
+function amount(value: unknown): { amount: string; currency: string } {
+  const row = object(value);
+  const decimal = text(row.amount);
+  if (!/^\d+(?:\.\d{1,6})?$/.test(decimal)) return invalidResponse();
+  return { amount: decimal, currency: text(row.currency) };
+}
+
+function transfer(value: unknown): OzavTransfer {
+  const row = object(value);
+  if (row.object !== "transfer") return invalidResponse();
+  const source = object(row.source);
+  const destination = object(row.destination);
+  const amounts = object(row.amounts);
+  return {
+    id: identifier(row.id, "ozav_tr_"),
+    status: text(row.status),
+    customerId: identifier(row.customer_id, "ozav_cus_"),
+    quoteId: row.quote_id == null ? null : identifier(row.quote_id, "ozav_q_"),
+    source: {
+      type: text(source.type),
+      currency: optionalText(source.currency),
+      rail: optionalText(source.rail),
+    },
+    destination: {
+      type: text(destination.type),
+      walletId: destination.wallet_id == null
+        ? null : identifier(destination.wallet_id, "ozav_wal_"),
+    },
+    sourceLegStatus: row.source_leg == null
+      ? null : optionalText(object(row.source_leg).status),
+    destinationLegStatus: row.destination_leg == null
+      ? null : optionalText(object(row.destination_leg).status),
+    amounts: { source: amount(amounts.source), target: amount(amounts.target) },
+  };
+}
+
+export const httpsOzavTransport: OzavTransport = (path, apiKey, timeoutMs) =>
+  new Promise((resolve, reject) => {
+    const request = https.request({
+      hostname: "developers.ozav.io",
+      port: 443,
+      path,
+      method: "GET",
+      family: 4,
+      headers: { "X-API-Key": apiKey, Accept: "application/json" },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      response.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > 2 * 1024 * 1024) {
+          request.destroy(new OzavClientError("OZAV response too large", false));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("error", () => {
+        request.destroy(new OzavClientError("OZAV response interrupted", true));
+      });
+      response.on("end", () => {
+        clearTimeout(deadline);
+        const statusCode = response.statusCode ?? 0;
+        if (statusCode < 200 || statusCode >= 300) {
+          resolve({ statusCode, body: null });
+          return;
+        }
+        try {
+          resolve({ statusCode, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) });
+        } catch {
+          reject(new OzavClientError("Invalid OZAV JSON response", false));
+        }
+      });
+    });
+    const deadline = setTimeout(() => {
+      request.destroy(new OzavClientError("OZAV connection timeout", true));
+    }, timeoutMs);
+    request.on("error", (error: Error) => {
+      clearTimeout(deadline);
+      reject(error instanceof OzavClientError
+        ? error : new OzavClientError("OZAV connection failed", true));
+    });
+    request.end();
+  });
+
+export interface OzavClientOptions {
+  apiKey: string;
+  transport?: OzavTransport;
+  timeoutMs?: number;
+  attempts?: number;
+  wait?: (milliseconds: number) => Promise<void>;
+}
+
+/** Sandbox-only, read-only client. Does not change Peragus settlement states. */
+export class OzavClient {
+  private readonly apiKey: string;
+  private readonly transport: OzavTransport;
+  private readonly timeoutMs: number;
+  private readonly attempts: number;
+  private readonly wait: (milliseconds: number) => Promise<void>;
+
+  constructor(options: OzavClientOptions) {
+    if (!/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(options.apiKey)) {
+      throw new OzavClientError("A sandbox OZAV key is required", false);
+    }
+    this.apiKey = options.apiKey;
+    this.transport = options.transport ?? httpsOzavTransport;
+    this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.attempts = options.attempts ?? 3;
+    this.wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    if (!Number.isInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > 60_000
+      || !Number.isInteger(this.attempts) || this.attempts < 1 || this.attempts > 3) {
+      throw new OzavClientError("Invalid OZAV timeout or attempts", false);
+    }
+  }
+
+  private async get(path: string): Promise<unknown> {
+    for (let attempt = 1; attempt <= this.attempts; attempt += 1) {
+      try {
+        const result = await this.transport(path, this.apiKey, this.timeoutMs);
+        if (result.statusCode < 200 || result.statusCode >= 300) {
+          throw new OzavClientError(`OZAV HTTP ${result.statusCode}`,
+            [408, 429].includes(result.statusCode) || result.statusCode >= 500,
+            result.statusCode);
+        }
+        return result.body;
+      } catch (error) {
+        const safeError = error instanceof OzavClientError
+          ? error : new OzavClientError("OZAV connection failed", true);
+        if (!safeError.retryable || attempt === this.attempts) throw safeError;
+        await this.wait(1_000 * attempt);
+      }
+    }
+    throw new OzavClientError("OZAV request failed", true);
+  }
+
+  async getCapabilities(): Promise<{ environment: "test"; scopes: string[] }> {
+    const row = object(await this.get("/v2/capabilities"));
+    if (row.environment !== "test" || !Array.isArray(row.scopes)) {
+      return invalidResponse();
+    }
+    return { environment: "test", scopes: row.scopes.map(text) };
+  }
+
+  async getTransfer(id: string): Promise<OzavTransfer> {
+    identifier(id, "ozav_tr_");
+    const result = transfer(await this.get(`/v2/transfers/${encodeURIComponent(id)}`));
+    if (result.id !== id) return invalidResponse();
+    return result;
+  }
+
+  async listEvents(startingAfter?: string): Promise<OzavEventPage> {
+    const query = new URLSearchParams({ limit: "100" });
+    if (startingAfter !== undefined) query.set("starting_after", text(startingAfter));
+    const row = object(await this.get(`/v2/events?${query}`));
+    if (!Array.isArray(row.data) || typeof row.has_more !== "boolean") {
+      return invalidResponse();
+    }
+    const nextCursor = optionalText(row.next_cursor);
+    if (row.has_more && !nextCursor) return invalidResponse();
+    return {
+      data: row.data.map((value): OzavEvent => {
+        const event = object(value);
+        if (event.object !== "event") return invalidResponse();
+        const createdAt = text(event.created_at);
+        if (!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(createdAt)
+          || Number.isNaN(Date.parse(createdAt))) return invalidResponse();
+        const data = object(event.data);
+        return {
+          id: identifier(event.id, "ozav_evt_"),
+          type: text(event.type),
+          createdAt,
+          transfer: data.transfer == null ? null : transfer(data.transfer),
+        };
+      }),
+      hasMore: row.has_more,
+      nextCursor,
+    };
+  }
+}
