@@ -4,18 +4,21 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 
+import type { OzavOnrampReader } from "./application/get-ozav-onramp.js";
 import {
   NoopSettlementJobPublisher,
   type SettlementJobPublisher,
 } from "./jobs/settlement-orchestration.js";
 import { InMemorySettlementRepository } from "./repositories/in-memory-settlement-repository.js";
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
+import { registerOzavOnrampRoutes } from "./routes/ozav-onramp.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
   logger?: FastifyServerOptions["logger"];
   settlementRepository?: SettlementRepository;
   settlementJobPublisher?: SettlementJobPublisher;
+  ozavOnrampReader?: OzavOnrampReader | undefined;
   now?: () => Date;
 }
 
@@ -44,6 +47,11 @@ export async function buildApp(
     settlementJobPublisher:
       options.settlementJobPublisher
       ?? new NoopSettlementJobPublisher(),
+    now: options.now ?? (() => new Date()),
+  });
+
+  await registerOzavOnrampRoutes(app, {
+    reader: options.ozavOnrampReader,
     now: options.now ?? (() => new Date()),
   });
 

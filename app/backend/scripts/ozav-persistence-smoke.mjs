@@ -92,6 +92,45 @@ try {
     updatedAt: new Date(),
   });
   assert.equal(quotedIntent.quoteId, transfer.quoteId);
+  const payment = transfer.source.paymentInstructions;
+  assert(payment, "A transferencia precisa conter instrucoes Pix");
+  const paymentRequest = {
+    settlementId,
+    paymentInstructions: {
+      transferId,
+      intentId: payment.intentId,
+      brCode: payment.brCode,
+      qrCodeImage: payment.qrCodeImage,
+      expiresAt: new Date(payment.expiresAt),
+    },
+    updatedAt: new Date(),
+  };
+  const instructedIntent =
+    await intentRepository.savePaymentInstructions(
+      paymentRequest,
+    );
+  assert.equal(
+    instructedIntent.paymentInstructions?.transferId,
+    transferId,
+  );
+  const instructedReplay =
+    await intentRepository.savePaymentInstructions(
+      paymentRequest,
+    );
+  assert.equal(
+    instructedReplay.paymentInstructions?.transferId,
+    transferId,
+  );
+  await assert.rejects(
+    () => intentRepository.savePaymentInstructions({
+      ...paymentRequest,
+      paymentInstructions: {
+        ...paymentRequest.paymentInstructions,
+        transferId: "ozav_tr_conflict_probe",
+      },
+    }),
+    /different OZAV payment instructions/,
+  );
   const intentReplay =
     await intentRepository.reserve(intentRequest);
   assert.equal(intentReplay.created, false);
@@ -190,6 +229,11 @@ try {
     transicoes_aplicadas: reconciled.transitions.join(" -> "),
     eventos_processados: reconciled.eventsProcessed,
     intencao_idempotente: !intentReplay.created,
+    pix_persistido:
+      instructedIntent.paymentInstructions !== null,
+    pix_idempotente:
+      instructedReplay.paymentInstructions?.transferId
+        === transferId,
     conflito_de_evento_bloqueado: true, transferencia_unica: true, rollback_confirmado: true }]);
   console.log("Somente as tabelas da migration permanecem; os registros de teste foram revertidos.");
 } catch (error) {

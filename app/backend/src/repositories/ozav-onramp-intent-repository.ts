@@ -1,12 +1,19 @@
 import type {
   OzavOnrampIntent,
   OzavOnrampIntentRequest,
+  OzavPixPaymentInstructions,
 } from "../domain/ozav-onramp-intent.js";
 
 export interface SaveOzavQuoteInput {
   settlementId: string;
   quoteId: string;
   quoteTargetAmountUsdt: string;
+  updatedAt: Date;
+}
+
+export interface SaveOzavPaymentInstructionsInput {
+  settlementId: string;
+  paymentInstructions: OzavPixPaymentInstructions;
   updatedAt: Date;
 }
 
@@ -24,5 +31,9 @@ export interface OzavOnrampIntentRepository {
 
   saveQuote(
     input: SaveOzavQuoteInput,
+  ): Promise<OzavOnrampIntent>;
+
+  savePaymentInstructions(
+    input: SaveOzavPaymentInstructionsInput,
   ): Promise<OzavOnrampIntent>;
 }

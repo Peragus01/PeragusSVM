@@ -7,10 +7,19 @@ export interface OzavOnrampIntentRequest {
   idempotencyKey: string;
 }
 
+export interface OzavPixPaymentInstructions {
+  transferId: string;
+  intentId: string;
+  brCode: string;
+  qrCodeImage: string | null;
+  expiresAt: Date;
+}
+
 export interface OzavOnrampIntent
   extends OzavOnrampIntentRequest {
   quoteId: string | null;
   quoteTargetAmountUsdt: string | null;
+  paymentInstructions: OzavPixPaymentInstructions | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -28,6 +37,41 @@ function validId(value: string, prefix: string): boolean {
     && value.startsWith(prefix)
     && value.length > prefix.length
     && /^[A-Za-z0-9_]+$/.test(value);
+}
+
+export function normalizeOzavPixPaymentInstructions(
+  input: OzavPixPaymentInstructions,
+): OzavPixPaymentInstructions {
+  if (
+    !validId(input.transferId, "ozav_tr_")
+    || typeof input.intentId !== "string"
+    || input.intentId.length < 1
+    || input.intentId.length > 128
+    || typeof input.brCode !== "string"
+    || input.brCode.length < 1
+    || input.brCode.length > 4_096
+    || (
+      input.qrCodeImage !== null
+      && (
+        typeof input.qrCodeImage !== "string"
+        || input.qrCodeImage.length < 1
+        || input.qrCodeImage.length > 1_048_576
+      )
+    )
+    || !(input.expiresAt instanceof Date)
+    || Number.isNaN(input.expiresAt.getTime())
+  ) {
+    throw new OzavOnrampInitiationError(
+      "Invalid OZAV Pix payment instructions",
+    );
+  }
+  return {
+    transferId: input.transferId,
+    intentId: input.intentId,
+    brCode: input.brCode,
+    qrCodeImage: input.qrCodeImage,
+    expiresAt: new Date(input.expiresAt),
+  };
 }
 
 function canonicalDecimal(

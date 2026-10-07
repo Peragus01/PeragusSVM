@@ -138,7 +138,8 @@ export class InitiateOzavOnrampService {
         intentCreated: false,
         quoteCreated: false,
         transferReplayed: true,
-        paymentInstructionsAvailable: false,
+        paymentInstructionsAvailable:
+          intent?.paymentInstructions != null,
       };
     }
 
@@ -238,6 +239,29 @@ export class InitiateOzavOnrampService {
         "OZAV transfer source amount does not match the intent",
       );
     }
+    const payment =
+      createdTransfer.transfer.source.paymentInstructions;
+    if (!payment) {
+      throw new OzavOnrampInitiationError(
+        "OZAV transfer did not provide Pix payment instructions",
+      );
+    }
+    intent = await this.intents.savePaymentInstructions({
+      settlementId: intent.settlementId,
+      paymentInstructions: {
+        transferId: createdTransfer.transfer.id,
+        intentId: payment.intentId,
+        brCode: payment.brCode,
+        qrCodeImage: payment.qrCodeImage,
+        expiresAt: new Date(payment.expiresAt),
+      },
+      updatedAt: this.now(),
+    });
+    if (!intent.paymentInstructions) {
+      throw new OzavOnrampInitiationError(
+        "OZAV Pix payment instruction reservation is incomplete",
+      );
+    }
     const persisted = await this.onramps.createBinding(binding);
 
     return {
@@ -253,8 +277,7 @@ export class InitiateOzavOnrampService {
       transferReplayed:
         createdTransfer.idempotentReplayed,
       paymentInstructionsAvailable:
-        createdTransfer.transfer.source
-          .paymentInstructions != null,
+        intent.paymentInstructions != null,
     };
   }
 }

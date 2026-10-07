@@ -6,6 +6,7 @@ import {
 } from "../src/application/initiate-ozav-onramp.js";
 import {
   normalizeOzavOnrampIntentRequest,
+  normalizeOzavPixPaymentInstructions,
   OzavOnrampInitiationError,
   sameOzavOnrampIntentRequest,
   type OzavOnrampIntent,
@@ -26,6 +27,7 @@ import type {
 } from "../src/providers/ozav-client.js";
 import type {
   OzavOnrampIntentRepository,
+  SaveOzavPaymentInstructionsInput,
   SaveOzavQuoteInput,
 } from "../src/repositories/ozav-onramp-intent-repository.js";
 import type { OzavOnrampRepository } from "../src/repositories/ozav-onramp-repository.js";
@@ -125,6 +127,7 @@ class MemoryIntentRepository
       ...request,
       quoteId: null,
       quoteTargetAmountUsdt: null,
+      paymentInstructions: null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -149,6 +152,25 @@ class MemoryIntentRepository
         quoteId: input.quoteId,
         quoteTargetAmountUsdt:
           input.quoteTargetAmountUsdt,
+        updatedAt: input.updatedAt,
+      };
+    }
+    return this.intent;
+  }
+
+  async savePaymentInstructions(
+    input: SaveOzavPaymentInstructionsInput,
+  ): Promise<OzavOnrampIntent> {
+    if (!this.intent) {
+      throw new Error("Missing intent");
+    }
+    const payment = normalizeOzavPixPaymentInstructions(
+      input.paymentInstructions,
+    );
+    if (!this.intent.paymentInstructions) {
+      this.intent = {
+        ...this.intent,
+        paymentInstructions: payment,
         updatedAt: input.updatedAt,
       };
     }
@@ -326,6 +348,12 @@ describe("OZAV sandbox on-ramp initiation", () => {
       transferReplayed: false,
       paymentInstructionsAvailable: true,
     });
+    expect(subject.intents.intent?.paymentInstructions)
+      .toMatchObject({
+        transferId: "ozav_tr_test",
+        intentId: "sim_pix_test",
+        brCode: "000201-test",
+      });
     expect(subject.client.quotes).toEqual([{
       customerId: "ozav_cus_test",
       sourceAmountBrl: "500",

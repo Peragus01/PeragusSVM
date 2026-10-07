@@ -2,6 +2,10 @@ import type { Pool } from "pg";
 import type { PgBoss } from "pg-boss";
 
 import { buildApp } from "./app.js";
+import {
+  GetOzavOnrampService,
+  type OzavOnrampReader,
+} from "./application/get-ozav-onramp.js";
 import { getEnv } from "./config/env.js";
 import { createDatabasePool } from "./database/pool.js";
 import {
@@ -14,6 +18,8 @@ import {
   type SettlementJobPublisher,
 } from "./jobs/settlement-orchestration.js";
 import { InMemorySettlementRepository } from "./repositories/in-memory-settlement-repository.js";
+import { PostgresOzavOnrampIntentRepository } from "./repositories/postgres-ozav-onramp-intent-repository.js";
+import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "./repositories/postgres-settlement-repository.js";
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
 
@@ -22,6 +28,7 @@ const env = getEnv();
 let pool: Pool | undefined;
 let boss: PgBoss | undefined;
 let settlementRepository: SettlementRepository;
+let ozavOnrampReader: OzavOnrampReader | undefined;
 let settlementJobPublisher: SettlementJobPublisher =
   new NoopSettlementJobPublisher();
 
@@ -55,6 +62,14 @@ if (env.DATABASE_URL) {
   settlementRepository =
     new PostgresSettlementRepository(databasePool);
 
+  ozavOnrampReader = new GetOzavOnrampService({
+    settlements: settlementRepository,
+    intents:
+      new PostgresOzavOnrampIntentRepository(databasePool),
+    onramps:
+      new PostgresOzavOnrampRepository(databasePool),
+  });
+
   settlementJobPublisher =
     new PgBossSettlementJobPublisher(jobQueue);
 } else {
@@ -74,6 +89,7 @@ const app = await buildApp({
   },
   settlementRepository,
   settlementJobPublisher,
+  ozavOnrampReader,
 });
 
 const databasePool = pool;
