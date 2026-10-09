@@ -75,4 +75,34 @@ pub mod peragus {
     ) -> Result<()> {
         crate::instructions::execute_settlement::handle_execute_settlement(ctx)
     }
+
+    pub fn create_contingency_reserve(
+        ctx: Context<CreateContingencyReserve>,
+        settlement_id: [u8; 32],
+        amount: u64,
+        fallback_after: i64,
+        expires_at: i64,
+        recipient: Pubkey,
+    ) -> Result<()> {
+        crate::instructions::create_contingency_reserve::handle_create_contingency_reserve(
+            ctx,
+            settlement_id,
+            amount,
+            fallback_after,
+            expires_at,
+            recipient,
+        )
+    }
+
+    pub fn settle_contingency_reserve(
+        ctx: Context<SettleContingencyReserve>,
+    ) -> Result<()> {
+        crate::instructions::settle_contingency_reserve::handle_settle_contingency_reserve(ctx)
+    }
+
+    pub fn refund_contingency_reserve(
+        ctx: Context<RefundContingencyReserve>,
+    ) -> Result<()> {
+        crate::instructions::refund_contingency_reserve::handle_refund_contingency_reserve(ctx)
+    }
 }

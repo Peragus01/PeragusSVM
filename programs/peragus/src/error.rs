@@ -40,4 +40,19 @@ pub enum ErrorCode {
 
     #[msg("Settlement attestation has expired")]
     AttestationExpired,
+
+    #[msg("Invalid contingency reserve time window")]
+    InvalidReserveWindow,
+
+    #[msg("Contingency reserve fallback is not available yet")]
+    ReserveFallbackNotReady,
+
+    #[msg("Contingency reserve has expired")]
+    ReserveExpired,
+
+    #[msg("Contingency reserve has already been finalized")]
+    ReserveAlreadyFinalized,
+
+    #[msg("Only the attestation authority may refund this reserve before expiry")]
+    ReserveRefundUnauthorized,
 }

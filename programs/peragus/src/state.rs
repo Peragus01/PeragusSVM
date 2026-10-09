@@ -6,6 +6,31 @@ pub enum SettlementStatus {
     Settled,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+pub enum ContingencyReserveStatus {
+    Funded,
+    Settled,
+    Refunded,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ContingencyReserve {
+    pub corridor: Pubkey,
+    pub settlement_id: [u8; 32],
+    pub attestation_authority: Pubkey,
+    pub liquidity_authority: Pubkey,
+    pub recipient: Pubkey,
+    pub mint: Pubkey,
+    pub vault: Pubkey,
+    pub amount: u64,
+    pub fallback_after: i64,
+    pub expires_at: i64,
+    pub status: ContingencyReserveStatus,
+    pub bump: u8,
+    pub vault_bump: u8,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Settlement {

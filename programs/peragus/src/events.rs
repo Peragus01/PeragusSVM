@@ -40,3 +40,42 @@ pub struct SettlementExecuted {
     pub amount_out: u64,
     pub executed_at: i64,
 }
+
+#[event]
+pub struct ContingencyReserveFunded {
+    pub reserve: Pubkey,
+    pub vault: Pubkey,
+    pub settlement_id: [u8; 32],
+    pub corridor: Pubkey,
+    pub liquidity_authority: Pubkey,
+    pub recipient: Pubkey,
+    pub mint: Pubkey,
+    pub amount: u64,
+    pub fallback_after: i64,
+    pub expires_at: i64,
+    pub funded_at: i64,
+}
+
+#[event]
+pub struct ContingencyReserveSettled {
+    pub reserve: Pubkey,
+    pub vault: Pubkey,
+    pub settlement_id: [u8; 32],
+    pub recipient: Pubkey,
+    pub mint: Pubkey,
+    pub amount: u64,
+    pub settled_at: i64,
+}
+
+#[event]
+pub struct ContingencyReserveRefunded {
+    pub reserve: Pubkey,
+    pub vault: Pubkey,
+    pub settlement_id: [u8; 32],
+    pub liquidity_authority: Pubkey,
+    pub mint: Pubkey,
+    pub amount: u64,
+    pub refunded_by: Pubkey,
+    pub expired: bool,
+    pub refunded_at: i64,
+}
