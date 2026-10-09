@@ -45,9 +45,14 @@ export interface OzavTransfer {
     type: string;
     currency: string | null;
     rail: string | null;
+    walletId?: string | null;
     paymentInstructions?: OzavPaymentInstructions | null;
   };
-  destination: { type: string; walletId: string | null };
+  destination: {
+    type: string;
+    walletId: string | null;
+    payoutDestinationId?: string | null;
+  };
   sourceLegStatus: string | null;
   destinationLegStatus: string | null;
   amounts: {
@@ -84,6 +89,29 @@ export interface CreateOzavQuoteInput {
 export interface CreateOzavTransferInput {
   customerId: string;
   walletId: string;
+  quoteId: string;
+  idempotencyKey: string;
+  metadata: Readonly<Record<string, string>>;
+}
+
+export interface OzavPayoutDestination {
+  id: string;
+  customerId: string;
+  currency: string;
+  rail: string;
+  status: "active" | "inactive";
+}
+
+export interface CreateOzavOfframpQuoteInput {
+  customerId: string;
+  sourceAmountUsdt: string;
+  spreadBps: number;
+}
+
+export interface CreateOzavOfframpTransferInput {
+  customerId: string;
+  walletId: string;
+  payoutDestinationId: string;
   quoteId: string;
   idempotencyKey: string;
   metadata: Readonly<Record<string, string>>;
@@ -186,12 +214,48 @@ function quote(value: unknown): OzavQuote {
   return result;
 }
 
+function payoutDestination(
+  value: unknown,
+): OzavPayoutDestination {
+  const row = object(value);
+  if (row.object !== "payout_destination") {
+    return invalidResponse();
+  }
+
+  const status = text(row.status);
+  if (status !== "active" && status !== "inactive") {
+    return invalidResponse();
+  }
+
+  return {
+    id: identifier(row.id, "ozav_pd_"),
+    customerId: identifier(
+      row.customer_id,
+      "ozav_cus_",
+    ),
+    currency: text(row.currency),
+    rail: text(row.rail),
+    status,
+  };
+}
+
 function transfer(value: unknown): OzavTransfer {
   const row = object(value);
   if (row.object !== "transfer") return invalidResponse();
   const source = object(row.source);
   const destination = object(row.destination);
   const amounts = object(row.amounts);
+  const sourceWalletId = source.wallet_id == null
+    ? null
+    : identifier(source.wallet_id, "ozav_wal_");
+  const payoutDestinationId =
+    destination.payout_destination_id == null
+      ? null
+      : identifier(
+          destination.payout_destination_id,
+          "ozav_pd_",
+        );
+
   return {
     id: identifier(row.id, "ozav_tr_"),
     status: text(row.status),
@@ -201,12 +265,14 @@ function transfer(value: unknown): OzavTransfer {
       type: text(source.type),
       currency: optionalText(source.currency),
       rail: optionalText(source.rail),
+      walletId: sourceWalletId,
       paymentInstructions: paymentInstructions(source.payment_instructions),
     },
     destination: {
       type: text(destination.type),
       walletId: destination.wallet_id == null
         ? null : identifier(destination.wallet_id, "ozav_wal_"),
+      payoutDestinationId,
     },
     sourceLegStatus: row.source_leg == null
       ? null : optionalText(object(row.source_leg).status),
@@ -457,6 +523,19 @@ export class OzavClient {
     return result;
   }
 
+  async getPayoutDestination(
+    id: string,
+  ): Promise<OzavPayoutDestination> {
+    identifier(id, "ozav_pd_");
+    const result = payoutDestination(
+      await this.get(
+        `/v2/payout-destinations/${encodeURIComponent(id)}`,
+      ),
+    );
+    if (result.id !== id) return invalidResponse();
+    return result;
+  }
+
   async listEvents(startingAfter?: string): Promise<OzavEventPage> {
     const query = new URLSearchParams({ limit: "100" });
     if (startingAfter !== undefined) query.set("starting_after", text(startingAfter));
@@ -553,6 +632,101 @@ export class OzavClient {
         metadata: input.metadata,
       },
     });
+    return {
+      transfer: transfer(response.body),
+      idempotentReplayed:
+        response.headers?.["idempotent-replayed"] === "true",
+    };
+  }
+
+  async createOfframpQuote(
+    input: CreateOzavOfframpQuoteInput,
+  ): Promise<OzavQuote> {
+    identifier(input.customerId, "ozav_cus_");
+    if (
+      !/^\d+(?:\.\d{1,6})?$/.test(
+        input.sourceAmountUsdt,
+      )
+      || !Number.isInteger(input.spreadBps)
+      || input.spreadBps < 0
+      || input.spreadBps > 10_000
+    ) {
+      throw new OzavClientError(
+        "Invalid OZAV off-ramp quote input",
+        false,
+      );
+    }
+
+    const response = await this.post({
+      path: "/v2/quotes",
+      body: {
+        customer_id: input.customerId,
+        source: {
+          currency: "USDT",
+          amount: input.sourceAmountUsdt,
+          chain: "solana",
+        },
+        target: {
+          currency: "BRL",
+        },
+        destination_rail: "pix",
+        spread_bps: input.spreadBps,
+      },
+    });
+
+    return quote(response.body);
+  }
+
+  async createOfframpTransfer(
+    input: CreateOzavOfframpTransferInput,
+  ): Promise<{
+    transfer: OzavTransfer;
+    idempotentReplayed: boolean;
+  }> {
+    identifier(input.customerId, "ozav_cus_");
+    identifier(input.walletId, "ozav_wal_");
+    identifier(
+      input.payoutDestinationId,
+      "ozav_pd_",
+    );
+    identifier(input.quoteId, "ozav_q_");
+
+    if (
+      !/^[A-Za-z0-9_-]{16,256}$/.test(
+        input.idempotencyKey,
+      )
+      || Object.keys(input.metadata).length > 50
+      || Object.values(input.metadata).some(
+        (value) => typeof value !== "string",
+      )
+    ) {
+      throw new OzavClientError(
+        "Invalid OZAV off-ramp transfer input",
+        false,
+      );
+    }
+
+    const response = await this.post({
+      path: "/v2/transfers",
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        customer_id: input.customerId,
+        quote_id: input.quoteId,
+        source: {
+          type: "wallet",
+          wallet_id: input.walletId,
+          currency: "USDT",
+          chain: "solana",
+        },
+        destination: {
+          type: "payout_destination",
+          payout_destination_id:
+            input.payoutDestinationId,
+        },
+        metadata: input.metadata,
+      },
+    });
+
     return {
       transfer: transfer(response.body),
       idempotentReplayed:

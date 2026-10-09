@@ -36,6 +36,10 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  OZAV_OFFRAMP_WRITES_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   OZAV_CUSTOMER_ID: z
     .string()
     .regex(/^ozav_cus_[A-Za-z0-9_]+$/)
@@ -95,23 +99,38 @@ const envSchema = z.object({
     .min(1)
     .optional(),
 }).superRefine((env, context) => {
-  if (!env.SOLANA_COSIGNING_ENABLED) {
-    return;
+  if (env.OZAV_OFFRAMP_WRITES_ENABLED) {
+    for (const field of [
+      "OZAV_API_KEY",
+      "OZAV_CUSTOMER_ID",
+      "OZAV_WALLET_ID",
+    ] as const) {
+      if (!env[field]) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message:
+            `${field} is required when OZAV_OFFRAMP_WRITES_ENABLED=true`,
+        });
+      }
+    }
   }
 
-  for (const field of [
-    "SOLANA_SOURCE_MINT",
-    "SOLANA_DESTINATION_MINT",
-    "SOLANA_ATTESTATION_KEYPAIR_PATH",
-    "SOLANA_LIQUIDITY_KEYPAIR_PATH",
-  ] as const) {
-    if (!env[field]) {
-      context.addIssue({
-        code: "custom",
-        path: [field],
-        message:
-          `${field} is required when SOLANA_COSIGNING_ENABLED=true`,
-      });
+  if (env.SOLANA_COSIGNING_ENABLED) {
+    for (const field of [
+      "SOLANA_SOURCE_MINT",
+      "SOLANA_DESTINATION_MINT",
+      "SOLANA_ATTESTATION_KEYPAIR_PATH",
+      "SOLANA_LIQUIDITY_KEYPAIR_PATH",
+    ] as const) {
+      if (!env[field]) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message:
+            `${field} is required when SOLANA_COSIGNING_ENABLED=true`,
+        });
+      }
     }
   }
 });

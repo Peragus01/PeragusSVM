@@ -6,6 +6,7 @@ import Fastify, {
 
 import type { SolanaSettlementConfirmer } from "./application/confirm-solana-settlement.js";
 import type { OzavOnrampReader } from "./application/get-ozav-onramp.js";
+import type { OzavOfframpInitiator } from "./application/initiate-ozav-offramp.js";
 import type { SolanaSettlementPreparer } from "./application/prepare-solana-settlement.js";
 import {
   NoopSettlementJobPublisher,
@@ -13,6 +14,7 @@ import {
 } from "./jobs/settlement-orchestration.js";
 import { InMemorySettlementRepository } from "./repositories/in-memory-settlement-repository.js";
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
+import { registerOzavOfframpRoutes } from "./routes/ozav-offramp.js";
 import { registerOzavOnrampRoutes } from "./routes/ozav-onramp.js";
 import { registerSolanaSettlementRoutes } from "./routes/solana-settlement.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
@@ -22,6 +24,9 @@ export interface BuildAppOptions {
   settlementRepository?: SettlementRepository;
   settlementJobPublisher?: SettlementJobPublisher;
   ozavOnrampReader?: OzavOnrampReader | undefined;
+  ozavOfframpInitiator?:
+    | OzavOfframpInitiator
+    | undefined;
   solanaSettlementPreparer?:
     | SolanaSettlementPreparer
     | undefined;
@@ -62,6 +67,10 @@ export async function buildApp(
   await registerOzavOnrampRoutes(app, {
     reader: options.ozavOnrampReader,
     now: options.now ?? (() => new Date()),
+  });
+
+  await registerOzavOfframpRoutes(app, {
+    initiator: options.ozavOfframpInitiator,
   });
 
   await registerSolanaSettlementRoutes(app, {

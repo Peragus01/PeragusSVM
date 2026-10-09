@@ -15,9 +15,14 @@ import {
   type OzavOnrampReader,
 } from "./application/get-ozav-onramp.js";
 import {
+  InitiateOzavOfframpService,
+  type OzavOfframpInitiator,
+} from "./application/initiate-ozav-offramp.js";
+import {
   PrepareSolanaSettlementService,
   type SolanaSettlementPreparer,
 } from "./application/prepare-solana-settlement.js";
+import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
 import { createDatabasePool } from "./database/pool.js";
 import {
@@ -30,7 +35,9 @@ import {
   type SettlementJobPublisher,
 } from "./jobs/settlement-orchestration.js";
 import { loadLocalSolanaAuthority } from "./providers/local-solana-authority.js";
+import { OzavClient } from "./providers/ozav-client.js";
 import { InMemorySettlementRepository } from "./repositories/in-memory-settlement-repository.js";
+import { PostgresOzavOfframpIntentRepository } from "./repositories/postgres-ozav-offramp-intent-repository.js";
 import { PostgresOzavOnrampIntentRepository } from "./repositories/postgres-ozav-onramp-intent-repository.js";
 import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "./repositories/postgres-settlement-repository.js";
@@ -44,6 +51,9 @@ let pool: Pool | undefined;
 let boss: PgBoss | undefined;
 let settlementRepository: SettlementRepository;
 let ozavOnrampReader: OzavOnrampReader | undefined;
+let ozavOfframpInitiator:
+  | OzavOfframpInitiator
+  | undefined;
 let solanaSettlementPreparer:
   | SolanaSettlementPreparer
   | undefined;
@@ -90,6 +100,39 @@ if (env.DATABASE_URL) {
     onramps:
       new PostgresOzavOnrampRepository(databasePool),
   });
+
+  if (env.OZAV_OFFRAMP_WRITES_ENABLED) {
+    if (env.NODE_ENV === "production") {
+      throw new Error(
+        "OZAV sandbox off-ramp writes cannot be enabled in production",
+      );
+    }
+
+    const ozavClient = new OzavClient({
+      apiKey: env.OZAV_API_KEY!,
+    });
+
+    ozavOfframpInitiator =
+      new InitiateOzavOfframpService({
+        client: ozavClient,
+        intents:
+          new PostgresOzavOfframpIntentRepository(
+            databasePool,
+          ),
+        onramps:
+          new PostgresOzavOnrampRepository(
+            databasePool,
+          ),
+        settlements: settlementRepository,
+        transitioner:
+          new TransitionSettlementService(
+            settlementRepository,
+          ),
+        customerId: env.OZAV_CUSTOMER_ID!,
+        walletId: env.OZAV_WALLET_ID!,
+        spreadBps: env.OZAV_SPREAD_BPS,
+      });
+  }
 
   if (env.SOLANA_COSIGNING_ENABLED) {
     if (env.NODE_ENV === "production") {
@@ -184,6 +227,7 @@ const app = await buildApp({
   settlementRepository,
   settlementJobPublisher,
   ozavOnrampReader,
+  ozavOfframpInitiator,
   solanaSettlementPreparer,
   solanaSettlementConfirmer,
 });
