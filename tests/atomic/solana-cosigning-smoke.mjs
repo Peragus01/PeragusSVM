@@ -24,6 +24,7 @@ import {
 } from "@solana/web3.js";
 
 import { buildApp } from "../../app/backend/dist/app.js";
+import { ConfirmSolanaSettlementService } from "../../app/backend/dist/application/confirm-solana-settlement.js";
 import { PrepareSolanaSettlementService } from "../../app/backend/dist/application/prepare-solana-settlement.js";
 import { loadLocalSolanaAuthority } from "../../app/backend/dist/providers/local-solana-authority.js";
 
@@ -337,30 +338,92 @@ function createSettlementRepository(settlement) {
   };
 }
 
-function createPreparationRepository() {
+function createSolanaStateRepositories(settlement) {
   let savedPda;
+  let createSignature;
+  let executeSignature;
 
   return {
-    async savePrepared(input) {
-      if (!savedPda) {
-        savedPda = input.settlementPda;
+    preparations: {
+      async savePrepared(input) {
+        if (!savedPda) {
+          savedPda = input.settlementPda;
+
+          return {
+            settlementPda: savedPda,
+            saved: true,
+          };
+        }
+
+        if (savedPda !== input.settlementPda) {
+          throw new Error(
+            "The prepared settlement PDA changed unexpectedly",
+          );
+        }
 
         return {
           settlementPda: savedPda,
+          saved: false,
+        };
+      },
+    },
+    confirmations: {
+      async findBySettlementId(id) {
+        if (id !== settlement.id) {
+          return null;
+        }
+
+        return {
+          settlementId: settlement.id,
+          status: settlement.status,
+          version: settlement.version,
+          settlementPda: savedPda ?? null,
+          createSignature: createSignature ?? null,
+          executeSignature: executeSignature ?? null,
+        };
+      },
+
+      async confirmSettled(input) {
+        if (
+          settlement.status === "settled"
+          && savedPda === input.settlementPda
+          && createSignature === input.signature
+          && executeSignature === input.signature
+        ) {
+          return {
+            settlementId: settlement.id,
+            status: settlement.status,
+            version: settlement.version,
+            settlementPda: savedPda,
+            createSignature,
+            executeSignature,
+            saved: false,
+          };
+        }
+
+        assert.equal(settlement.status, "tokenized");
+        assert.equal(
+          settlement.version,
+          input.expectedVersion,
+        );
+        assert.equal(savedPda, input.settlementPda);
+
+        settlement.status = "settled";
+        settlement.version += 2;
+        settlement.updatedAt = new Date();
+        createSignature = input.signature;
+        executeSignature = input.signature;
+
+        return {
+          settlementId: settlement.id,
+          status: settlement.status,
+          version: settlement.version,
+          settlementPda: savedPda,
+          createSignature,
+          executeSignature,
           saved: true,
         };
-      }
-
-      if (savedPda !== input.settlementPda) {
-        throw new Error(
-          "The prepared settlement PDA changed unexpectedly",
-        );
-      }
-
-      return {
-        settlementPda: savedPda,
-        saved: false,
-      };
+      },
     },
   };
 }
@@ -591,9 +654,11 @@ async function main() {
   };
   const settlementRepository =
     createSettlementRepository(settlement);
+  const solanaState =
+    createSolanaStateRepositories(settlement);
   const preparer = new PrepareSolanaSettlementService({
     settlements: settlementRepository,
-    preparations: createPreparationRepository(),
+    preparations: solanaState.preparations,
     connection,
     programId: programId.toBase58(),
     sourceMint: sourceMint.toBase58(),
@@ -601,9 +666,22 @@ async function main() {
     attestationAuthority,
     liquidityAuthority,
   });
+  const confirmer = new ConfirmSolanaSettlementService({
+    settlements: settlementRepository,
+    confirmations: solanaState.confirmations,
+    connection,
+    programId,
+    sourceMint,
+    destinationMint,
+    attestationAuthority:
+      attestationAuthority.publicKey,
+    liquidityAuthority:
+      liquidityAuthority.publicKey,
+  });
   const app = await buildApp({
     settlementRepository,
     solanaSettlementPreparer: preparer,
+    solanaSettlementConfirmer: confirmer,
     now: () => timestamp,
   });
 
@@ -686,6 +764,28 @@ async function main() {
       "confirmed",
     );
 
+    const confirmationResponse = await app.inject({
+      method: "POST",
+      url:
+        `/v1/settlements/${settlement.id}/solana/confirm`,
+      payload: {
+        signature,
+      },
+    });
+    const confirmationBody = confirmationResponse.json();
+
+    assert.equal(
+      confirmationResponse.statusCode,
+      200,
+      `Confirmation failed: ${JSON.stringify(confirmationBody)}`,
+    );
+    assert.equal(confirmationBody.data.status, "settled");
+    assert.equal(confirmationBody.data.signature, signature);
+    assert.equal(
+      confirmationBody.meta.verified_on_chain,
+      true,
+    );
+
     const after = {
       payerSource: await tokenBalance(
         connection,
@@ -739,6 +839,7 @@ async function main() {
         settlement_pda: body.data.settlement_pda,
         assinatura_peragus: true,
         assinatura_adquirente: true,
+        status_backend: confirmationBody.data.status,
         transacao_confirmada: signature,
         payer_source_antes: before.payerSource.toString(),
         payer_source_depois: after.payerSource.toString(),
@@ -750,6 +851,9 @@ async function main() {
     ]);
     console.log(
       "A API preparou e a Peragus coassinou; o adquirente assinou e transmitiu.",
+    );
+    console.log(
+      "O backend verificou a transacao no RPC antes de registrar settled.",
     );
     console.log(
       "Nenhuma chave privada foi enviada pela API ou exibida no log.",

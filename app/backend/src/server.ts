@@ -7,6 +7,10 @@ import type { PgBoss } from "pg-boss";
 
 import { buildApp } from "./app.js";
 import {
+  ConfirmSolanaSettlementService,
+  type SolanaSettlementConfirmer,
+} from "./application/confirm-solana-settlement.js";
+import {
   GetOzavOnrampService,
   type OzavOnrampReader,
 } from "./application/get-ozav-onramp.js";
@@ -30,6 +34,7 @@ import { InMemorySettlementRepository } from "./repositories/in-memory-settlemen
 import { PostgresOzavOnrampIntentRepository } from "./repositories/postgres-ozav-onramp-intent-repository.js";
 import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "./repositories/postgres-settlement-repository.js";
+import { PostgresSolanaSettlementConfirmationRepository } from "./repositories/solana-settlement-confirmation-repository.js";
 import { PostgresSolanaSettlementPreparationRepository } from "./repositories/solana-settlement-preparation-repository.js";
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
 
@@ -41,6 +46,9 @@ let settlementRepository: SettlementRepository;
 let ozavOnrampReader: OzavOnrampReader | undefined;
 let solanaSettlementPreparer:
   | SolanaSettlementPreparer
+  | undefined;
+let solanaSettlementConfirmer:
+  | SolanaSettlementConfirmer
   | undefined;
 let settlementJobPublisher: SettlementJobPublisher =
   new NoopSettlementJobPublisher();
@@ -101,6 +109,28 @@ if (env.DATABASE_URL) {
       );
     }
 
+    const solanaConnection = new Connection(
+      env.SOLANA_RPC_URL,
+      "confirmed",
+    );
+    const solanaProgramId = new PublicKey(
+      env.SOLANA_PROGRAM_ID,
+    );
+    const sourceMint = new PublicKey(
+      env.SOLANA_SOURCE_MINT,
+    );
+    const destinationMint = new PublicKey(
+      env.SOLANA_DESTINATION_MINT,
+    );
+    const attestationAuthority = loadLocalSolanaAuthority(
+      env.SOLANA_ATTESTATION_KEYPAIR_PATH,
+      "SOLANA_ATTESTATION_KEYPAIR_PATH",
+    );
+    const liquidityAuthority = loadLocalSolanaAuthority(
+      env.SOLANA_LIQUIDITY_KEYPAIR_PATH,
+      "SOLANA_LIQUIDITY_KEYPAIR_PATH",
+    );
+
     solanaSettlementPreparer =
       new PrepareSolanaSettlementService({
         settlements: settlementRepository,
@@ -108,23 +138,29 @@ if (env.DATABASE_URL) {
           new PostgresSolanaSettlementPreparationRepository(
             databasePool,
           ),
-        connection: new Connection(
-          env.SOLANA_RPC_URL,
-          "confirmed",
-        ),
-        programId: new PublicKey(env.SOLANA_PROGRAM_ID),
-        sourceMint: new PublicKey(env.SOLANA_SOURCE_MINT),
-        destinationMint: new PublicKey(
-          env.SOLANA_DESTINATION_MINT,
-        ),
-        attestationAuthority: loadLocalSolanaAuthority(
-          env.SOLANA_ATTESTATION_KEYPAIR_PATH,
-          "SOLANA_ATTESTATION_KEYPAIR_PATH",
-        ),
-        liquidityAuthority: loadLocalSolanaAuthority(
-          env.SOLANA_LIQUIDITY_KEYPAIR_PATH,
-          "SOLANA_LIQUIDITY_KEYPAIR_PATH",
-        ),
+        connection: solanaConnection,
+        programId: solanaProgramId,
+        sourceMint,
+        destinationMint,
+        attestationAuthority,
+        liquidityAuthority,
+      });
+
+    solanaSettlementConfirmer =
+      new ConfirmSolanaSettlementService({
+        settlements: settlementRepository,
+        confirmations:
+          new PostgresSolanaSettlementConfirmationRepository(
+            databasePool,
+          ),
+        connection: solanaConnection,
+        programId: solanaProgramId,
+        sourceMint,
+        destinationMint,
+        attestationAuthority:
+          attestationAuthority.publicKey,
+        liquidityAuthority:
+          liquidityAuthority.publicKey,
       });
   }
 
@@ -149,6 +185,7 @@ const app = await buildApp({
   settlementJobPublisher,
   ozavOnrampReader,
   solanaSettlementPreparer,
+  solanaSettlementConfirmer,
 });
 
 const databasePool = pool;

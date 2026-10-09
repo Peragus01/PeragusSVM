@@ -4,6 +4,7 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 
+import type { SolanaSettlementConfirmer } from "./application/confirm-solana-settlement.js";
 import type { OzavOnrampReader } from "./application/get-ozav-onramp.js";
 import type { SolanaSettlementPreparer } from "./application/prepare-solana-settlement.js";
 import {
@@ -23,6 +24,9 @@ export interface BuildAppOptions {
   ozavOnrampReader?: OzavOnrampReader | undefined;
   solanaSettlementPreparer?:
     | SolanaSettlementPreparer
+    | undefined;
+  solanaSettlementConfirmer?:
+    | SolanaSettlementConfirmer
     | undefined;
   now?: () => Date;
 }
@@ -62,6 +66,7 @@ export async function buildApp(
 
   await registerSolanaSettlementRoutes(app, {
     preparer: options.solanaSettlementPreparer,
+    confirmer: options.solanaSettlementConfirmer,
   });
 
   return app;
