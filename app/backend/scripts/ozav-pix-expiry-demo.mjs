@@ -1,11 +1,20 @@
 import https from "node:https";
 
-import { Connection, PublicKey } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  Transaction,
+} from "@solana/web3.js";
 
+import { ConfirmSolanaSettlementService } from "../dist/application/confirm-solana-settlement.js";
 import { CreateSettlementService } from "../dist/application/create-settlement.js";
 import { EnsureSolanaContingencyReserveService } from "../dist/application/ensure-solana-contingency-reserve.js";
+import { ImportOzavOfframpEventsService } from "../dist/application/import-ozav-offramp-events.js";
 import { ImportOzavOnrampEventsService } from "../dist/application/import-ozav-onramp-events.js";
+import { InitiateOzavOfframpService } from "../dist/application/initiate-ozav-offramp.js";
 import { InitiateOzavOnrampService } from "../dist/application/initiate-ozav-onramp.js";
+import { PrepareSolanaSettlementService } from "../dist/application/prepare-solana-settlement.js";
+import { ReconcileOzavOfframpService } from "../dist/application/reconcile-ozav-offramp.js";
 import { ReconcileOzavOnrampService } from "../dist/application/reconcile-ozav-onramp.js";
 import { ResolveSolanaContingencyReserveService } from "../dist/application/resolve-solana-contingency-reserve.js";
 import { TransitionSettlementService } from "../dist/application/transition-settlement.js";
@@ -13,10 +22,14 @@ import { getEnv } from "../dist/config/env.js";
 import { createDatabasePool } from "../dist/database/pool.js";
 import { loadLocalSolanaAuthority } from "../dist/providers/local-solana-authority.js";
 import { OzavClient } from "../dist/providers/ozav-client.js";
+import { deriveAssociatedTokenAddress } from "../dist/providers/peragus-solana-transaction.js";
+import { PostgresOzavOfframpIntentRepository } from "../dist/repositories/postgres-ozav-offramp-intent-repository.js";
 import { PostgresOzavOnrampIntentRepository } from "../dist/repositories/postgres-ozav-onramp-intent-repository.js";
 import { PostgresOzavOnrampRepository } from "../dist/repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "../dist/repositories/postgres-settlement-repository.js";
 import { PostgresSolanaContingencyReserveRepository } from "../dist/repositories/solana-contingency-reserve-repository.js";
+import { PostgresSolanaSettlementConfirmationRepository } from "../dist/repositories/solana-settlement-confirmation-repository.js";
+import { PostgresSolanaSettlementPreparationRepository } from "../dist/repositories/solana-settlement-preparation-repository.js";
 
 const DEFAULT_CORRIDOR_ID =
   "0c992c054ef741839bd769ad2790f1c4aa08150ac6b4465c763448fdd5fa70d4";
@@ -25,6 +38,7 @@ const DEFAULT_RECIPIENT =
 const RECORDING_WINDOW_SECONDS = 120;
 const PROVIDER_GRACE_SECONDS = 300;
 const SUCCESS_GRACE_SECONDS = 120;
+const OFFRAMP_GRACE_SECONDS = 180;
 
 const terminalProviderStatuses = new Set([
   "completed",
@@ -38,7 +52,7 @@ const delay = (milliseconds) =>
 
 function required(value, name) {
   if (!value) {
-    throw new Error(`${name} is required for the expiry demo`);
+    throw new Error(`${name} is required for the demo`);
   }
   return value;
 }
@@ -189,6 +203,9 @@ function createContext() {
       "SOLANA_DESTINATION_MINT",
     ),
   );
+  const sourceMint = env.SOLANA_SOURCE_MINT
+    ? new PublicKey(env.SOLANA_SOURCE_MINT)
+    : null;
   const feePayer = loadLocalSolanaAuthority(
     required(
       env.SOLANA_FEE_PAYER_KEYPAIR_PATH,
@@ -256,7 +273,13 @@ function createContext() {
     intents,
     onramps,
     reserves,
+    connection,
+    programId,
+    sourceMint,
+    destinationMint,
     feePayer,
+    attestationAuthority,
+    liquidityAuthority,
     client,
     reserveGate,
     reconciler,
@@ -547,6 +570,540 @@ async function success(context) {
   );
 }
 
+async function readTokenBalance(connection, owner, mint) {
+  const address = deriveAssociatedTokenAddress(owner, mint);
+  const account = await connection.getAccountInfo(
+    address,
+    "confirmed",
+  );
+
+  if (!account) {
+    throw new Error(
+      `Required Token-2022 account is missing: ${address.toBase58()}`,
+    );
+  }
+
+  const balance = await connection.getTokenAccountBalance(
+    address,
+    "confirmed",
+  );
+
+  return {
+    address: address.toBase58(),
+    amount: BigInt(balance.value.amount),
+  };
+}
+
+async function readAtomicBalances(context, recipient) {
+  const sourceMint = context.sourceMint;
+
+  if (!sourceMint) {
+    throw new Error(
+      "SOLANA_SOURCE_MINT is required for the off-ramp demo",
+    );
+  }
+
+  const [
+    payerSource,
+    liquiditySource,
+    liquidityDestination,
+    recipientDestination,
+  ] = await Promise.all([
+    readTokenBalance(
+      context.connection,
+      context.feePayer.publicKey,
+      sourceMint,
+    ),
+    readTokenBalance(
+      context.connection,
+      context.liquidityAuthority.publicKey,
+      sourceMint,
+    ),
+    readTokenBalance(
+      context.connection,
+      context.liquidityAuthority.publicKey,
+      context.destinationMint,
+    ),
+    readTokenBalance(
+      context.connection,
+      recipient,
+      context.destinationMint,
+    ),
+  ]);
+
+  return {
+    payerSource,
+    liquiditySource,
+    liquidityDestination,
+    recipientDestination,
+  };
+}
+
+async function completeSandboxOnramp(
+  context,
+  settlementId,
+  transferId,
+) {
+  let simulation;
+
+  try {
+    simulation = await simulateTransfer(
+      required(context.env.OZAV_API_KEY, "OZAV_API_KEY"),
+      transferId,
+    );
+  } catch (error) {
+    const observed = await context.client.getTransfer(transferId);
+    if (observed.status === "awaiting_payment") {
+      throw error;
+    }
+    simulation = { statusCode: 0, body: null };
+  }
+
+  if (
+    simulation.statusCode !== 0
+    && (
+      simulation.statusCode < 200
+      || simulation.statusCode >= 300
+    )
+  ) {
+    const observed = await context.client.getTransfer(transferId);
+    const progressed = observed.status !== "awaiting_payment";
+
+    if (!(simulation.statusCode === 409 && progressed)) {
+      const code = providerErrorCode(simulation.body);
+      throw new Error(
+        `OZAV simulate failed with HTTP ${simulation.statusCode}${
+          code ? ` (${code})` : ""
+        }`,
+      );
+    }
+  }
+
+  const deadline = Date.now() + SUCCESS_GRACE_SECONDS * 1_000;
+  let transfer = await context.client.getTransfer(transferId);
+
+  while (
+    transfer.status !== "completed"
+    && !terminalProviderStatuses.has(transfer.status)
+    && Date.now() < deadline
+  ) {
+    console.log(
+      `On-ramp OZAV em ${transfer.status}; aguardando...`,
+    );
+    await delay(2_000);
+    transfer = await context.client.getTransfer(transferId);
+  }
+
+  if (transfer.status !== "completed") {
+    throw new Error(
+      `OZAV on-ramp did not complete: ${transfer.status}`,
+    );
+  }
+
+  const reconciliation = await context.reconciler.execute(
+    settlementId,
+  );
+  const [settlement, reserve] = await Promise.all([
+    context.settlements.findById(settlementId),
+    context.reserves.find(settlementId),
+  ]);
+
+  if (
+    transfer.sourceLegStatus !== "completed"
+    || transfer.destinationLegStatus !== "completed"
+    || reconciliation.providerStatus !== "completed"
+    || settlement?.status !== "tokenized"
+    || reserve?.status !== "refunded"
+    || !reserve.refundSignature
+  ) {
+    throw new Error(
+      "The on-ramp did not reach tokenized with its reserve refunded",
+    );
+  }
+
+  return { transfer, reconciliation, settlement, reserve };
+}
+
+async function executeAtomicSettlement(context, settlementId) {
+  const sourceMint = context.sourceMint;
+
+  if (!sourceMint) {
+    throw new Error(
+      "SOLANA_SOURCE_MINT is required for the off-ramp demo",
+    );
+  }
+
+  const preparer = new PrepareSolanaSettlementService({
+    settlements: context.settlements,
+    preparations:
+      new PostgresSolanaSettlementPreparationRepository(
+        context.pool,
+      ),
+    connection: context.connection,
+    programId: context.programId,
+    sourceMint,
+    destinationMint: context.destinationMint,
+    attestationAuthority: context.attestationAuthority,
+    liquidityAuthority: context.liquidityAuthority,
+  });
+  const confirmer = new ConfirmSolanaSettlementService({
+    settlements: context.settlements,
+    confirmations:
+      new PostgresSolanaSettlementConfirmationRepository(
+        context.pool,
+      ),
+    connection: context.connection,
+    programId: context.programId,
+    sourceMint,
+    destinationMint: context.destinationMint,
+    attestationAuthority:
+      context.attestationAuthority.publicKey,
+    liquidityAuthority:
+      context.liquidityAuthority.publicKey,
+  });
+
+  const prepared = await preparer.execute(settlementId);
+  const transaction = Transaction.from(
+    Buffer.from(prepared.transactionBase64, "base64"),
+  );
+
+  await context.feePayer.signTransaction(transaction);
+
+  if (!transaction.verifySignatures(true)) {
+    throw new Error(
+      "Atomic settlement is missing a required signature",
+    );
+  }
+
+  const signature = await context.connection.sendRawTransaction(
+    transaction.serialize(),
+    {
+      maxRetries: 3,
+      preflightCommitment: "confirmed",
+    },
+  );
+  const confirmation = await context.connection.confirmTransaction(
+    {
+      signature,
+      blockhash: prepared.recentBlockhash,
+      lastValidBlockHeight: prepared.lastValidBlockHeight,
+    },
+    "confirmed",
+  );
+
+  if (confirmation.value.err !== null) {
+    throw new Error(
+      `Atomic settlement failed: ${JSON.stringify(confirmation.value.err)}`,
+    );
+  }
+
+  const visibilityDeadline = Date.now() + 30_000;
+  let visible = false;
+
+  while (!visible && Date.now() < visibilityDeadline) {
+    visible = Boolean(await context.connection.getTransaction(
+      signature,
+      {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      },
+    ));
+
+    if (!visible) {
+      await delay(1_000);
+    }
+  }
+
+  if (!visible) {
+    throw new Error(
+      "Confirmed atomic settlement was not visible through the RPC",
+    );
+  }
+
+  const persisted = await confirmer.execute(
+    settlementId,
+    signature,
+  );
+
+  if (persisted.status !== "settled") {
+    throw new Error(
+      "Atomic settlement was not persisted as settled",
+    );
+  }
+
+  return { prepared, persisted, signature };
+}
+
+async function completeSandboxOfframp(
+  context,
+  settlementId,
+  payoutDestinationId,
+) {
+  const repository =
+    new PostgresOzavOfframpIntentRepository(context.pool);
+  const transitioner =
+    new TransitionSettlementService(context.settlements);
+  const initiator = new InitiateOzavOfframpService({
+    client: context.client,
+    intents: repository,
+    onramps: context.onramps,
+    settlements: context.settlements,
+    transitioner,
+    customerId: required(
+      context.env.OZAV_CUSTOMER_ID,
+      "OZAV_CUSTOMER_ID",
+    ),
+    walletId: required(
+      context.env.OZAV_WALLET_ID,
+      "OZAV_WALLET_ID",
+    ),
+    spreadBps: context.env.OZAV_SPREAD_BPS,
+  });
+  const importer = new ImportOzavOfframpEventsService({
+    client: context.client,
+    repository,
+    settlements: context.settlements,
+  });
+  const reconciler = new ReconcileOzavOfframpService({
+    importer,
+    repository,
+    settlements: context.settlements,
+    transitioner,
+  });
+
+  const initiation = await initiator.execute({
+    settlementId,
+    payoutDestinationId,
+  });
+  const deadline = Date.now() + OFFRAMP_GRACE_SECONDS * 1_000;
+  let reconciliation = await reconciler.execute(settlementId);
+
+  while (
+    reconciliation.settlementStatus === "offramping"
+    && Date.now() < deadline
+  ) {
+    console.log(
+      `Off-ramp OZAV em ${reconciliation.providerStatus}; aguardando...`,
+    );
+    await delay(2_000);
+    reconciliation = await reconciler.execute(settlementId);
+  }
+
+  if (
+    reconciliation.providerStatus !== "completed"
+    || reconciliation.sourceLegStatus !== "completed"
+    || reconciliation.destinationLegStatus !== "completed"
+    || reconciliation.settlementStatus !== "paid_out"
+  ) {
+    throw new Error(
+      `OZAV off-ramp did not finish successfully: ${reconciliation.providerStatus}/${reconciliation.settlementStatus}`,
+    );
+  }
+
+  let events = await repository.listEvents(settlementId);
+  const eventDeadline = Date.now() + 30_000;
+
+  while (
+    !events.some((event) =>
+      event.eventType === "transfer.completed"
+    )
+    && Date.now() < eventDeadline
+  ) {
+    await delay(1_000);
+    reconciliation = await reconciler.execute(settlementId);
+    events = await repository.listEvents(settlementId);
+  }
+
+  if (!events.some((event) =>
+    event.eventType === "transfer.completed"
+  )) {
+    throw new Error(
+      "OZAV completed the off-ramp without exposing transfer.completed in time",
+    );
+  }
+
+  const replay = await reconciler.execute(settlementId);
+
+  if (
+    replay.settlementStatus !== "paid_out"
+    || replay.transitions.length !== 0
+  ) {
+    throw new Error(
+      "Off-ramp reconciliation was not idempotent",
+    );
+  }
+
+  return { initiation, reconciliation, replay, events };
+}
+
+async function offramp(context, payoutDestinationId) {
+  if (!/^ozav_pd_[A-Za-z0-9_]+$/.test(payoutDestinationId)) {
+    throw new Error(
+      "A valid ozav_pd_ payout destination id is required",
+    );
+  }
+  if (!context.env.OZAV_OFFRAMP_WRITES_ENABLED) {
+    throw new Error(
+      "OZAV_OFFRAMP_WRITES_ENABLED must be true",
+    );
+  }
+  if (!context.env.SOLANA_COSIGNING_ENABLED) {
+    throw new Error(
+      "SOLANA_COSIGNING_ENABLED must be true",
+    );
+  }
+
+  const recipient = new PublicKey(
+    process.env.PERAGUS_DEMO_RECIPIENT
+      ?? DEFAULT_RECIPIENT,
+  );
+  const before = await readAtomicBalances(context, recipient);
+  const sourceAmount = 500n * 1_000_000n;
+  const destinationAmount = 89_550_000n;
+
+  if (before.payerSource.amount < sourceAmount) {
+    throw new Error(
+      "The payer does not have 500 mBRL for the atomic demo",
+    );
+  }
+  if (before.liquidityDestination.amount < destinationAmount) {
+    throw new Error(
+      "The liquidity authority does not have 89.55 USDT for the atomic demo",
+    );
+  }
+
+  const preparedOnramp = await createDemoOnramp(
+    context,
+    "peragus-offramp-demo",
+  );
+  const settlementId = preparedOnramp.created.settlement.id;
+
+  console.log("\nROUNDTRIP PREPARADO: OK");
+  console.table([{
+    settlement_id: settlementId,
+    onramp_transfer_id: preparedOnramp.initiation.transferId,
+    settlement_status: "awaiting_pix",
+    reserve_status: preparedOnramp.reserve.status,
+  }]);
+  console.log(
+    "Simulando somente o pagamento de entrada no sandbox OZAV...",
+  );
+
+  const onramp = await completeSandboxOnramp(
+    context,
+    settlementId,
+    preparedOnramp.initiation.transferId,
+  );
+
+  console.log("ON-RAMP COMPLETO + RESERVA DEVOLVIDA: OK");
+
+  const atomic = await executeAtomicSettlement(
+    context,
+    settlementId,
+  );
+
+  console.log("LIQUIDAÇÃO ATÔMICA DEVNET: OK");
+
+  const payout = await completeSandboxOfframp(
+    context,
+    settlementId,
+    payoutDestinationId,
+  );
+  const [finalSettlement, after] = await Promise.all([
+    context.settlements.findById(settlementId),
+    readAtomicBalances(context, recipient),
+  ]);
+
+  const deltas = {
+    payerSource:
+      after.payerSource.amount - before.payerSource.amount,
+    liquiditySource:
+      after.liquiditySource.amount
+      - before.liquiditySource.amount,
+    liquidityDestination:
+      after.liquidityDestination.amount
+      - before.liquidityDestination.amount,
+    recipientDestination:
+      after.recipientDestination.amount
+      - before.recipientDestination.amount,
+  };
+
+  if (
+    finalSettlement?.status !== "paid_out"
+    || deltas.payerSource !== -sourceAmount
+    || deltas.liquiditySource !== sourceAmount
+    || deltas.liquidityDestination !== -destinationAmount
+    || deltas.recipientDestination !== destinationAmount
+  ) {
+    throw new Error(
+      "The final settlement or atomic Token-2022 balance deltas are invalid",
+    );
+  }
+
+  console.log("\nROUNDTRIP PIX → SOLANA → PIX: OK");
+  console.table([{
+    settlement_id: settlementId,
+    onramp_transfer_id: preparedOnramp.initiation.transferId,
+    onramp_status: onramp.transfer.status,
+    solana_status: atomic.persisted.status,
+    offramp_transfer_id: payout.initiation.transferId,
+    offramp_status: payout.reconciliation.providerStatus,
+    source_leg: payout.reconciliation.sourceLegStatus,
+    destination_leg:
+      payout.reconciliation.destinationLegStatus,
+    settlement_status: finalSettlement.status,
+    eventos_persistidos: payout.events.length,
+    replay_idempotente:
+      payout.replay.transitions.length === 0,
+  }]);
+  console.table([
+    {
+      conta: "payer_mbrl",
+      antes: before.payerSource.amount.toString(),
+      depois: after.payerSource.amount.toString(),
+      delta: deltas.payerSource.toString(),
+    },
+    {
+      conta: "liquidity_mbrl",
+      antes: before.liquiditySource.amount.toString(),
+      depois: after.liquiditySource.amount.toString(),
+      delta: deltas.liquiditySource.toString(),
+    },
+    {
+      conta: "liquidity_usdt",
+      antes: before.liquidityDestination.amount.toString(),
+      depois: after.liquidityDestination.amount.toString(),
+      delta: deltas.liquidityDestination.toString(),
+    },
+    {
+      conta: "recipient_usdt",
+      antes: before.recipientDestination.amount.toString(),
+      depois: after.recipientDestination.amount.toString(),
+      delta: deltas.recipientDestination.toString(),
+    },
+  ]);
+  console.table(payout.events.map((event) => ({
+    event_id: event.eventId,
+    event_type: event.eventType,
+    provider_status: event.snapshot.status,
+  })));
+  console.log(
+    "RESERVA DEVNET:",
+    explorer(onramp.reserve.createSignature),
+  );
+  console.log(
+    "REFUND DEVNET:",
+    explorer(onramp.reserve.refundSignature),
+  );
+  console.log(
+    "SETTLEMENT DEVNET:",
+    explorer(atomic.signature),
+  );
+  console.log(
+    "O off-ramp avançou automaticamente no sandbox; nenhuma simulação de saída ou chave Pix foi exibida.",
+  );
+}
+
 async function watch(context, settlementId) {
   const {
     settlements,
@@ -693,16 +1250,26 @@ async function watch(context, settlementId) {
 }
 
 const mode = process.argv[2];
-const settlementId = process.argv[3];
+const argument = process.argv[3];
 
-if (!new Set(["prepare", "watch", "success"]).has(mode)) {
+if (!new Set([
+  "prepare",
+  "watch",
+  "success",
+  "offramp",
+]).has(mode)) {
   throw new Error(
-    "Use `prepare`, `watch <settlement-id>`, or `success`",
+    "Use `prepare`, `watch <settlement-id>`, `success`, or `offramp <payout-destination-id>`",
   );
 }
-if (mode === "watch" && !settlementId) {
+if (mode === "watch" && !argument) {
   throw new Error(
     "A settlement id is required in watch mode",
+  );
+}
+if (mode === "offramp" && !argument) {
+  throw new Error(
+    "A payout destination id is required in off-ramp mode",
   );
 }
 
@@ -712,9 +1279,11 @@ try {
   if (mode === "prepare") {
     await prepare(context);
   } else if (mode === "watch") {
-    await watch(context, settlementId);
-  } else {
+    await watch(context, argument);
+  } else if (mode === "success") {
     await success(context);
+  } else {
+    await offramp(context, argument);
   }
 } finally {
   await context.pool.end();

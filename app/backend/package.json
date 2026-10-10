@@ -15,6 +15,7 @@
     "demo:pix-expiry:prepare": "node scripts/ozav-pix-expiry-demo.mjs prepare",
     "demo:pix-expiry:watch": "node scripts/ozav-pix-expiry-demo.mjs watch",
     "demo:pix-success": "node scripts/ozav-pix-expiry-demo.mjs success",
+    "demo:offramp": "node scripts/ozav-pix-expiry-demo.mjs offramp",
     "dev:worker": "tsx watch src/worker.ts",
     "start:worker": "node dist/worker.js"
   },
