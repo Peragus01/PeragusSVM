@@ -1,3 +1,12 @@
+import {
+  Connection,
+  PublicKey,
+} from "@solana/web3.js";
+
+import {
+  EnsureSolanaContingencyReserveService,
+  type OzavContingencyReserveGate,
+} from "./application/ensure-solana-contingency-reserve.js";
 import { ImportOzavOnrampEventsService } from "./application/import-ozav-onramp-events.js";
 import { InitiateOzavOnrampService } from "./application/initiate-ozav-onramp.js";
 import { ReconcileOzavOnrampService } from "./application/reconcile-ozav-onramp.js";
@@ -21,9 +30,11 @@ import {
   type SettlementOrchestrationJob,
 } from "./jobs/settlement-orchestration.js";
 import { OzavClient } from "./providers/ozav-client.js";
+import { loadLocalSolanaAuthority } from "./providers/local-solana-authority.js";
 import { PostgresOzavOnrampIntentRepository } from "./repositories/postgres-ozav-onramp-intent-repository.js";
 import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "./repositories/postgres-settlement-repository.js";
+import { PostgresSolanaContingencyReserveRepository } from "./repositories/solana-contingency-reserve-repository.js";
 
 const env = getEnv();
 
@@ -63,6 +74,50 @@ const ozavRepository =
 const ozavIntentRepository =
   new PostgresOzavOnrampIntentRepository(pool);
 
+let contingencyReserve:
+  | OzavContingencyReserveGate
+  | undefined;
+
+if (env.SOLANA_CONTINGENCY_RESERVE_ENABLED) {
+  if (env.NODE_ENV === "production") {
+    throw new Error(
+      "Local Solana contingency reserve signers cannot be enabled in production; configure an HSM/KMS signer adapter",
+    );
+  }
+
+  const feePayer = loadLocalSolanaAuthority(
+    env.SOLANA_FEE_PAYER_KEYPAIR_PATH!,
+    "SOLANA_FEE_PAYER_KEYPAIR_PATH",
+  );
+  const attestationAuthority = loadLocalSolanaAuthority(
+    env.SOLANA_ATTESTATION_KEYPAIR_PATH!,
+    "SOLANA_ATTESTATION_KEYPAIR_PATH",
+  );
+  const liquidityAuthority = loadLocalSolanaAuthority(
+    env.SOLANA_LIQUIDITY_KEYPAIR_PATH!,
+    "SOLANA_LIQUIDITY_KEYPAIR_PATH",
+  );
+
+  contingencyReserve =
+    new EnsureSolanaContingencyReserveService({
+      repository:
+        new PostgresSolanaContingencyReserveRepository(pool),
+      connection: new Connection(
+        env.SOLANA_RPC_URL,
+        "confirmed",
+      ),
+      programId: new PublicKey(env.SOLANA_PROGRAM_ID),
+      destinationMint: new PublicKey(
+        env.SOLANA_DESTINATION_MINT!,
+      ),
+      feePayer,
+      attestationAuthority,
+      liquidityAuthority,
+      fallbackDelaySeconds:
+        env.SOLANA_CONTINGENCY_FALLBACK_SECONDS,
+    });
+}
+
 const ozavClient = new OzavClient({
   apiKey: env.OZAV_API_KEY,
 });
@@ -93,6 +148,9 @@ const ozavInitiator =
         spreadBps: env.OZAV_SPREAD_BPS,
         minimumSourceAmountBrl:
           env.OZAV_MIN_SOURCE_AMOUNT_BRL,
+        ...(contingencyReserve
+          ? { contingencyReserve }
+          : {}),
       })
     : undefined;
 
@@ -252,6 +310,8 @@ try {
       ozavEnvironment: "test",
       ozavOnrampWritesEnabled:
         env.OZAV_ONRAMP_WRITES_ENABLED,
+      solanaContingencyReserveEnabled:
+        env.SOLANA_CONTINGENCY_RESERVE_ENABLED,
       ozavReconciliationQueue:
         OZAV_RECONCILIATION_QUEUE,
       ozavReconciliationIntervalSeconds:

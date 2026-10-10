@@ -4,6 +4,10 @@ import {
   InitiateOzavOnrampService,
   type OzavOnrampWriter,
 } from "../src/application/initiate-ozav-onramp.js";
+import type {
+  EnsureContingencyReserveInput,
+  OzavContingencyReserveGate,
+} from "../src/application/ensure-solana-contingency-reserve.js";
 import {
   normalizeOzavOnrampIntentRequest,
   normalizeOzavPixPaymentInstructions,
@@ -222,6 +226,7 @@ class FakeOzavWriter implements OzavOnrampWriter {
   failNextTransfer = false;
   quoteSourceAmount = "500.00";
   transferSourceAmount = "500";
+  paymentExpiresAt = "2026-10-07T13:00:00Z";
   private readonly results =
     new Map<string, OzavTransfer>();
 
@@ -276,7 +281,7 @@ class FakeOzavWriter implements OzavOnrampWriter {
           intentId: "sim_pix_test",
           brCode: "000201-test",
           qrCodeImage: null,
-          expiresAt: "2026-10-07T13:00:00Z",
+          expiresAt: this.paymentExpiresAt,
         },
       },
       destination: {
@@ -304,14 +309,47 @@ class FakeOzavWriter implements OzavOnrampWriter {
   }
 }
 
+class FakeContingencyReserve
+  implements OzavContingencyReserveGate
+{
+  readonly calls: EnsureContingencyReserveInput[] = [];
+  fail = false;
+
+  constructor(private readonly client: FakeOzavWriter) {}
+
+  async ensureBeforePix(input: EnsureContingencyReserveInput) {
+    this.calls.push(input);
+    if (this.fail) {
+      throw new Error("reserve unavailable");
+    }
+    if (this.client.transfers.length !== 0) {
+      throw new Error("reserve was created after the Pix transfer");
+    }
+
+    return {
+      settlementId: input.settlementId,
+      reservePda: "7YttLkHDoNj9wyDur5WqEJjhqJbLC4KNKnR9cJmVqJgY",
+      vaultPda: "11111111111111111111111111111112",
+      amountUsdt: input.amountUsdt,
+      amountBaseUnits: "89550000",
+      fallbackAfter: new Date("2026-10-07T12:05:00Z"),
+      expiresAt: input.expiresAt,
+      createSignature: "reserve-signature",
+      idempotentReplay: false,
+    };
+  }
+}
+
 function setup(
   value: Settlement = settlement(),
+  withReserve = false,
 ) {
   const client = new FakeOzavWriter();
   const intents = new MemoryIntentRepository();
   const onramps = new MemoryOnrampRepository();
   const settlements =
     new MemorySettlementRepository(value);
+  const reserve = new FakeContingencyReserve(client);
   const service = new InitiateOzavOnrampService({
     client,
     intents,
@@ -321,6 +359,9 @@ function setup(
     walletId: "ozav_wal_test",
     sourceDecimals: 6,
     spreadBps: 0,
+    ...(withReserve
+      ? { contingencyReserve: reserve }
+      : {}),
     now: () => new Date("2026-10-07T12:00:00Z"),
   });
   return {
@@ -328,11 +369,60 @@ function setup(
     intents,
     onramps,
     settlements,
+    reserve,
     service,
   };
 }
 
 describe("OZAV sandbox on-ramp initiation", () => {
+  it("confirms the USDT reserve before creating the Pix transfer", async () => {
+    const subject = setup(settlement(), true);
+
+    const result = await subject.service.execute(settlementId);
+
+    expect(subject.reserve.calls).toEqual([{
+      settlementId,
+      corridorId: "ab".repeat(32),
+      recipientWallet:
+        "eD4c59FhMTkPQHBY84n8oc2YcHrAWjrn9khAL2FDBxR",
+      amountUsdt: "89.55",
+      expiresAt: new Date("2026-10-07T14:00:00.000Z"),
+    }]);
+    expect(result).toMatchObject({
+      contingencyReserveConfirmed: true,
+      contingencyReservePda:
+        "7YttLkHDoNj9wyDur5WqEJjhqJbLC4KNKnR9cJmVqJgY",
+      paymentInstructionsAvailable: true,
+    });
+    expect(subject.client.transfers).toHaveLength(1);
+  });
+
+  it("does not create a Pix transfer when the reserve fails", async () => {
+    const subject = setup(settlement(), true);
+    subject.reserve.fail = true;
+
+    await expect(subject.service.execute(settlementId))
+      .rejects.toThrow("reserve unavailable");
+
+    expect(subject.intents.intent?.quoteId).toBe("ozav_q_test");
+    expect(subject.client.transfers).toHaveLength(0);
+  });
+
+  it("does not persist or expose a Pix QR that outlives the reserve", async () => {
+    const subject = setup(settlement(), true);
+    subject.client.paymentExpiresAt =
+      "2026-10-07T14:00:00Z";
+
+    await expect(subject.service.execute(settlementId))
+      .rejects.toThrow(
+        "OZAV Pix must expire before the contingency reserve",
+      );
+
+    expect(subject.client.transfers).toHaveLength(1);
+    expect(subject.intents.intent?.paymentInstructions).toBeNull();
+    expect(subject.onramps.binding).toBeNull();
+  });
+
   it("persists the quote before creating one transfer", async () => {
     const subject = setup();
     const result = await subject.service.execute(settlementId);

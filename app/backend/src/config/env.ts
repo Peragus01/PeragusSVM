@@ -88,6 +88,16 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  SOLANA_CONTINGENCY_RESERVE_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  SOLANA_CONTINGENCY_FALLBACK_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(86_400)
+    .default(300),
   SOLANA_SOURCE_MINT: z.string().min(32).max(44).optional(),
   SOLANA_DESTINATION_MINT: z.string().min(32).max(44).optional(),
   SOLANA_ATTESTATION_KEYPAIR_PATH: z
@@ -95,6 +105,10 @@ const envSchema = z.object({
     .min(1)
     .optional(),
   SOLANA_LIQUIDITY_KEYPAIR_PATH: z
+    .string()
+    .min(1)
+    .optional(),
+  SOLANA_FEE_PAYER_KEYPAIR_PATH: z
     .string()
     .min(1)
     .optional(),
@@ -131,6 +145,33 @@ const envSchema = z.object({
             `${field} is required when SOLANA_COSIGNING_ENABLED=true`,
         });
       }
+    }
+  }
+
+  if (env.SOLANA_CONTINGENCY_RESERVE_ENABLED) {
+    for (const field of [
+      "SOLANA_DESTINATION_MINT",
+      "SOLANA_ATTESTATION_KEYPAIR_PATH",
+      "SOLANA_LIQUIDITY_KEYPAIR_PATH",
+      "SOLANA_FEE_PAYER_KEYPAIR_PATH",
+    ] as const) {
+      if (!env[field]) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message:
+            `${field} is required when SOLANA_CONTINGENCY_RESERVE_ENABLED=true`,
+        });
+      }
+    }
+
+    if (!env.OZAV_ONRAMP_WRITES_ENABLED) {
+      context.addIssue({
+        code: "custom",
+        path: ["OZAV_ONRAMP_WRITES_ENABLED"],
+        message:
+          "OZAV_ONRAMP_WRITES_ENABLED must be true when the contingency reserve is enabled",
+      });
     }
   }
 });

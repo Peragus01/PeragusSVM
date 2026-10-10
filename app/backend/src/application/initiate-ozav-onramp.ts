@@ -15,6 +15,10 @@ import type {
   OzavQuote,
   OzavTransfer,
 } from "../providers/ozav-client.js";
+import type {
+  EnsureContingencyReserveResult,
+  OzavContingencyReserveGate,
+} from "./ensure-solana-contingency-reserve.js";
 import type { OzavOnrampIntentRepository } from "../repositories/ozav-onramp-intent-repository.js";
 import type { OzavOnrampRepository } from "../repositories/ozav-onramp-repository.js";
 import type { SettlementRepository } from "../repositories/settlement-repository.js";
@@ -37,6 +41,7 @@ export interface InitiateOzavOnrampOptions {
   sourceDecimals: number;
   spreadBps: number;
   minimumSourceAmountBrl?: string;
+  contingencyReserve?: OzavContingencyReserveGate;
   now?: () => Date;
 }
 
@@ -51,6 +56,8 @@ export interface InitiateOzavOnrampResult {
   quoteCreated: boolean;
   transferReplayed: boolean;
   paymentInstructionsAvailable: boolean;
+  contingencyReserveConfirmed: boolean;
+  contingencyReservePda: string | null;
 }
 
 function decimalToMinorUnits(
@@ -83,6 +90,28 @@ function assertQuote(
   }
 }
 
+function assertPixExpiresBeforeReserve(
+  pixExpiresAt: Date | string,
+  reserve: EnsureContingencyReserveResult | null,
+): void {
+  if (!reserve) {
+    return;
+  }
+
+  const expiresAt = pixExpiresAt instanceof Date
+    ? pixExpiresAt
+    : new Date(pixExpiresAt);
+
+  if (
+    !Number.isFinite(expiresAt.getTime())
+    || expiresAt.getTime() >= reserve.expiresAt.getTime()
+  ) {
+    throw new OzavOnrampInitiationError(
+      "OZAV Pix must expire before the contingency reserve",
+    );
+  }
+}
+
 export class InitiateOzavOnrampService {
   private readonly client: OzavOnrampWriter;
   private readonly intents: OzavOnrampIntentRepository;
@@ -93,6 +122,9 @@ export class InitiateOzavOnrampService {
   private readonly sourceDecimals: number;
   private readonly spreadBps: number;
   private readonly minimumSourceAmountBrl: string;
+  private readonly contingencyReserve:
+    | OzavContingencyReserveGate
+    | undefined;
   private readonly now: () => Date;
 
   constructor(options: InitiateOzavOnrampOptions) {
@@ -107,6 +139,7 @@ export class InitiateOzavOnrampService {
     this.minimumSourceAmountBrl = normalizeOzavBrlAmount(
       options.minimumSourceAmountBrl ?? "400",
     );
+    this.contingencyReserve = options.contingencyReserve;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -126,6 +159,30 @@ export class InitiateOzavOnrampService {
       await this.onramps.findBinding(settlement.id);
     if (existingBinding) {
       const intent = await this.intents.find(settlement.id);
+      let reserve: EnsureContingencyReserveResult | null = null;
+      if (this.contingencyReserve) {
+        if (!intent?.quoteTargetAmountUsdt) {
+          throw new OzavOnrampInitiationError(
+            "OZAV on-ramp binding exists without a quotable contingency reserve amount",
+          );
+        }
+
+        reserve = await this.contingencyReserve.ensureBeforePix({
+          settlementId: settlement.id,
+          corridorId: settlement.corridorId,
+          recipientWallet: settlement.recipientWallet,
+          amountUsdt: intent.quoteTargetAmountUsdt,
+          expiresAt: settlement.expiresAt,
+        });
+      }
+
+      if (intent?.paymentInstructions) {
+        assertPixExpiresBeforeReserve(
+          intent.paymentInstructions.expiresAt,
+          reserve,
+        );
+      }
+
       return {
         settlementId: settlement.id,
         transferId: existingBinding.transferId,
@@ -140,6 +197,10 @@ export class InitiateOzavOnrampService {
         transferReplayed: true,
         paymentInstructionsAvailable:
           intent?.paymentInstructions != null,
+        contingencyReserveConfirmed:
+          reserve !== null,
+        contingencyReservePda:
+          reserve?.reservePda ?? null,
       };
     }
 
@@ -207,6 +268,16 @@ export class InitiateOzavOnrampService {
       );
     }
 
+    const reserve = this.contingencyReserve
+      ? await this.contingencyReserve.ensureBeforePix({
+          settlementId: settlement.id,
+          corridorId: settlement.corridorId,
+          recipientWallet: settlement.recipientWallet,
+          amountUsdt: intent.quoteTargetAmountUsdt,
+          expiresAt: settlement.expiresAt,
+        })
+      : null;
+
     const createdTransfer = await this.client.createTransfer({
       customerId: intent.customerId,
       walletId: intent.walletId,
@@ -246,6 +317,7 @@ export class InitiateOzavOnrampService {
         "OZAV transfer did not provide Pix payment instructions",
       );
     }
+    assertPixExpiresBeforeReserve(payment.expiresAt, reserve);
     intent = await this.intents.savePaymentInstructions({
       settlementId: intent.settlementId,
       paymentInstructions: {
@@ -278,6 +350,10 @@ export class InitiateOzavOnrampService {
         createdTransfer.idempotentReplayed,
       paymentInstructionsAvailable:
         intent.paymentInstructions != null,
+      contingencyReserveConfirmed:
+        reserve !== null,
+      contingencyReservePda:
+        reserve?.reservePda ?? null,
     };
   }
 }
