@@ -10,6 +10,10 @@ import {
 import { ImportOzavOnrampEventsService } from "./application/import-ozav-onramp-events.js";
 import { InitiateOzavOnrampService } from "./application/initiate-ozav-onramp.js";
 import { ReconcileOzavOnrampService } from "./application/reconcile-ozav-onramp.js";
+import {
+  ResolveSolanaContingencyReserveService,
+  type ContingencyReserveResolver,
+} from "./application/resolve-solana-contingency-reserve.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
 import { createDatabasePool } from "./database/pool.js";
@@ -77,6 +81,9 @@ const ozavIntentRepository =
 let contingencyReserve:
   | OzavContingencyReserveGate
   | undefined;
+let contingencyReserveResolver:
+  | ContingencyReserveResolver
+  | undefined;
 
 if (env.SOLANA_CONTINGENCY_RESERVE_ENABLED) {
   if (env.NODE_ENV === "production") {
@@ -97,24 +104,39 @@ if (env.SOLANA_CONTINGENCY_RESERVE_ENABLED) {
     env.SOLANA_LIQUIDITY_KEYPAIR_PATH!,
     "SOLANA_LIQUIDITY_KEYPAIR_PATH",
   );
+  const connection = new Connection(
+    env.SOLANA_RPC_URL,
+    "confirmed",
+  );
+  const programId = new PublicKey(env.SOLANA_PROGRAM_ID);
+  const destinationMint = new PublicKey(
+    env.SOLANA_DESTINATION_MINT!,
+  );
+  const reserveRepository =
+    new PostgresSolanaContingencyReserveRepository(pool);
 
   contingencyReserve =
     new EnsureSolanaContingencyReserveService({
-      repository:
-        new PostgresSolanaContingencyReserveRepository(pool),
-      connection: new Connection(
-        env.SOLANA_RPC_URL,
-        "confirmed",
-      ),
-      programId: new PublicKey(env.SOLANA_PROGRAM_ID),
-      destinationMint: new PublicKey(
-        env.SOLANA_DESTINATION_MINT!,
-      ),
+      repository: reserveRepository,
+      connection,
+      programId,
+      destinationMint,
       feePayer,
       attestationAuthority,
       liquidityAuthority,
       fallbackDelaySeconds:
         env.SOLANA_CONTINGENCY_FALLBACK_SECONDS,
+    });
+
+  contingencyReserveResolver =
+    new ResolveSolanaContingencyReserveService({
+      repository: reserveRepository,
+      connection,
+      programId,
+      destinationMint,
+      feePayer,
+      attestationAuthority,
+      liquidityAuthority,
     });
 }
 
@@ -133,6 +155,9 @@ const ozavReconciler = new ReconcileOzavOnrampService({
   ozavRepository,
   settlements: repository,
   transitioner: new TransitionSettlementService(repository),
+  ...(contingencyReserveResolver
+    ? { contingencyReserveResolver }
+    : {}),
 });
 
 const ozavInitiator =

@@ -3,6 +3,7 @@ import {
   ReconcileOzavOnrampService,
   type OzavImportResult,
 } from "../src/application/reconcile-ozav-onramp.js";
+import type { ContingencyReserveResolutionResult } from "../src/application/resolve-solana-contingency-reserve.js";
 import { OzavPersistenceError, type OzavOnrampBinding } from "../src/domain/ozav-onramp.js";
 import type { Settlement, SettlementStatus } from "../src/domain/settlement.js";
 
@@ -34,17 +35,22 @@ function importResult(
 function setup(
   initialStatus: SettlementStatus = "created",
   provider = importResult("completed"),
+  reserveResolution?: ContingencyReserveResolutionResult,
 ) {
   let settlement = {
     id: settlementId,
     status: initialStatus,
     version: 0,
+    corridorId: "ab".repeat(32),
+    recipientWallet:
+      "eD4c59FhMTkPQHBY84n8oc2YcHrAWjrn9khAL2FDBxR",
   } as Settlement;
   let linked: OzavOnrampBinding | null = binding;
   let imported = 0;
   const processed = new Set<string>();
   const marked: string[][] = [];
   const transitions: SettlementStatus[] = [];
+  const reserveCalls: unknown[] = [];
   let transitionError: Error | null = null;
   const service = new ReconcileOzavOnrampService({
     importer: {
@@ -87,6 +93,16 @@ function setup(
         return settlement;
       },
     },
+    ...(reserveResolution
+      ? {
+          contingencyReserveResolver: {
+            async execute(input: unknown) {
+              reserveCalls.push(input);
+              return reserveResolution;
+            },
+          },
+        }
+      : {}),
     now: () => new Date("2026-10-07T12:00:00Z"),
   });
   return {
@@ -94,6 +110,7 @@ function setup(
     transitions,
     marked,
     processed,
+    reserveCalls,
     imported: () => imported,
     settlement: () => settlement,
     unlink: () => { linked = null; },
@@ -165,6 +182,92 @@ describe("OZAV on-ramp reconciliation", () => {
     expect(await s.service.execute(settlementId)).toMatchObject({
       settlementStatus: "failed",
       transitions: ["failed"],
+    });
+  });
+
+  it("keeps a paid terminal failure pending until fallback is ready", async () => {
+    const reserveResolution = {
+      settlementId,
+      action: "waiting",
+      reserveStatus: "funded",
+      reason: "fallback_not_ready",
+      signature: null,
+    } satisfies ContingencyReserveResolutionResult;
+    const s = setup(
+      "awaiting_pix",
+      importResult("failed", "completed", "pending"),
+      reserveResolution,
+    );
+
+    expect(await s.service.execute(settlementId)).toMatchObject({
+      settlementStatus: "pix_confirmed",
+      transitions: ["pix_confirmed"],
+      contingencyReserveResolution: reserveResolution,
+    });
+    expect(s.reserveCalls).toEqual([{
+      settlementId,
+      corridorId: "ab".repeat(32),
+      recipientWallet:
+        "eD4c59FhMTkPQHBY84n8oc2YcHrAWjrn9khAL2FDBxR",
+      providerStatus: "failed",
+      sourceLegStatus: "completed",
+      destinationLegStatus: "pending",
+    }]);
+  });
+
+  it("marks tokenized only after the contingency fallback settles", async () => {
+    const reserveResolution = {
+      settlementId,
+      action: "settled",
+      reserveStatus: "settled",
+      reason: "provider_failed_after_payment",
+      signature: "reserve-settle-signature",
+    } satisfies ContingencyReserveResolutionResult;
+    const s = setup(
+      "awaiting_pix",
+      importResult("expired", "completed", "pending"),
+      reserveResolution,
+    );
+
+    expect(await s.service.execute(settlementId)).toMatchObject({
+      settlementStatus: "tokenized",
+      transitions: ["pix_confirmed", "tokenized"],
+      contingencyReserveResolution: reserveResolution,
+    });
+  });
+
+  it("surfaces an expired paid reserve as operational attention", async () => {
+    const reserveResolution = {
+      settlementId,
+      action: "attention_required",
+      reserveStatus: "funded",
+      reason: "reserve_expired_after_payment",
+      signature: null,
+    } satisfies ContingencyReserveResolutionResult;
+    const s = setup(
+      "pix_confirmed",
+      importResult("cancelled", "completed", "pending"),
+      reserveResolution,
+    );
+
+    expect(await s.service.execute(settlementId)).toMatchObject({
+      settlementStatus: "pix_confirmed",
+      transitions: [],
+      attentionRequired: true,
+    });
+  });
+
+  it("requires attention when paid funds fail without a reserve", async () => {
+    const s = setup(
+      "awaiting_pix",
+      importResult("failed", "completed", "pending"),
+    );
+
+    expect(await s.service.execute(settlementId)).toMatchObject({
+      settlementStatus: "pix_confirmed",
+      transitions: ["pix_confirmed"],
+      attentionRequired: true,
+      contingencyReserveResolution: null,
     });
   });
 

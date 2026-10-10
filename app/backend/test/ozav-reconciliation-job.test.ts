@@ -55,6 +55,7 @@ function result(
     eventsInserted: 0,
     eventsProcessed: 1,
     attentionRequired: false,
+    contingencyReserveResolution: null,
     ...overrides,
   };
 }

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { EnsureSolanaContingencyReserveService } from "../src/application/ensure-solana-contingency-reserve.js";
 import { LocalKeypairAuthoritySigner } from "../src/providers/peragus-solana-transaction.js";
 import type {
+  FinalizeContingencyReserveInput,
   SaveFundedContingencyReserveInput,
   SolanaContingencyReserve,
   SolanaContingencyReserveRepository,
@@ -31,9 +32,45 @@ class MemoryReserveRepository
     const now = new Date("2026-10-07T12:00:01Z");
     this.value ??= {
       ...input,
+      settleSignature: null,
+      refundSignature: null,
       status: "funded",
+      version: 0,
       createdAt: now,
       updatedAt: now,
+    };
+    return this.value;
+  }
+
+  async markSettled(
+    input: FinalizeContingencyReserveInput,
+  ) {
+    return this.finalize(input, "settled");
+  }
+
+  async markRefunded(
+    input: FinalizeContingencyReserveInput,
+  ) {
+    return this.finalize(input, "refunded");
+  }
+
+  private finalize(
+    input: FinalizeContingencyReserveInput,
+    status: "settled" | "refunded",
+  ) {
+    if (!this.value || this.value.version !== input.expectedVersion) {
+      throw new Error("concurrent reserve update");
+    }
+
+    this.value = {
+      ...this.value,
+      status,
+      settleSignature:
+        status === "settled" ? input.signature : null,
+      refundSignature:
+        status === "refunded" ? input.signature : null,
+      version: this.value.version + 1,
+      updatedAt: new Date("2026-10-07T12:00:02Z"),
     };
     return this.value;
   }

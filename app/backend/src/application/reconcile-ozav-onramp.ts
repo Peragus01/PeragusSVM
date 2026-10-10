@@ -2,6 +2,10 @@ import type { Settlement, SettlementStatus } from "../domain/settlement.js";
 import { OzavPersistenceError, type OzavOnrampBinding } from "../domain/ozav-onramp.js";
 import type { OzavOnrampRepository } from "../repositories/ozav-onramp-repository.js";
 import type { SettlementRepository } from "../repositories/settlement-repository.js";
+import type {
+  ContingencyReserveResolutionResult,
+  ContingencyReserveResolver,
+} from "./resolve-solana-contingency-reserve.js";
 
 export interface OzavImportResult {
   currentTransferStatus: string;
@@ -32,6 +36,7 @@ export interface ReconcileOzavOnrampDependencies {
   >;
   settlements: Pick<SettlementRepository, "findById">;
   transitioner: SettlementTransitioner;
+  contingencyReserveResolver?: ContingencyReserveResolver;
   now?: () => Date;
 }
 
@@ -45,6 +50,9 @@ export interface OzavReconciliationResult {
   eventsInserted: number;
   eventsProcessed: number;
   attentionRequired: boolean;
+  contingencyReserveResolution:
+    | ContingencyReserveResolutionResult
+    | null;
 }
 
 const onrampPath: readonly SettlementStatus[] = [
@@ -81,8 +89,16 @@ function targetForProvider(
       return { target: "tokenized", attentionRequired: false };
     case "failed":
     case "cancelled":
-    case "expired":
-      return { target: "failed", attentionRequired: false };
+    case "expired": {
+      if (result.currentDestinationLegStatus === "completed") {
+        throw new OzavPersistenceError(
+          "OZAV failure conflicts with the completed destination leg",
+        );
+      }
+      return result.currentSourceLegStatus === "completed"
+        ? { target: "pix_confirmed", attentionRequired: false }
+        : { target: "failed", attentionRequired: false };
+    }
     case "needs_review":
     case "awaiting_approval":
       return { target: null, attentionRequired: true };
@@ -149,11 +165,27 @@ export class ReconcileOzavOnrampService {
         eventsInserted: 0,
         eventsProcessed: 0,
         attentionRequired: false,
+        contingencyReserveResolution: null,
       };
     }
 
     const imported = await importer.execute(binding);
     const resolution = targetForProvider(imported);
+    if (
+      ["failed", "cancelled", "expired"].includes(
+        imported.currentTransferStatus,
+      )
+      && imported.currentSourceLegStatus === "completed"
+      && ![
+        "created",
+        "awaiting_pix",
+        "pix_confirmed",
+      ].includes(settlement.status)
+    ) {
+      throw new OzavPersistenceError(
+        `OZAV failure conflicts with advanced settlement status ${settlement.status}`,
+      );
+    }
     const plannedTransitions = transitionsToTarget(
       settlement.status,
       resolution.target,
@@ -163,6 +195,38 @@ export class ReconcileOzavOnrampService {
       settlement = await transitioner.execute({ settlementId, nextStatus });
       appliedTransitions.push(nextStatus);
     }
+    const contingencyReserveResolution =
+      this.dependencies.contingencyReserveResolver
+        ? await this.dependencies.contingencyReserveResolver.execute({
+            settlementId,
+            corridorId: settlement.corridorId,
+            recipientWallet: settlement.recipientWallet,
+            providerStatus: imported.currentTransferStatus,
+            sourceLegStatus:
+              imported.currentSourceLegStatus,
+            destinationLegStatus:
+              imported.currentDestinationLegStatus,
+          })
+        : null;
+
+    if (
+      contingencyReserveResolution?.action === "settled"
+      && settlement.status === "pix_confirmed"
+    ) {
+      settlement = await transitioner.execute({
+        settlementId,
+        nextStatus: "tokenized",
+      });
+      appliedTransitions.push("tokenized");
+    }
+    const terminalFailureAfterPayment =
+      ["failed", "cancelled", "expired"].includes(
+        imported.currentTransferStatus,
+      )
+      && imported.currentSourceLegStatus === "completed";
+    const contingencyUnavailable =
+      contingencyReserveResolution === null
+      || contingencyReserveResolution.reason === "no_reserve";
     const eventsProcessed = await ozavRepository.markEventsProcessed(
       settlementId,
       imported.eventIds,
@@ -177,7 +241,17 @@ export class ReconcileOzavOnrampService {
       eventsFound: imported.eventsFound,
       eventsInserted: imported.inserted,
       eventsProcessed,
-      attentionRequired: resolution.attentionRequired,
+      attentionRequired:
+        resolution.attentionRequired
+        || (
+          contingencyReserveResolution?.action
+          === "attention_required"
+        )
+        || (
+          terminalFailureAfterPayment
+          && contingencyUnavailable
+        ),
+      contingencyReserveResolution,
     };
   }
 }

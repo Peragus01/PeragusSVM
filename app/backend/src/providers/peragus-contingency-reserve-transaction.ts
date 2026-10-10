@@ -8,6 +8,7 @@ import {
 } from "@solana/web3.js";
 
 import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   decodeCorridorId,
   deriveAssociatedTokenAddress,
   derivePeragusSettlementId,
@@ -55,6 +56,31 @@ export interface BuiltContingencyReserveTransaction {
   addresses: ContingencyReserveAddresses;
 }
 
+export interface BuildResolveContingencyReserveTransactionInput {
+  backendSettlementId: string;
+  corridorId: string;
+  feePayer: PublicKeyInput;
+  destinationMint: PublicKeyInput;
+  attestationAuthority: PublicKeyInput;
+  liquidityAuthority: PublicKeyInput;
+  programId: PublicKeyInput;
+  recentBlockhash: string;
+  lastValidBlockHeight: number;
+  liquidityDestination?: PublicKeyInput;
+}
+
+export interface BuildSettleContingencyReserveTransactionInput
+  extends BuildResolveContingencyReserveTransactionInput {
+  recipientWallet: PublicKeyInput;
+}
+
+export interface BuiltResolveContingencyReserveTransaction {
+  transaction: Transaction;
+  addresses: ContingencyReserveAddresses & {
+    recipientDestination?: PublicKey;
+  };
+}
+
 function toPublicKey(
   value: PublicKeyInput,
   field: string,
@@ -73,6 +99,40 @@ function instructionDiscriminator(name: string): Buffer {
     .update(`global:${name}`, "utf8")
     .digest()
     .subarray(0, 8);
+}
+
+function assertTransactionLifetime(
+  lastValidBlockHeight: number,
+): void {
+  if (
+    !Number.isSafeInteger(lastValidBlockHeight)
+    || lastValidBlockHeight < 0
+  ) {
+    throw new Error(
+      "lastValidBlockHeight must be a non-negative safe integer",
+    );
+  }
+}
+
+function associatedTokenAccountInstruction(input: {
+  payer: PublicKey;
+  owner: PublicKey;
+  mint: PublicKey;
+  address: PublicKey;
+}): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: input.payer, isSigner: true, isWritable: true },
+      { pubkey: input.address, isSigner: false, isWritable: true },
+      { pubkey: input.owner, isSigner: false, isWritable: false },
+      { pubkey: input.mint, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    // Associated Token Account instruction 1 is CreateIdempotent.
+    data: Buffer.from([1]),
+  });
 }
 
 function writeU64(value: bigint): Buffer {
@@ -182,14 +242,7 @@ export function buildCreateContingencyReserveTransaction(
     "liquidityAuthority",
   );
 
-  if (
-    !Number.isSafeInteger(input.lastValidBlockHeight)
-    || input.lastValidBlockHeight < 0
-  ) {
-    throw new Error(
-      "lastValidBlockHeight must be a non-negative safe integer",
-    );
-  }
+  assertTransactionLifetime(input.lastValidBlockHeight);
 
   if (input.fallbackAfter.getTime() >= input.expiresAt.getTime()) {
     throw new Error("fallbackAfter must be before expiresAt");
@@ -249,4 +302,142 @@ export function buildCreateContingencyReserveTransaction(
     settlementId,
     addresses,
   };
+}
+
+
+export function buildSettleContingencyReserveTransaction(
+  input: BuildSettleContingencyReserveTransactionInput,
+): BuiltResolveContingencyReserveTransaction {
+  assertTransactionLifetime(input.lastValidBlockHeight);
+
+  const programId = toPublicKey(input.programId, "programId");
+  const feePayer = toPublicKey(input.feePayer, "feePayer");
+  const destinationMint = toPublicKey(
+    input.destinationMint,
+    "destinationMint",
+  );
+  const attestationAuthority = toPublicKey(
+    input.attestationAuthority,
+    "attestationAuthority",
+  );
+  const liquidityAuthority = toPublicKey(
+    input.liquidityAuthority,
+    "liquidityAuthority",
+  );
+  const recipient = toPublicKey(
+    input.recipientWallet,
+    "recipientWallet",
+  );
+  const { addresses } = deriveContingencyReserveAddresses({
+    backendSettlementId: input.backendSettlementId,
+    corridorId: input.corridorId,
+    destinationMint,
+    liquidityAuthority,
+    programId,
+    ...(input.liquidityDestination
+      ? { liquidityDestination: input.liquidityDestination }
+      : {}),
+  });
+  const recipientDestination = deriveAssociatedTokenAddress(
+    recipient,
+    destinationMint,
+  );
+
+  const settleInstruction = new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: addresses.config, isSigner: false, isWritable: false },
+      { pubkey: attestationAuthority, isSigner: true, isWritable: false },
+      { pubkey: addresses.reserve, isSigner: false, isWritable: true },
+      { pubkey: addresses.corridor, isSigner: false, isWritable: false },
+      { pubkey: destinationMint, isSigner: false, isWritable: false },
+      { pubkey: addresses.vault, isSigner: false, isWritable: true },
+      { pubkey: recipientDestination, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: instructionDiscriminator("settle_contingency_reserve"),
+  });
+
+  const transaction = new Transaction({
+    feePayer,
+    blockhash: input.recentBlockhash,
+    lastValidBlockHeight: input.lastValidBlockHeight,
+  });
+
+  transaction.add(
+    associatedTokenAccountInstruction({
+      payer: feePayer,
+      owner: recipient,
+      mint: destinationMint,
+      address: recipientDestination,
+    }),
+    settleInstruction,
+  );
+
+  return {
+    transaction,
+    addresses: {
+      ...addresses,
+      recipientDestination,
+    },
+  };
+}
+
+export function buildRefundContingencyReserveTransaction(
+  input: BuildResolveContingencyReserveTransactionInput,
+): BuiltResolveContingencyReserveTransaction {
+  assertTransactionLifetime(input.lastValidBlockHeight);
+
+  const programId = toPublicKey(input.programId, "programId");
+  const feePayer = toPublicKey(input.feePayer, "feePayer");
+  const destinationMint = toPublicKey(
+    input.destinationMint,
+    "destinationMint",
+  );
+  const attestationAuthority = toPublicKey(
+    input.attestationAuthority,
+    "attestationAuthority",
+  );
+  const liquidityAuthority = toPublicKey(
+    input.liquidityAuthority,
+    "liquidityAuthority",
+  );
+  const { addresses } = deriveContingencyReserveAddresses({
+    backendSettlementId: input.backendSettlementId,
+    corridorId: input.corridorId,
+    destinationMint,
+    liquidityAuthority,
+    programId,
+    ...(input.liquidityDestination
+      ? { liquidityDestination: input.liquidityDestination }
+      : {}),
+  });
+
+  const refundInstruction = new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: addresses.config, isSigner: false, isWritable: false },
+      { pubkey: attestationAuthority, isSigner: true, isWritable: false },
+      { pubkey: addresses.reserve, isSigner: false, isWritable: true },
+      { pubkey: addresses.corridor, isSigner: false, isWritable: false },
+      { pubkey: liquidityAuthority, isSigner: false, isWritable: false },
+      { pubkey: destinationMint, isSigner: false, isWritable: false },
+      { pubkey: addresses.vault, isSigner: false, isWritable: true },
+      {
+        pubkey: addresses.liquidityDestination,
+        isSigner: false,
+        isWritable: true,
+      },
+      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: instructionDiscriminator("refund_contingency_reserve"),
+  });
+
+  const transaction = new Transaction({
+    feePayer,
+    blockhash: input.recentBlockhash,
+    lastValidBlockHeight: input.lastValidBlockHeight,
+  }).add(refundInstruction);
+
+  return { transaction, addresses };
 }
