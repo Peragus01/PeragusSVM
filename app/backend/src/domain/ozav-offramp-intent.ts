@@ -1,3 +1,10 @@
+import { createHash } from "node:crypto";
+
+import type {
+  OzavEvent,
+  OzavTransfer,
+} from "../providers/ozav-client.js";
+
 export const ozavTransferStatuses = [
   "awaiting_payment",
   "payment_confirmed",
@@ -34,6 +41,22 @@ export interface OzavOfframpIntent
   transferTargetAmountBrl: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface OzavOfframpStoredEvent {
+  eventId: string;
+  settlementId: string;
+  transferId: string;
+  eventType: string;
+  occurredAt: string;
+  contentHash: string;
+  snapshot: {
+    status: OzavTransferStatus;
+    sourceLegStatus: string | null;
+    destinationLegStatus: string | null;
+    sourceAmountUsdt: string;
+    targetAmountBrl: string;
+  };
 }
 
 export class OzavOfframpInitiationError extends Error {
@@ -123,6 +146,114 @@ export function normalizeOzavTransferStatus(
   }
 
   return value as OzavTransferStatus;
+}
+
+function normalizeLegStatus(
+  value: string | null,
+): string | null {
+  if (
+    value !== null
+    && (
+      typeof value !== "string"
+      || value.length < 1
+      || value.length > 64
+    )
+  ) {
+    throw new OzavOfframpInitiationError(
+      "Invalid OZAV off-ramp leg status",
+    );
+  }
+
+  return value;
+}
+
+export function assertOzavOfframpTransferMatches(
+  intent: OzavOfframpIntent,
+  transfer: OzavTransfer,
+): void {
+  if (
+    (intent.transferId !== null
+      && transfer.id !== intent.transferId)
+    || transfer.customerId !== intent.customerId
+    || transfer.quoteId !== intent.quoteId
+    || transfer.source.type !== "wallet"
+    || transfer.source.walletId !== intent.walletId
+    || transfer.source.currency !== "USDT"
+    || transfer.destination.type
+      !== "payout_destination"
+    || transfer.destination.payoutDestinationId
+      !== intent.payoutDestinationId
+    || transfer.amounts.source.currency !== "USDT"
+    || normalizeOzavUsdtAmount(
+      transfer.amounts.source.amount,
+    ) !== intent.sourceAmountUsdt
+    || transfer.amounts.target.currency !== "BRL"
+  ) {
+    throw new OzavOfframpInitiationError(
+      "OZAV transfer does not match the off-ramp intent",
+    );
+  }
+
+  normalizeOzavOfframpBrlAmount(
+    transfer.amounts.target.amount,
+  );
+  normalizeOzavTransferStatus(transfer.status);
+  normalizeLegStatus(transfer.sourceLegStatus);
+  normalizeLegStatus(transfer.destinationLegStatus);
+}
+
+/** Stores financial settlement facts only; no payout destination details. */
+export function normalizeOzavOfframpEvent(
+  intent: OzavOfframpIntent,
+  event: OzavEvent,
+): OzavOfframpStoredEvent {
+  if (
+    !intent.transferId
+    || !validId(event.id, "ozav_evt_")
+    || !event.type.startsWith("transfer.")
+    || event.type.length > 128
+    || !event.transfer
+    || Number.isNaN(Date.parse(event.createdAt))
+  ) {
+    throw new OzavOfframpInitiationError(
+      "Invalid OZAV off-ramp transfer event",
+    );
+  }
+
+  assertOzavOfframpTransferMatches(intent, event.transfer);
+
+  const snapshot = {
+    status: normalizeOzavTransferStatus(
+      event.transfer.status,
+    ),
+    sourceLegStatus: normalizeLegStatus(
+      event.transfer.sourceLegStatus,
+    ),
+    destinationLegStatus: normalizeLegStatus(
+      event.transfer.destinationLegStatus,
+    ),
+    sourceAmountUsdt: normalizeOzavUsdtAmount(
+      event.transfer.amounts.source.amount,
+    ),
+    targetAmountBrl: normalizeOzavOfframpBrlAmount(
+      event.transfer.amounts.target.amount,
+    ),
+  };
+  const content = {
+    eventId: event.id,
+    settlementId: intent.settlementId,
+    transferId: intent.transferId,
+    eventType: event.type,
+    occurredAt: new Date(event.createdAt).toISOString(),
+    snapshot,
+  };
+
+  return {
+    ...content,
+    contentHash: createHash("sha256")
+      .update(JSON.stringify(content))
+      .digest("hex"),
+  };
 }
 
 export function normalizeOzavOfframpIntentRequest(

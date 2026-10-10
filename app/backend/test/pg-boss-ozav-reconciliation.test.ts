@@ -6,6 +6,10 @@ import {
   PgBossOzavReconciliationScheduler,
 } from "../src/jobs/pg-boss.js";
 import {
+  OZAV_OFFRAMP_RECONCILIATION_DEAD_LETTER_QUEUE,
+  OZAV_OFFRAMP_RECONCILIATION_QUEUE,
+} from "../src/jobs/ozav-offramp-reconciliation.js";
+import {
   OZAV_RECONCILIATION_DEAD_LETTER_QUEUE,
   OZAV_RECONCILIATION_QUEUE,
   ozavReconciliationJobId,
@@ -48,12 +52,14 @@ describe("pg-boss OZAV reconciliation scheduling", () => {
       SETTLEMENT_ORCHESTRATION_QUEUE,
       OZAV_RECONCILIATION_DEAD_LETTER_QUEUE,
       OZAV_RECONCILIATION_QUEUE,
+      OZAV_OFFRAMP_RECONCILIATION_DEAD_LETTER_QUEUE,
+      OZAV_OFFRAMP_RECONCILIATION_QUEUE,
     ]);
-    expect(created[3]?.options).toMatchObject({
+    expect(created[5]?.options).toMatchObject({
       retryLimit: 5,
       retryBackoff: true,
       deadLetter:
-        OZAV_RECONCILIATION_DEAD_LETTER_QUEUE,
+        OZAV_OFFRAMP_RECONCILIATION_DEAD_LETTER_QUEUE,
     });
   });
 

@@ -7,6 +7,7 @@ import Fastify, {
 import type { SolanaSettlementConfirmer } from "./application/confirm-solana-settlement.js";
 import type { OzavOnrampReader } from "./application/get-ozav-onramp.js";
 import type { OzavOfframpInitiator } from "./application/initiate-ozav-offramp.js";
+import type { OzavOfframpReconciliationScheduler } from "./jobs/ozav-offramp-reconciliation.js";
 import type { SolanaSettlementPreparer } from "./application/prepare-solana-settlement.js";
 import {
   NoopSettlementJobPublisher,
@@ -26,6 +27,9 @@ export interface BuildAppOptions {
   ozavOnrampReader?: OzavOnrampReader | undefined;
   ozavOfframpInitiator?:
     | OzavOfframpInitiator
+    | undefined;
+  ozavOfframpReconciliationScheduler?:
+    | OzavOfframpReconciliationScheduler
     | undefined;
   solanaSettlementPreparer?:
     | SolanaSettlementPreparer
@@ -71,6 +75,8 @@ export async function buildApp(
 
   await registerOzavOfframpRoutes(app, {
     initiator: options.ozavOfframpInitiator,
+    reconciliationScheduler:
+      options.ozavOfframpReconciliationScheduler,
   });
 
   await registerSolanaSettlementRoutes(app, {

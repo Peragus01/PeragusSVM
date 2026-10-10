@@ -1,4 +1,5 @@
 import {
+  assertOzavOfframpTransferMatches,
   normalizeOzavOfframpBrlAmount,
   normalizeOzavTransferStatus,
   normalizeOzavUsdtAmount,
@@ -139,32 +140,6 @@ function assertQuote(
   ) {
     throw new OzavOfframpInitiationError(
       "OZAV quote does not match the off-ramp intent",
-    );
-  }
-}
-
-function assertTransfer(
-  transfer: OzavTransfer,
-  intent: OzavOfframpIntent,
-): void {
-  if (
-    transfer.customerId !== intent.customerId
-    || transfer.quoteId !== intent.quoteId
-    || transfer.source.type !== "wallet"
-    || transfer.source.walletId !== intent.walletId
-    || transfer.source.currency !== "USDT"
-    || transfer.destination.type
-      !== "payout_destination"
-    || transfer.destination.payoutDestinationId
-      !== intent.payoutDestinationId
-    || transfer.amounts.source.currency !== "USDT"
-    || normalizeOzavUsdtAmount(
-      transfer.amounts.source.amount,
-    ) !== intent.sourceAmountUsdt
-    || transfer.amounts.target.currency !== "BRL"
-  ) {
-    throw new OzavOfframpInitiationError(
-      "OZAV transfer does not match the off-ramp intent",
     );
   }
 }
@@ -413,7 +388,10 @@ export class InitiateOzavOfframpService
           request_id: settlement.requestId,
         },
       });
-    assertTransfer(created.transfer, intent);
+    assertOzavOfframpTransferMatches(
+      intent,
+      created.transfer,
+    );
 
     intent = await this.options.intents.saveTransfer({
       settlementId: intent.settlementId,

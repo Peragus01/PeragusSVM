@@ -1,6 +1,7 @@
 import type { Pool, QueryResult } from "pg";
 
 import {
+  normalizeOzavOfframpEvent,
   normalizeOzavOfframpBrlAmount,
   normalizeOzavOfframpIntentRequest,
   normalizeOzavTransferStatus,
@@ -9,12 +10,18 @@ import {
   sameOzavOfframpIntentRequest,
   type OzavOfframpIntent,
   type OzavOfframpIntentRequest,
+  type OzavOfframpStoredEvent,
 } from "../domain/ozav-offramp-intent.js";
+import type { OzavEvent } from "../providers/ozav-client.js";
 import type {
   OzavOfframpIntentRepository,
   SaveOzavOfframpQuoteInput,
   SaveOzavOfframpTransferInput,
 } from "./ozav-offramp-intent-repository.js";
+import type {
+  OzavOfframpReconciliationRepository,
+  UpdateOzavOfframpTransferInput,
+} from "./ozav-offramp-reconciliation-repository.js";
 
 interface IntentRow {
   settlement_id: string;
@@ -115,7 +122,9 @@ function sameSavedTransfer(
 }
 
 export class PostgresOzavOfframpIntentRepository
-  implements OzavOfframpIntentRepository
+  implements
+    OzavOfframpIntentRepository,
+    OzavOfframpReconciliationRepository
 {
   private readonly database: Pick<Pool, "query">;
 
@@ -331,5 +340,204 @@ export class PostgresOzavOfframpIntentRepository
     }
 
     return existing;
+  }
+
+  async updateTransferState(
+    input: UpdateOzavOfframpTransferInput,
+  ): Promise<OzavOfframpIntent> {
+    if (
+      !/^ozav_tr_[A-Za-z0-9_]+$/.test(input.transferId)
+      || Number.isNaN(input.updatedAt.getTime())
+    ) {
+      throw new OzavOfframpInitiationError(
+        "Invalid OZAV off-ramp reconciliation update",
+      );
+    }
+
+    const status = normalizeOzavTransferStatus(
+      input.providerStatus,
+    );
+    const sourceAmount = normalizeOzavUsdtAmount(
+      input.sourceAmountUsdt,
+    );
+    const targetAmount = normalizeOzavOfframpBrlAmount(
+      input.targetAmountBrl,
+    );
+    const updated = await this.database.query<IntentRow>(
+      `
+        update settlement_ozav_offramp_intents
+        set
+          provider_status = $3,
+          transfer_source_amount_usdt = $4,
+          transfer_target_amount_brl = $5,
+          updated_at = $6
+        where settlement_id = $1
+          and transfer_id = $2
+          and source_amount_usdt = $4
+        returning ${columns}
+      `,
+      [
+        input.settlementId,
+        input.transferId,
+        status,
+        sourceAmount,
+        targetAmount,
+        input.updatedAt,
+      ],
+    );
+
+    const row = updated.rows[0];
+    if (!row) {
+      throw new OzavOfframpInitiationError(
+        "OZAV off-ramp intent does not match its transfer update",
+      );
+    }
+
+    return mapIntent(row);
+  }
+
+  async recordEvent(
+    intent: OzavOfframpIntent,
+    event: OzavEvent,
+  ): Promise<{ inserted: boolean }> {
+    const record = normalizeOzavOfframpEvent(intent, event);
+    const inserted = await this.database.query(
+      `
+        insert into settlement_ozav_offramp_events (
+          event_id,
+          settlement_id,
+          transfer_id,
+          event_type,
+          occurred_at,
+          content_hash,
+          snapshot
+        )
+        select
+          $1::varchar(128),
+          settlement_id,
+          transfer_id,
+          $4::varchar(128),
+          $5::timestamptz,
+          $6::char(64),
+          $7::jsonb
+        from settlement_ozav_offramp_intents
+        where settlement_id = $2
+          and transfer_id = $3
+          and customer_id = $8
+          and wallet_id = $9
+          and quote_id = $10
+          and payout_destination_id = $11
+        on conflict (event_id) do nothing
+        returning event_id
+      `,
+      [
+        record.eventId,
+        intent.settlementId,
+        intent.transferId,
+        record.eventType,
+        record.occurredAt,
+        record.contentHash,
+        record.snapshot,
+        intent.customerId,
+        intent.walletId,
+        intent.quoteId,
+        intent.payoutDestinationId,
+      ],
+    );
+
+    if (inserted.rowCount === 1) {
+      return { inserted: true };
+    }
+
+    const existing = await this.database.query<{
+      content_hash: string;
+    }>(
+      `
+        select content_hash
+        from settlement_ozav_offramp_events
+        where event_id = $1
+          and settlement_id = $2
+          and transfer_id = $3
+      `,
+      [
+        record.eventId,
+        intent.settlementId,
+        intent.transferId,
+      ],
+    );
+
+    if (
+      existing.rows[0]?.content_hash
+      !== record.contentHash
+    ) {
+      throw new OzavOfframpInitiationError(
+        "OZAV off-ramp event conflict or missing matching intent",
+      );
+    }
+
+    return { inserted: false };
+  }
+
+  async listEvents(
+    settlementId: string,
+  ): Promise<OzavOfframpStoredEvent[]> {
+    const result = await this.database.query<{
+      event_id: string;
+      settlement_id: string;
+      transfer_id: string;
+      event_type: string;
+      occurred_at: Date;
+      content_hash: string;
+      snapshot: OzavOfframpStoredEvent["snapshot"];
+    }>(
+      `
+        select
+          event_id,
+          settlement_id,
+          transfer_id,
+          event_type,
+          occurred_at,
+          content_hash,
+          snapshot
+        from settlement_ozav_offramp_events
+        where settlement_id = $1
+        order by occurred_at, event_id
+      `,
+      [settlementId],
+    );
+
+    return result.rows.map((row) => ({
+      eventId: row.event_id,
+      settlementId: row.settlement_id,
+      transferId: row.transfer_id,
+      eventType: row.event_type,
+      occurredAt: row.occurred_at.toISOString(),
+      contentHash: row.content_hash,
+      snapshot: row.snapshot,
+    }));
+  }
+
+  async markEventsProcessed(
+    settlementId: string,
+    eventIds: string[],
+    processedAt: Date,
+  ): Promise<number> {
+    if (!eventIds.length) {
+      return 0;
+    }
+
+    const result = await this.database.query(
+      `
+        update settlement_ozav_offramp_events
+        set processed_at = $3
+        where settlement_id = $1
+          and event_id = any($2::varchar[])
+          and processed_at is null
+        returning event_id
+      `,
+      [settlementId, eventIds, processedAt],
+    );
+
+    return result.rowCount ?? 0;
   }
 }

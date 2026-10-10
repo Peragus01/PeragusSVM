@@ -7,9 +7,11 @@ import {
   EnsureSolanaContingencyReserveService,
   type OzavContingencyReserveGate,
 } from "./application/ensure-solana-contingency-reserve.js";
+import { ImportOzavOfframpEventsService } from "./application/import-ozav-offramp-events.js";
 import { ImportOzavOnrampEventsService } from "./application/import-ozav-onramp-events.js";
 import { InitiateOzavOnrampService } from "./application/initiate-ozav-onramp.js";
 import { ReconcileOzavOnrampService } from "./application/reconcile-ozav-onramp.js";
+import { ReconcileOzavOfframpService } from "./application/reconcile-ozav-offramp.js";
 import {
   ResolveSolanaContingencyReserveService,
   type ContingencyReserveResolver,
@@ -20,8 +22,14 @@ import { createDatabasePool } from "./database/pool.js";
 import {
   createJobQueue,
   ensureSettlementQueues,
+  PgBossOzavOfframpReconciliationScheduler,
   PgBossOzavReconciliationScheduler,
 } from "./jobs/pg-boss.js";
+import {
+  OZAV_OFFRAMP_RECONCILIATION_QUEUE,
+  OzavOfframpReconciliationJobHandler,
+  type OzavOfframpReconciliationJob,
+} from "./jobs/ozav-offramp-reconciliation.js";
 import {
   OZAV_RECONCILIATION_QUEUE,
   OzavReconciliationJobHandler,
@@ -36,6 +44,7 @@ import {
 import { OzavClient } from "./providers/ozav-client.js";
 import { loadLocalSolanaAuthority } from "./providers/local-solana-authority.js";
 import { PostgresOzavOnrampIntentRepository } from "./repositories/postgres-ozav-onramp-intent-repository.js";
+import { PostgresOzavOfframpIntentRepository } from "./repositories/postgres-ozav-offramp-intent-repository.js";
 import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "./repositories/postgres-settlement-repository.js";
 import { PostgresSolanaContingencyReserveRepository } from "./repositories/solana-contingency-reserve-repository.js";
@@ -77,6 +86,9 @@ const ozavRepository =
 
 const ozavIntentRepository =
   new PostgresOzavOnrampIntentRepository(pool);
+
+const ozavOfframpRepository =
+  new PostgresOzavOfframpIntentRepository(pool);
 
 let contingencyReserve:
   | OzavContingencyReserveGate
@@ -160,6 +172,22 @@ const ozavReconciler = new ReconcileOzavOnrampService({
     : {}),
 });
 
+const ozavOfframpImporter =
+  new ImportOzavOfframpEventsService({
+    client: ozavClient,
+    repository: ozavOfframpRepository,
+    settlements: repository,
+  });
+
+const ozavOfframpReconciler =
+  new ReconcileOzavOfframpService({
+    importer: ozavOfframpImporter,
+    repository: ozavOfframpRepository,
+    settlements: repository,
+    transitioner:
+      new TransitionSettlementService(repository),
+  });
+
 const ozavInitiator =
   env.OZAV_ONRAMP_WRITES_ENABLED
     ? new InitiateOzavOnrampService({
@@ -186,6 +214,13 @@ const boss = createJobQueue(
 
 const ozavReconciliationScheduler =
   new PgBossOzavReconciliationScheduler(
+    boss,
+    env.OZAV_RECONCILIATION_INTERVAL_SECONDS,
+    env.OZAV_RECONCILIATION_MAX_ATTEMPTS,
+  );
+
+const ozavOfframpReconciliationScheduler =
+  new PgBossOzavOfframpReconciliationScheduler(
     boss,
     env.OZAV_RECONCILIATION_INTERVAL_SECONDS,
     env.OZAV_RECONCILIATION_MAX_ATTEMPTS,
@@ -242,6 +277,14 @@ try {
       repository,
       ozavReconciler,
       ozavReconciliationScheduler,
+    );
+
+  const ozavOfframpReconciliationHandler =
+    new OzavOfframpReconciliationJobHandler(
+      repository,
+      ozavOfframpRepository,
+      ozavOfframpReconciler,
+      ozavOfframpReconciliationScheduler,
     );
 
   await boss.work<SettlementOrchestrationJob>(
@@ -327,6 +370,38 @@ try {
     },
   );
 
+  await boss.work<OzavOfframpReconciliationJob>(
+    OZAV_OFFRAMP_RECONCILIATION_QUEUE,
+    {
+      pollingIntervalSeconds:
+        env.JOB_POLL_INTERVAL_SECONDS,
+      localConcurrency: env.JOB_CONCURRENCY,
+    },
+    async ([job]) => {
+      if (!job) {
+        throw new Error(
+          "OZAV off-ramp reconciliation worker received an empty batch",
+        );
+      }
+
+      const result =
+        await ozavOfframpReconciliationHandler.execute(
+          job.data,
+        );
+
+      console.info(
+        JSON.stringify({
+          event:
+            "ozav_offramp_reconciliation_job_processed",
+          jobId: job.id,
+          ...result,
+        }),
+      );
+
+      return result;
+    },
+  );
+
   console.info(
     JSON.stringify({
       event: "worker_started",
@@ -343,6 +418,8 @@ try {
         env.OZAV_RECONCILIATION_INTERVAL_SECONDS,
       ozavReconciliationMaxAttempts:
         env.OZAV_RECONCILIATION_MAX_ATTEMPTS,
+      ozavOfframpReconciliationQueue:
+        OZAV_OFFRAMP_RECONCILIATION_QUEUE,
     }),
   );
 } catch (error) {

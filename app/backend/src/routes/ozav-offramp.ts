@@ -6,6 +6,7 @@ import {
   OzavOfframpSettlementNotFoundError,
 } from "../domain/ozav-offramp-intent.js";
 import type { OzavOfframpInitiator } from "../application/initiate-ozav-offramp.js";
+import type { OzavOfframpReconciliationScheduler } from "../jobs/ozav-offramp-reconciliation.js";
 import { OzavClientError } from "../providers/ozav-client.js";
 
 const settlementParamsSchema = z
@@ -25,6 +26,9 @@ const initiateOfframpSchema = z
 
 export interface OzavOfframpRoutesOptions {
   initiator?: OzavOfframpInitiator | undefined;
+  reconciliationScheduler?:
+    | OzavOfframpReconciliationScheduler
+    | undefined;
 }
 
 export async function registerOzavOfframpRoutes(
@@ -68,6 +72,15 @@ export async function registerOzavOfframpRoutes(
           payoutDestinationId:
             parsedBody.data.payout_destination_id,
         });
+        const reconciliation =
+          result.settlementStatus === "offramping"
+          && options.reconciliationScheduler
+            ? await options.reconciliationScheduler.schedule({
+                settlementId: result.settlementId,
+                transferId: result.transferId,
+                attempt: 1,
+              })
+            : null;
 
         reply.header(
           "Idempotency-Replayed",
@@ -113,6 +126,7 @@ export async function registerOzavOfframpRoutes(
               intent_created: result.intentCreated,
               quote_created: result.quoteCreated,
               environment: "test",
+              reconciliation,
             },
           });
       } catch (error) {

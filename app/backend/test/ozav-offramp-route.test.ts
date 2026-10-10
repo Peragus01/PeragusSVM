@@ -18,6 +18,7 @@ import {
 import {
   OzavClientError,
 } from "../src/providers/ozav-client.js";
+import type { OzavOfframpReconciliationScheduler } from "../src/jobs/ozav-offramp-reconciliation.js";
 import { registerOzavOfframpRoutes } from "../src/routes/ozav-offramp.js";
 
 const settlementId =
@@ -49,10 +50,15 @@ afterEach(async () => {
 
 async function appWith(
   initiator?: OzavOfframpInitiator,
+  reconciliationScheduler?:
+    OzavOfframpReconciliationScheduler,
 ) {
   const app = Fastify();
   applications.push(app);
-  await registerOzavOfframpRoutes(app, { initiator });
+  await registerOzavOfframpRoutes(app, {
+    initiator,
+    reconciliationScheduler,
+  });
   return app;
 }
 
@@ -128,8 +134,79 @@ describe("POST /v1/settlements/:id/offramp", () => {
         intent_created: true,
         quote_created: true,
         environment: "test",
+        reconciliation: null,
       },
     });
+  });
+
+  it("schedules reconciliation for an in-flight payout", async () => {
+    const jobs: unknown[] = [];
+    const scheduler: OzavOfframpReconciliationScheduler = {
+      async schedule(job) {
+        jobs.push(job);
+        return {
+          jobId:
+            "00000000-0000-5000-8000-000000000099",
+          attempt: job.attempt,
+          scheduled: true,
+          exhausted: false,
+        };
+      },
+    };
+    const app = await appWith(
+      initiatorReturning(result),
+      scheduler,
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/settlements/${settlementId}/offramp`,
+      payload: {
+        payout_destination_id: payoutDestinationId,
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(jobs).toEqual([{
+      settlementId,
+      transferId: "ozav_tr_offramp",
+      attempt: 1,
+    }]);
+    expect(response.json().meta.reconciliation)
+      .toMatchObject({
+        attempt: 1,
+        scheduled: true,
+      });
+  });
+
+  it("does not schedule an already paid payout", async () => {
+    let calls = 0;
+    const scheduler: OzavOfframpReconciliationScheduler = {
+      async schedule() {
+        calls += 1;
+        throw new Error("unexpected schedule");
+      },
+    };
+    const app = await appWith(
+      initiatorReturning({
+        ...result,
+        settlementStatus: "paid_out",
+        providerStatus: "completed",
+      }),
+      scheduler,
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/settlements/${settlementId}/offramp`,
+      payload: {
+        payout_destination_id: payoutDestinationId,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(calls).toBe(0);
+    expect(response.json().meta.reconciliation).toBeNull();
   });
 
   it("validates the payout destination before calling OZAV", async () => {

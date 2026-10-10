@@ -28,8 +28,10 @@ import { createDatabasePool } from "./database/pool.js";
 import {
   createJobQueue,
   ensureSettlementQueues,
+  PgBossOzavOfframpReconciliationScheduler,
   PgBossSettlementJobPublisher,
 } from "./jobs/pg-boss.js";
+import type { OzavOfframpReconciliationScheduler } from "./jobs/ozav-offramp-reconciliation.js";
 import {
   NoopSettlementJobPublisher,
   type SettlementJobPublisher,
@@ -53,6 +55,9 @@ let settlementRepository: SettlementRepository;
 let ozavOnrampReader: OzavOnrampReader | undefined;
 let ozavOfframpInitiator:
   | OzavOfframpInitiator
+  | undefined;
+let ozavOfframpReconciliationScheduler:
+  | OzavOfframpReconciliationScheduler
   | undefined;
 let solanaSettlementPreparer:
   | SolanaSettlementPreparer
@@ -89,6 +94,12 @@ if (env.DATABASE_URL) {
 
   pool = databasePool;
   boss = jobQueue;
+  ozavOfframpReconciliationScheduler =
+    new PgBossOzavOfframpReconciliationScheduler(
+      jobQueue,
+      env.OZAV_RECONCILIATION_INTERVAL_SECONDS,
+      env.OZAV_RECONCILIATION_MAX_ATTEMPTS,
+    );
 
   settlementRepository =
     new PostgresSettlementRepository(databasePool);
@@ -228,6 +239,7 @@ const app = await buildApp({
   settlementJobPublisher,
   ozavOnrampReader,
   ozavOfframpInitiator,
+  ozavOfframpReconciliationScheduler,
   solanaSettlementPreparer,
   solanaSettlementConfirmer,
 });
