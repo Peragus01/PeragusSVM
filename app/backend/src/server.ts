@@ -15,6 +15,10 @@ import {
   type OzavOnrampReader,
 } from "./application/get-ozav-onramp.js";
 import {
+  GetSettlementAuditService,
+  type SettlementAuditReader,
+} from "./application/get-settlement-audit.js";
+import {
   InitiateOzavOfframpService,
   type OzavOfframpInitiator,
 } from "./application/initiate-ozav-offramp.js";
@@ -43,6 +47,7 @@ import { PostgresOzavOfframpIntentRepository } from "./repositories/postgres-oza
 import { PostgresOzavOnrampIntentRepository } from "./repositories/postgres-ozav-onramp-intent-repository.js";
 import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onramp-repository.js";
 import { PostgresSettlementRepository } from "./repositories/postgres-settlement-repository.js";
+import { PostgresSolanaContingencyReserveRepository } from "./repositories/solana-contingency-reserve-repository.js";
 import { PostgresSolanaSettlementConfirmationRepository } from "./repositories/solana-settlement-confirmation-repository.js";
 import { PostgresSolanaSettlementPreparationRepository } from "./repositories/solana-settlement-preparation-repository.js";
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
@@ -53,6 +58,9 @@ let pool: Pool | undefined;
 let boss: PgBoss | undefined;
 let settlementRepository: SettlementRepository;
 let ozavOnrampReader: OzavOnrampReader | undefined;
+let settlementAuditReader:
+  | SettlementAuditReader
+  | undefined;
 let ozavOfframpInitiator:
   | OzavOfframpInitiator
   | undefined;
@@ -104,12 +112,34 @@ if (env.DATABASE_URL) {
   settlementRepository =
     new PostgresSettlementRepository(databasePool);
 
+  const onrampIntents =
+    new PostgresOzavOnrampIntentRepository(databasePool);
+  const onramps =
+    new PostgresOzavOnrampRepository(databasePool);
+  const offramps =
+    new PostgresOzavOfframpIntentRepository(databasePool);
+  const contingencyReserves =
+    new PostgresSolanaContingencyReserveRepository(
+      databasePool,
+    );
+  const solanaSettlements =
+    new PostgresSolanaSettlementConfirmationRepository(
+      databasePool,
+    );
+
   ozavOnrampReader = new GetOzavOnrampService({
     settlements: settlementRepository,
-    intents:
-      new PostgresOzavOnrampIntentRepository(databasePool),
-    onramps:
-      new PostgresOzavOnrampRepository(databasePool),
+    intents: onrampIntents,
+    onramps,
+  });
+
+  settlementAuditReader = new GetSettlementAuditService({
+    settlements: settlementRepository,
+    onrampIntents,
+    onramps,
+    contingencyReserves,
+    solanaSettlements,
+    offramps,
   });
 
   if (env.OZAV_OFFRAMP_WRITES_ENABLED) {
@@ -126,14 +156,8 @@ if (env.DATABASE_URL) {
     ozavOfframpInitiator =
       new InitiateOzavOfframpService({
         client: ozavClient,
-        intents:
-          new PostgresOzavOfframpIntentRepository(
-            databasePool,
-          ),
-        onramps:
-          new PostgresOzavOnrampRepository(
-            databasePool,
-          ),
+        intents: offramps,
+        onramps,
         settlements: settlementRepository,
         transitioner:
           new TransitionSettlementService(
@@ -203,10 +227,7 @@ if (env.DATABASE_URL) {
     solanaSettlementConfirmer =
       new ConfirmSolanaSettlementService({
         settlements: settlementRepository,
-        confirmations:
-          new PostgresSolanaSettlementConfirmationRepository(
-            databasePool,
-          ),
+        confirmations: solanaSettlements,
         connection: solanaConnection,
         programId: solanaProgramId,
         sourceMint,
@@ -238,6 +259,7 @@ const app = await buildApp({
   settlementRepository,
   settlementJobPublisher,
   ozavOnrampReader,
+  settlementAuditReader,
   ozavOfframpInitiator,
   ozavOfframpReconciliationScheduler,
   solanaSettlementPreparer,
