@@ -12,6 +12,9 @@
     "test:watch": "vitest",
     "audit:prod": "npm audit --omit=dev",
     "db:migrate": "node scripts/migrate.mjs",
+    "demo:pix-expiry:prepare": "node scripts/ozav-pix-expiry-demo.mjs prepare",
+    "demo:pix-expiry:watch": "node scripts/ozav-pix-expiry-demo.mjs watch",
+    "demo:pix-success": "node scripts/ozav-pix-expiry-demo.mjs success",
     "dev:worker": "tsx watch src/worker.ts",
     "start:worker": "node dist/worker.js"
   },
