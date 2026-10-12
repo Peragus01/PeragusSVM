@@ -50,6 +50,50 @@ describe("settlement API", () => {
     });
   });
 
+  it("funds the acquiring wallet only through the explicit demo adapter", async () => {
+    const calls: Array<{
+      wallet: string;
+      sourceAmount: string;
+    }> = [];
+    const app = await buildApp({
+      demoWalletFunder: {
+        async ensureFunded(input) {
+          calls.push(input);
+          return {
+            wallet: input.wallet,
+            sourceTokenAccount:
+              "11111111111111111111111111111112",
+            sourceBalance: input.sourceAmount,
+            solLamports: 10_000_000,
+            funded: true,
+            signature: "devnet-funding-signature",
+          };
+        },
+      },
+    });
+    applications.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/settlements",
+      payload: {
+        ...validRequest,
+        request_id: "merchant-demo-funding-1001",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(calls).toEqual([{
+      wallet: validRequest.payer_wallet,
+      sourceAmount: validRequest.source_amount,
+    }]);
+    expect(response.json().meta).toMatchObject({
+      demo_wallet_funded: true,
+      demo_funding_signature:
+        "devnet-funding-signature",
+    });
+  });
+
   it("returns the original settlement for an identical retry", async () => {
     const app = await buildApp();
     applications.push(app);

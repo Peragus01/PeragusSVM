@@ -5,11 +5,14 @@ import Fastify, {
 } from "fastify";
 
 import type { SolanaSettlementConfirmer } from "./application/confirm-solana-settlement.js";
+import type { DemoWalletFunder } from "./application/fund-devnet-demo-wallet.js";
 import type { OzavOnrampReader } from "./application/get-ozav-onramp.js";
 import type { SettlementAuditReader } from "./application/get-settlement-audit.js";
 import type { OzavOfframpInitiator } from "./application/initiate-ozav-offramp.js";
 import type { OzavOfframpReconciliationScheduler } from "./jobs/ozav-offramp-reconciliation.js";
 import type { SolanaSettlementPreparer } from "./application/prepare-solana-settlement.js";
+import type { SolanaRollbackDemoPreparer } from "./application/prepare-solana-rollback-demo.js";
+import type { SandboxPixPaymentSimulator } from "./application/simulate-sandbox-pix-payment.js";
 import {
   NoopSettlementJobPublisher,
   type SettlementJobPublisher,
@@ -26,7 +29,11 @@ export interface BuildAppOptions {
   logger?: FastifyServerOptions["logger"];
   settlementRepository?: SettlementRepository;
   settlementJobPublisher?: SettlementJobPublisher;
+  demoWalletFunder?: DemoWalletFunder | undefined;
   ozavOnrampReader?: OzavOnrampReader | undefined;
+  sandboxPixPaymentSimulator?:
+    | SandboxPixPaymentSimulator
+    | undefined;
   settlementAuditReader?:
     | SettlementAuditReader
     | undefined;
@@ -38,6 +45,9 @@ export interface BuildAppOptions {
     | undefined;
   solanaSettlementPreparer?:
     | SolanaSettlementPreparer
+    | undefined;
+  solanaRollbackDemoPreparer?:
+    | SolanaRollbackDemoPreparer
     | undefined;
   solanaSettlementConfirmer?:
     | SolanaSettlementConfirmer
@@ -70,11 +80,14 @@ export async function buildApp(
     settlementJobPublisher:
       options.settlementJobPublisher
       ?? new NoopSettlementJobPublisher(),
+    demoWalletFunder: options.demoWalletFunder,
     now: options.now ?? (() => new Date()),
   });
 
   await registerOzavOnrampRoutes(app, {
     reader: options.ozavOnrampReader,
+    sandboxPaymentSimulator:
+      options.sandboxPixPaymentSimulator,
     now: options.now ?? (() => new Date()),
   });
 
@@ -90,6 +103,8 @@ export async function buildApp(
 
   await registerSolanaSettlementRoutes(app, {
     preparer: options.solanaSettlementPreparer,
+    rollbackDemoPreparer:
+      options.solanaRollbackDemoPreparer,
     confirmer: options.solanaSettlementConfirmer,
   });
 

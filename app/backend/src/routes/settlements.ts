@@ -7,6 +7,7 @@ import {
   IdempotencyConflictError,
   SettlementExpiredError,
 } from "../application/create-settlement.js";
+import type { DemoWalletFunder } from "../application/fund-devnet-demo-wallet.js";
 import type { Settlement } from "../domain/settlement.js";
 import type {
   SettlementJobPublisher,
@@ -72,6 +73,7 @@ const settlementParamsSchema = z
 export interface SettlementRoutesOptions {
   repository: SettlementRepository;
   settlementJobPublisher: SettlementJobPublisher;
+  demoWalletFunder?: DemoWalletFunder | undefined;
   now: () => Date;
 }
 
@@ -160,6 +162,30 @@ export async function registerSettlementRoutes(
         expiresAt: parsed.data.expires_at,
       });
 
+      let demoFunding = null;
+      if (
+        options.demoWalletFunder
+        && result.settlement.status === "created"
+      ) {
+        try {
+          demoFunding =
+            await options.demoWalletFunder.ensureFunded({
+              wallet: result.settlement.payerWallet,
+              sourceAmount:
+                result.settlement.sourceAmount,
+            });
+        } catch {
+          return reply.code(502).send({
+            error: {
+              code: "DEMO_WALLET_FUNDING_FAILED",
+              message:
+                "Devnet demo wallet funding is temporarily unavailable",
+              retryable: true,
+            },
+          });
+        }
+      }
+
       await options.settlementJobPublisher.enqueue({
         settlementId: result.settlement.id,
         requestId: result.settlement.requestId,
@@ -179,6 +205,10 @@ export async function registerSettlementRoutes(
         data: serializeSettlement(result.settlement),
         meta: {
           idempotent_replay: !result.created,
+          demo_wallet_funded:
+            demoFunding?.funded ?? false,
+          demo_funding_signature:
+            demoFunding?.signature ?? null,
         },
       });
     } catch (error) {

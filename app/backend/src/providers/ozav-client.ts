@@ -471,6 +471,7 @@ export class OzavClient {
 
   private async post(
     request: OzavWriteRequest,
+    acceptProcessing = false,
   ): Promise<OzavResponse> {
     for (let attempt = 1; attempt <= this.attempts; attempt += 1) {
       try {
@@ -479,7 +480,10 @@ export class OzavClient {
           this.apiKey,
           this.timeoutMs,
         );
-        if (result.statusCode === 202) {
+        if (
+          result.statusCode === 202
+          && !acceptProcessing
+        ) {
           throw new OzavClientError(
             "OZAV HTTP 202",
             true,
@@ -637,6 +641,18 @@ export class OzavClient {
       idempotentReplayed:
         response.headers?.["idempotent-replayed"] === "true",
     };
+  }
+
+  async simulateTransfer(id: string): Promise<void> {
+    identifier(id, "ozav_tr_");
+    await this.post(
+      {
+        path:
+          `/v2/transfers/${encodeURIComponent(id)}/simulate`,
+        body: {},
+      },
+      true,
+    );
   }
 
   async createOfframpQuote(

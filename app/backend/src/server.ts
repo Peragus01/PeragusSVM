@@ -11,6 +11,10 @@ import {
   type SolanaSettlementConfirmer,
 } from "./application/confirm-solana-settlement.js";
 import {
+  FundDevnetDemoWalletService,
+  type DemoWalletFunder,
+} from "./application/fund-devnet-demo-wallet.js";
+import {
   GetOzavOnrampService,
   type OzavOnrampReader,
 } from "./application/get-ozav-onramp.js";
@@ -26,6 +30,14 @@ import {
   PrepareSolanaSettlementService,
   type SolanaSettlementPreparer,
 } from "./application/prepare-solana-settlement.js";
+import {
+  PrepareSolanaRollbackDemoService,
+  type SolanaRollbackDemoPreparer,
+} from "./application/prepare-solana-rollback-demo.js";
+import {
+  SimulateSandboxPixPaymentService,
+  type SandboxPixPaymentSimulator,
+} from "./application/simulate-sandbox-pix-payment.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
 import { createDatabasePool } from "./database/pool.js";
@@ -33,6 +45,7 @@ import {
   createJobQueue,
   ensureSettlementQueues,
   PgBossOzavOfframpReconciliationScheduler,
+  PgBossOzavReconciliationScheduler,
   PgBossSettlementJobPublisher,
 } from "./jobs/pg-boss.js";
 import type { OzavOfframpReconciliationScheduler } from "./jobs/ozav-offramp-reconciliation.js";
@@ -57,7 +70,11 @@ const env = getEnv();
 let pool: Pool | undefined;
 let boss: PgBoss | undefined;
 let settlementRepository: SettlementRepository;
+let demoWalletFunder: DemoWalletFunder | undefined;
 let ozavOnrampReader: OzavOnrampReader | undefined;
+let sandboxPixPaymentSimulator:
+  | SandboxPixPaymentSimulator
+  | undefined;
 let settlementAuditReader:
   | SettlementAuditReader
   | undefined;
@@ -69,6 +86,9 @@ let ozavOfframpReconciliationScheduler:
   | undefined;
 let solanaSettlementPreparer:
   | SolanaSettlementPreparer
+  | undefined;
+let solanaRollbackDemoPreparer:
+  | SolanaRollbackDemoPreparer
   | undefined;
 let solanaSettlementConfirmer:
   | SolanaSettlementConfirmer
@@ -108,6 +128,12 @@ if (env.DATABASE_URL) {
       env.OZAV_RECONCILIATION_INTERVAL_SECONDS,
       env.OZAV_RECONCILIATION_MAX_ATTEMPTS,
     );
+  const ozavReconciliationScheduler =
+    new PgBossOzavReconciliationScheduler(
+      jobQueue,
+      env.OZAV_RECONCILIATION_INTERVAL_SECONDS,
+      env.OZAV_RECONCILIATION_MAX_ATTEMPTS,
+    );
 
   settlementRepository =
     new PostgresSettlementRepository(databasePool);
@@ -142,8 +168,26 @@ if (env.DATABASE_URL) {
     offramps,
   });
 
+  if (env.PERAGUS_SANDBOX_DEMO_ENABLED) {
+    sandboxPixPaymentSimulator =
+      new SimulateSandboxPixPaymentService({
+        settlements: settlementRepository,
+        onramps,
+        client: new OzavClient({
+          apiKey: env.OZAV_API_KEY!,
+          timeoutMs: 10_000,
+          attempts: 1,
+        }),
+        reconciliationScheduler:
+          ozavReconciliationScheduler,
+      });
+  }
+
   if (env.OZAV_OFFRAMP_WRITES_ENABLED) {
-    if (env.NODE_ENV === "production") {
+    if (
+      env.NODE_ENV === "production"
+      && !env.PERAGUS_SANDBOX_DEMO_ENABLED
+    ) {
       throw new Error(
         "OZAV sandbox off-ramp writes cannot be enabled in production",
       );
@@ -170,7 +214,10 @@ if (env.DATABASE_URL) {
   }
 
   if (env.SOLANA_COSIGNING_ENABLED) {
-    if (env.NODE_ENV === "production") {
+    if (
+      env.NODE_ENV === "production"
+      && !env.PERAGUS_SANDBOX_DEMO_ENABLED
+    ) {
       throw new Error(
         "Local Solana keypair signers cannot be enabled in production; configure an HSM/KMS signer adapter",
       );
@@ -208,6 +255,31 @@ if (env.DATABASE_URL) {
       env.SOLANA_LIQUIDITY_KEYPAIR_PATH,
       "SOLANA_LIQUIDITY_KEYPAIR_PATH",
     );
+
+    if (env.PERAGUS_SANDBOX_DEMO_ENABLED) {
+      const fundingAuthority =
+        loadLocalSolanaAuthority(
+          env.SOLANA_FEE_PAYER_KEYPAIR_PATH!,
+          "SOLANA_FEE_PAYER_KEYPAIR_PATH",
+        );
+      demoWalletFunder =
+        new FundDevnetDemoWalletService({
+          connection: solanaConnection,
+          sourceMint,
+          fundingAuthority,
+        });
+
+      solanaRollbackDemoPreparer =
+        new PrepareSolanaRollbackDemoService({
+          settlements: settlementRepository,
+          connection: solanaConnection,
+          programId: solanaProgramId,
+          sourceMint,
+          destinationMint,
+          attestationAuthority,
+          liquidityAuthority,
+        });
+    }
 
     solanaSettlementPreparer =
       new PrepareSolanaSettlementService({
@@ -258,11 +330,14 @@ const app = await buildApp({
   },
   settlementRepository,
   settlementJobPublisher,
+  demoWalletFunder,
   ozavOnrampReader,
+  sandboxPixPaymentSimulator,
   settlementAuditReader,
   ozavOfframpInitiator,
   ozavOfframpReconciliationScheduler,
   solanaSettlementPreparer,
+  solanaRollbackDemoPreparer,
   solanaSettlementConfirmer,
 });
 

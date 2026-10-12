@@ -2,23 +2,21 @@
 
 This document records the successful Peragus roundtrip executed on October 10,
 2026. It is a reproducible technical proof, not evidence of a production-money
-transfer. OZAV ran in its test environment and every Solana transaction ran on
-Devnet.
+transfer. Liquidity rails ran in a provider test environment and every Solana
+transaction ran on Devnet.
 
 ## Outcome
 
 ```text
-Pix -> OZAV on-ramp -> contingency resolution -> atomic Solana settlement
-    -> OZAV off-ramp -> paid_out
+Pix -> provider on-ramp -> contingency resolution -> atomic Solana settlement
+    -> provider off-ramp -> paid_out
 ```
 
 | Field | Value |
 | --- | --- |
 | Settlement ID | `5def0afd-621c-4d79-88a8-8bead9088e6a` |
 | Final internal status | `paid_out` |
-| On-ramp transfer | `ozav_tr_01M4KNNHFJAZ9NRATSQ5C1XHZH` |
 | On-ramp status | `completed` |
-| Off-ramp transfer | `ozav_tr_01M4KNPGJ50T6V0ESZKWCNA6K1` |
 | Off-ramp status | `completed` |
 | Contingency reserve | `refunded` |
 | Solana evidence | `verified` |
@@ -26,7 +24,7 @@ Pix -> OZAV on-ramp -> contingency resolution -> atomic Solana settlement
 
 ## Amounts and Token-2022 balance proof
 
-OZAV's on-ramp quote converted 500 BRL to 89.55 USDT. The atomic Solana
+The provider's on-ramp quote converted 500 BRL to 89.55 USDT. The atomic Solana
 transaction then produced these exact base-unit deltas:
 
 | Token account | Before | After | Delta |
@@ -36,7 +34,7 @@ transaction then produced these exact base-unit deltas:
 | Liquidity USDT | 10,000,000,000 | 9,910,450,000 | -89,550,000 |
 | Recipient USDT | 0 | 89,550,000 | +89,550,000 |
 
-Both demo mBRL and USDT use six decimal places in this run. The OZAV sandbox
+Both demo mBRL and USDT use six decimal places in this run. The provider sandbox
 off-ramp quote returned 494.52 BRL for 89.55 USDT.
 
 ## Solana identities
@@ -64,17 +62,17 @@ The settlement repository records the same signature as both the create and
 execute signature because the program creates and executes the settlement
 atomically in one transaction.
 
-## Persisted OZAV event evidence
+## Persisted provider event evidence
 
 Only normalized financial facts are stored. SHA-256 content hashes make a
 replayed event distinguishable from changed content under the same event ID.
 
 | Stage | Event | Provider state | Content hash |
 | --- | --- | --- | --- |
-| On-ramp | `ozav_evt_01M4KNNJJMGCXZGR4PQ37X6YQ2` | `awaiting_payment` | `e52eedaf30d83630f315f09dcc55c244a6272d0c22685c4c2b0cc7b8688ae3ad` |
-| On-ramp | `ozav_evt_01M4KNNTXEMDR9VF5YBQKSZRTH` | `payment_confirmed` | `9807e6aadf85a78d96707462e0b70f2355868bef1465889d7774d6a3f89b4b33` |
-| On-ramp | `ozav_evt_01M4KNNVMR32DY83Q8CXBP8QEW` | `completed` | `f1c1685bb69733dbb8b835b29ad4730a5b4935945ed6b52a33478f711cd3e272` |
-| Off-ramp | `ozav_evt_01M4KNPJ84BWWSA4PP40TFTJNC` | `completed` | `38bffe138bd37d3167bf88203f333a7e91ba9166f77e09d97801a8c60ad8da38` |
+| On-ramp | Event 1 | `awaiting_payment` | `e52eedaf30d83630f315f09dcc55c244a6272d0c22685c4c2b0cc7b8688ae3ad` |
+| On-ramp | Event 2 | `payment_confirmed` | `9807e6aadf85a78d96707462e0b70f2355868bef1465889d7774d6a3f89b4b33` |
+| On-ramp | Event 3 | `completed` | `f1c1685bb69733dbb8b835b29ad4730a5b4935945ed6b52a33478f711cd3e272` |
+| Off-ramp | Event 4 | `completed` | `38bffe138bd37d3167bf88203f333a7e91ba9166f77e09d97801a8c60ad8da38` |
 
 The importer validates that each transfer belongs to the persisted customer,
 quote, wallet, rail, currencies, amounts, and payout destination before an
@@ -127,7 +125,7 @@ expire before payment while the Solana reserve is still refunded:
 | Field | Value |
 | --- | --- |
 | Settlement | `a9616fbb-6117-4fe9-a122-95247b232b88` |
-| OZAV status | `expired` |
+| Provider status | `expired` |
 | Internal status | `failed` |
 | Reserve status | `refunded` |
 | Resolution reason | `provider_failed_before_payment` |
@@ -138,7 +136,15 @@ Its reserve refund also reached `Finalized` on Devnet:
 
 ## Scope and safety boundary
 
-- OZAV activity in this record is sandbox activity; no real Pix payment was
+The interactive control room includes a sandbox-only atomic rollback proof. It
+records a deliberately failed Devnet transaction after leg A reaches its
+Token-2022 CPI and leg B reports insufficient funds. The interface verifies
+that all four token balances are unchanged, the settlement PDA was not created,
+and the backend settlement remains `tokenized`, ready for the valid transaction.
+Only token state is rolled back; the failed transaction may still consume a
+small Devnet network fee.
+
+- Provider activity in this record is sandbox activity; no real Pix payment was
   sent.
 - Solana activity uses Devnet and demo Token-2022 mints; the balances have no
   monetary value.

@@ -15,7 +15,7 @@ export const ozavReconciliationJobSchema = z
   .object({
     settlementId: z.string().uuid(),
     requestId: z.string().min(1).max(128),
-    attempt: z.number().int().min(1).max(1_000_000),
+    attempt: z.number().int().min(0).max(1_000_000),
   })
   .strict();
 
@@ -33,6 +33,7 @@ export interface OzavReconciliationScheduleResult {
 export interface OzavReconciliationScheduler {
   schedule(
     job: OzavReconciliationJob,
+    options?: { immediate?: boolean },
   ): Promise<OzavReconciliationScheduleResult>;
 }
 

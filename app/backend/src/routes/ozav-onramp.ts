@@ -6,6 +6,10 @@ import {
   type OzavOnrampReader,
   type OzavOnrampView,
 } from "../application/get-ozav-onramp.js";
+import {
+  SandboxPixPaymentError,
+  type SandboxPixPaymentSimulator,
+} from "../application/simulate-sandbox-pix-payment.js";
 
 const settlementParamsSchema = z
   .object({
@@ -15,6 +19,9 @@ const settlementParamsSchema = z
 
 export interface OzavOnrampRoutesOptions {
   reader?: OzavOnrampReader | undefined;
+  sandboxPaymentSimulator?:
+    | SandboxPixPaymentSimulator
+    | undefined;
   now?: (() => Date) | undefined;
 }
 
@@ -35,9 +42,6 @@ function serializeOnramp(
       view.quotedTargetAmountUsdt,
     pix: payment
       ? {
-          intent_id: payment.intentId,
-          br_code: payment.brCode,
-          qr_code_image: payment.qrCodeImage,
           expires_at: payment.expiresAt.toISOString(),
           expired:
             payment.expiresAt.getTime() <= now.getTime(),
@@ -70,7 +74,7 @@ export async function registerOzavOnrampRoutes(
           error: {
             code: "ONRAMP_STORAGE_UNAVAILABLE",
             message:
-              "OZAV on-ramp storage is not configured",
+              "Liquidity-rail storage is not configured",
           },
         });
       }
@@ -95,6 +99,83 @@ export async function registerOzavOnrampRoutes(
             error: {
               code: "SETTLEMENT_NOT_FOUND",
               message: "Settlement was not found",
+            },
+          });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    "/v1/settlements/:id/onramp/simulate-payment",
+    async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      const parsed = settlementParamsSchema.safeParse(
+        request.params,
+      );
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: {
+            code: "VALIDATION_ERROR",
+            message: "Settlement ID is invalid",
+          },
+        });
+      }
+      if (!options.sandboxPaymentSimulator) {
+        return reply.code(503).send({
+          error: {
+            code: "SANDBOX_DEMO_DISABLED",
+            message:
+              "Sandbox checkout controls are not enabled",
+          },
+        });
+      }
+
+      try {
+        const result =
+          await options.sandboxPaymentSimulator.execute(
+            parsed.data.id,
+          );
+        return reply.code(202).send({
+          data: {
+            settlement_id: result.settlementId,
+            settlement_status: result.settlementStatus,
+            accepted: result.accepted,
+            reconciliation_scheduled:
+              result.reconciliationScheduled,
+          },
+          meta: {
+            idempotent_replay:
+              result.idempotentReplay,
+            environment: "sandbox",
+          },
+        });
+      } catch (error) {
+        if (error instanceof SandboxPixPaymentError) {
+          const statusCode =
+            error.code === "SETTLEMENT_NOT_FOUND"
+              ? 404
+              : error.code
+                  === "SANDBOX_PAYMENT_NOT_READY"
+                ? 409
+                : 502;
+          return reply.code(statusCode).send({
+            error: {
+              code: error.code,
+              message:
+                error.code === "SETTLEMENT_NOT_FOUND"
+                  ? "Settlement was not found"
+                  : error.code
+                      === "SANDBOX_PAYMENT_NOT_READY"
+                    ? "Sandbox payment is not ready"
+                    : "Sandbox payment control is temporarily unavailable",
+              retryable:
+                error.code
+                === "SANDBOX_PAYMENT_UNAVAILABLE",
+              ...(error.settlementStatus
+                ? { status: error.settlementStatus }
+                : {}),
             },
           });
         }

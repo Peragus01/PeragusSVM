@@ -116,6 +116,36 @@ describe("pg-boss OZAV reconciliation scheduling", () => {
       });
   });
 
+  it("can wake reconciliation immediately after a sandbox payment", async () => {
+    const calls: unknown[][] = [];
+    const immediateJob = { ...job, attempt: 0 };
+    const expectedId =
+      ozavReconciliationJobId(immediateJob);
+    const boss = {
+      async sendAfter(...input: unknown[]) {
+        calls.push(input);
+        return expectedId;
+      },
+    } as unknown as PgBoss;
+    const scheduler =
+      new PgBossOzavReconciliationScheduler(
+        boss,
+        30,
+        120,
+      );
+
+    await scheduler.schedule(immediateJob, {
+      immediate: true,
+    });
+
+    expect(calls).toEqual([[
+      OZAV_RECONCILIATION_QUEUE,
+      immediateJob,
+      { id: expectedId },
+      0,
+    ]]);
+  });
+
   it("stops without publishing past the attempt limit", async () => {
     let sends = 0;
     const boss = {

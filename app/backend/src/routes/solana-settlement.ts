@@ -16,6 +16,10 @@ import {
   SolanaSettlementNotReadyError,
   type SolanaSettlementPreparer,
 } from "../application/prepare-solana-settlement.js";
+import {
+  SolanaRollbackDemoUnavailableError,
+  type SolanaRollbackDemoPreparer,
+} from "../application/prepare-solana-rollback-demo.js";
 
 const settlementParamsSchema = z
   .object({
@@ -38,6 +42,9 @@ const confirmSettlementSchema = z
 
 export interface SolanaSettlementRoutesOptions {
   preparer?: SolanaSettlementPreparer | undefined;
+  rollbackDemoPreparer?:
+    | SolanaRollbackDemoPreparer
+    | undefined;
   confirmer?: SolanaSettlementConfirmer | undefined;
 }
 
@@ -45,6 +52,123 @@ export async function registerSolanaSettlementRoutes(
   app: FastifyInstance,
   options: SolanaSettlementRoutesOptions,
 ): Promise<void> {
+  app.post(
+    "/v1/settlements/:id/solana/rollback-demo/prepare",
+    async (request, reply) => {
+      const parsed = settlementParamsSchema.safeParse(
+        request.params,
+      );
+
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: {
+            code: "VALIDATION_ERROR",
+            message: "Settlement ID is invalid",
+          },
+        });
+      }
+
+      if (!options.rollbackDemoPreparer) {
+        return reply.code(503).send({
+          error: {
+            code: "SANDBOX_DEMO_DISABLED",
+            message:
+              "Atomic rollback demonstration is disabled",
+          },
+        });
+      }
+
+      try {
+        const result =
+          await options.rollbackDemoPreparer.execute(
+            parsed.data.id,
+          );
+
+        reply.header("Cache-Control", "no-store");
+
+        return reply.code(200).send({
+          data: {
+            settlement_id: result.settlementId,
+            settlement_pda: result.settlementPda,
+            corridor_pda: result.corridorPda,
+            config_pda: result.configPda,
+            transaction_base64: result.transactionBase64,
+            message_hash: result.messageHash,
+            fee_payer: result.feePayer,
+            required_external_signer:
+              result.requiredExternalSigner,
+            recent_blockhash: result.recentBlockhash,
+            last_valid_block_height:
+              result.lastValidBlockHeight,
+            scenario: result.scenario,
+            injected_destination_amount:
+              result.injectedDestinationAmount,
+            available_destination_balance:
+              result.availableDestinationBalance,
+            token_accounts: {
+              payer_source:
+                result.tokenAccounts.payerSource,
+              liquidity_source:
+                result.tokenAccounts.liquiditySource,
+              liquidity_destination:
+                result.tokenAccounts.liquidityDestination,
+              recipient_destination:
+                result.tokenAccounts.recipientDestination,
+            },
+          },
+          meta: {
+            environment: "sandbox",
+            network: "devnet",
+            expected_result: "transaction_failure",
+          },
+        });
+      } catch (error) {
+        if (error instanceof SolanaSettlementNotFoundError) {
+          return reply.code(404).send({
+            error: {
+              code: "SETTLEMENT_NOT_FOUND",
+              message: "Settlement was not found",
+            },
+          });
+        }
+
+        if (error instanceof SolanaSettlementNotReadyError) {
+          return reply.code(409).send({
+            error: {
+              code: "SETTLEMENT_NOT_TOKENIZED",
+              message:
+                "Settlement must be tokenized before the rollback demonstration",
+              status: error.status,
+            },
+          });
+        }
+
+        if (error instanceof SolanaSettlementExpiredError) {
+          return reply.code(422).send({
+            error: {
+              code: "SETTLEMENT_EXPIRED",
+              message: "Settlement authorization has expired",
+            },
+          });
+        }
+
+        if (
+          error instanceof SolanaRollbackDemoUnavailableError
+        ) {
+          return reply.code(409).send({
+            error: {
+              code: "ROLLBACK_DEMO_UNAVAILABLE",
+              message:
+                "Atomic rollback demonstration is unavailable",
+            },
+          });
+        }
+
+        throw error;
+      }
+    },
+  );
+
   app.post(
     "/v1/settlements/:id/solana/prepare",
     async (request, reply) => {

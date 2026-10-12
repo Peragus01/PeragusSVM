@@ -181,6 +181,22 @@ describe("OZAV sandbox write client", () => {
     expect(subject.delays).toEqual([1_000]);
   });
 
+  it("accepts an asynchronous sandbox payment simulation", async () => {
+    const subject = setup([{
+      statusCode: 202,
+      body: null,
+    }]);
+
+    await expect(
+      subject.client.simulateTransfer("ozav_tr_test"),
+    ).resolves.toBeUndefined();
+    expect(subject.requests).toEqual([{
+      path: "/v2/transfers/ozav_tr_test/simulate",
+      body: {},
+    }]);
+    expect(subject.delays).toEqual([]);
+  });
+
   it("does not send malformed idempotency keys", async () => {
     const subject = setup([]);
     await expect(subject.client.createTransfer({

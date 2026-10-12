@@ -80,7 +80,10 @@ function explorer(signature) {
 }
 
 function assertDemoEnvironment(env) {
-  if (env.NODE_ENV === "production") {
+  if (
+    env.NODE_ENV === "production"
+    && !env.PERAGUS_SANDBOX_DEMO_ENABLED
+  ) {
     throw new Error("The Pix expiry demo is disabled in production");
   }
   if (!env.OZAV_ONRAMP_WRITES_ENABLED) {
@@ -688,7 +691,7 @@ async function completeSandboxOnramp(
     && Date.now() < deadline
   ) {
     console.log(
-      `On-ramp OZAV em ${transfer.status}; aguardando...`,
+      `On-ramp provider status: ${transfer.status}; waiting...`,
     );
     await delay(2_000);
     transfer = await context.client.getTransfer(transferId);
@@ -696,7 +699,7 @@ async function completeSandboxOnramp(
 
   if (transfer.status !== "completed") {
     throw new Error(
-      `OZAV on-ramp did not complete: ${transfer.status}`,
+      `The sandbox on-ramp did not complete: ${transfer.status}`,
     );
   }
 
@@ -722,6 +725,79 @@ async function completeSandboxOnramp(
   }
 
   return { transfer, reconciliation, settlement, reserve };
+}
+
+async function advanceExistingSettlement(context, settlementId) {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      .test(settlementId)
+  ) {
+    throw new Error(
+      "A valid settlement id is required in advance mode",
+    );
+  }
+
+  const [initialSettlement, binding, initialReserve] =
+    await Promise.all([
+      context.settlements.findById(settlementId),
+      context.onramps.findBinding(settlementId),
+      context.reserves.find(settlementId),
+    ]);
+
+  if (!initialSettlement || !binding || !initialReserve) {
+    throw new Error(
+      `Settlement ${settlementId} is not ready. Wait until the browser shows awaiting_pix and a funded reserve.`,
+    );
+  }
+  if (
+    !new Set(["awaiting_pix", "pix_confirmed", "tokenized"])
+      .has(initialSettlement.status)
+  ) {
+    throw new Error(
+      `Settlement ${settlementId} cannot be advanced from ${initialSettlement.status}`,
+    );
+  }
+  if (
+    initialReserve.status !== "funded"
+    && initialReserve.status !== "refunded"
+  ) {
+    throw new Error(
+      `Settlement ${settlementId} has an incompatible reserve status: ${initialReserve.status}`,
+    );
+  }
+
+  console.log(
+    "Peragus | Advancing the existing sandbox settlement",
+  );
+  console.log(`Settlement: ${settlementId}`);
+  const result = await completeSandboxOnramp(
+    context,
+    settlementId,
+    binding.transferId,
+  );
+
+  console.log(
+    "\nON-RAMP COMPLETE + SETTLEMENT TOKENIZED: OK",
+  );
+  console.table([{
+    settlement_id: settlementId,
+    rail_status: result.transfer.status,
+    source_leg: result.transfer.sourceLegStatus,
+    destination_leg: result.transfer.destinationLegStatus,
+    settlement_status: result.settlement.status,
+    reserve_status: result.reserve.status,
+  }]);
+  console.log(
+    "RESERVE DEVNET:",
+    explorer(result.reserve.createSignature),
+  );
+  console.log(
+    "RESERVE REFUND DEVNET:",
+    explorer(result.reserve.refundSignature),
+  );
+  console.log(
+    "The browser-created settlement can now be signed in the Peragus control room.",
+  );
 }
 
 async function executeAtomicSettlement(context, settlementId) {
@@ -1256,15 +1332,21 @@ if (!new Set([
   "prepare",
   "watch",
   "success",
+  "advance",
   "offramp",
 ]).has(mode)) {
   throw new Error(
-    "Use `prepare`, `watch <settlement-id>`, `success`, or `offramp <payout-destination-id>`",
+    "Use `prepare`, `watch <settlement-id>`, `success`, `advance <settlement-id>`, or `offramp <payout-destination-id>`",
   );
 }
 if (mode === "watch" && !argument) {
   throw new Error(
     "A settlement id is required in watch mode",
+  );
+}
+if (mode === "advance" && !argument) {
+  throw new Error(
+    "A settlement id is required in advance mode",
   );
 }
 if (mode === "offramp" && !argument) {
@@ -1282,6 +1364,8 @@ try {
     await watch(context, argument);
   } else if (mode === "success") {
     await success(context);
+  } else if (mode === "advance") {
+    await advanceExistingSettlement(context, argument);
   } else {
     await offramp(context, argument);
   }

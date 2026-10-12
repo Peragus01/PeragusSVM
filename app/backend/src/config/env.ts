@@ -11,6 +11,10 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
+  PERAGUS_SANDBOX_DEMO_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   DATABASE_URL: z.string().url().optional(),
   DATABASE_SSL: z
     .enum(["true", "false"])
@@ -113,6 +117,58 @@ const envSchema = z.object({
     .min(1)
     .optional(),
 }).superRefine((env, context) => {
+  if (env.PERAGUS_SANDBOX_DEMO_ENABLED) {
+    for (const field of [
+      "DATABASE_URL",
+      "OZAV_API_KEY",
+      "OZAV_CUSTOMER_ID",
+      "OZAV_WALLET_ID",
+      "SOLANA_SOURCE_MINT",
+      "SOLANA_DESTINATION_MINT",
+      "SOLANA_ATTESTATION_KEYPAIR_PATH",
+      "SOLANA_LIQUIDITY_KEYPAIR_PATH",
+      "SOLANA_FEE_PAYER_KEYPAIR_PATH",
+    ] as const) {
+      if (!env[field]) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message:
+            `${field} is required when PERAGUS_SANDBOX_DEMO_ENABLED=true`,
+        });
+      }
+    }
+
+    for (const field of [
+      "OZAV_ONRAMP_WRITES_ENABLED",
+      "OZAV_OFFRAMP_WRITES_ENABLED",
+      "SOLANA_COSIGNING_ENABLED",
+      "SOLANA_CONTINGENCY_RESERVE_ENABLED",
+    ] as const) {
+      if (!env[field]) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message:
+            `${field} must be true when PERAGUS_SANDBOX_DEMO_ENABLED=true`,
+        });
+      }
+    }
+
+    if (
+      !env.SOLANA_RPC_URL
+        .toLowerCase()
+        .includes("devnet")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["SOLANA_RPC_URL"],
+        message:
+          "PERAGUS_SANDBOX_DEMO_ENABLED requires a Solana Devnet RPC",
+      });
+    }
+  }
+
   if (env.OZAV_OFFRAMP_WRITES_ENABLED) {
     for (const field of [
       "OZAV_API_KEY",

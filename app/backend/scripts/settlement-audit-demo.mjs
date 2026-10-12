@@ -143,7 +143,7 @@ try {
   ];
 
   if (events.length) {
-    console.log("\nEVENTOS OZAV PERSISTIDOS");
+    console.log("\nEVENTOS DE LIQUIDEZ PERSISTIDOS");
     console.table(events);
   }
 

@@ -13,6 +13,11 @@ import {
   type PrepareSolanaSettlementResult,
   type SolanaSettlementPreparer,
 } from "../src/application/prepare-solana-settlement.js";
+import {
+  SolanaRollbackDemoUnavailableError,
+  type PrepareSolanaRollbackDemoResult,
+  type SolanaRollbackDemoPreparer,
+} from "../src/application/prepare-solana-rollback-demo.js";
 import { registerSolanaSettlementRoutes } from "../src/routes/solana-settlement.js";
 
 const SETTLEMENT_ID =
@@ -28,12 +33,110 @@ afterEach(async () => {
 
 async function createApp(
   preparer?: SolanaSettlementPreparer,
+  rollbackDemoPreparer?: SolanaRollbackDemoPreparer,
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   applications.push(app);
-  await registerSolanaSettlementRoutes(app, { preparer });
+  await registerSolanaSettlementRoutes(app, {
+    preparer,
+    rollbackDemoPreparer,
+  });
   return app;
 }
+
+function rollbackResult(): PrepareSolanaRollbackDemoResult {
+  return {
+    ...preparedResult(),
+    scenario: "second_leg_insufficient_liquidity",
+    injectedDestinationAmount:
+      "18446744073709551615",
+    availableDestinationBalance: "10000000000",
+    tokenAccounts: {
+      payerSource: "11111111111111111111111111111117",
+      liquiditySource:
+        "11111111111111111111111111111118",
+      liquidityDestination:
+        "11111111111111111111111111111119",
+      recipientDestination:
+        "1111111111111111111111111111111A",
+    },
+  };
+}
+
+describe("POST /v1/settlements/:id/solana/rollback-demo/prepare", () => {
+  it("returns a sandbox-only second-leg failure transaction", async () => {
+    const app = await createApp(undefined, {
+      async execute() {
+        return rollbackResult();
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url:
+        `/v1/settlements/${SETTLEMENT_ID}`
+        + "/solana/rollback-demo/prepare",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toMatchObject({
+      data: {
+        settlement_id: SETTLEMENT_ID,
+        scenario: "second_leg_insufficient_liquidity",
+        injected_destination_amount:
+          "18446744073709551615",
+        token_accounts: {
+          payer_source:
+            "11111111111111111111111111111117",
+        },
+      },
+      meta: {
+        environment: "sandbox",
+        network: "devnet",
+        expected_result: "transaction_failure",
+      },
+    });
+  });
+
+  it("stays disabled outside the explicit sandbox demo", async () => {
+    const app = await createApp();
+
+    const response = await app.inject({
+      method: "POST",
+      url:
+        `/v1/settlements/${SETTLEMENT_ID}`
+        + "/solana/rollback-demo/prepare",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      error: { code: "SANDBOX_DEMO_DISABLED" },
+    });
+  });
+
+  it("maps an unavailable proof to a neutral conflict", async () => {
+    const app = await createApp(undefined, {
+      async execute() {
+        throw new SolanaRollbackDemoUnavailableError(
+          "test reason",
+        );
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url:
+        `/v1/settlements/${SETTLEMENT_ID}`
+        + "/solana/rollback-demo/prepare",
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: { code: "ROLLBACK_DEMO_UNAVAILABLE" },
+    });
+  });
+});
 
 function preparedResult(
   replay = false,

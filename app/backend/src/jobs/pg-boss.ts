@@ -264,6 +264,7 @@ export class PgBossOzavReconciliationScheduler
 
   async schedule(
     input: OzavReconciliationJob,
+    options: { immediate?: boolean } = {},
   ): Promise<OzavReconciliationScheduleResult> {
     const job = ozavReconciliationJobSchema.parse(input);
     const deterministicId = ozavReconciliationJobId(job);
@@ -281,7 +282,7 @@ export class PgBossOzavReconciliationScheduler
       OZAV_RECONCILIATION_QUEUE,
       job,
       { id: deterministicId },
-      this.delaySeconds,
+      options.immediate ? 0 : this.delaySeconds,
     );
 
     return {

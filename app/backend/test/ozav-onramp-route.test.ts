@@ -12,6 +12,7 @@ import {
   type OzavOnrampReader,
   type OzavOnrampView,
 } from "../src/application/get-ozav-onramp.js";
+import type { SandboxPixPaymentSimulator } from "../src/application/simulate-sandbox-pix-payment.js";
 import { registerOzavOnrampRoutes } from "../src/routes/ozav-onramp.js";
 
 const settlementId =
@@ -27,11 +28,13 @@ afterEach(async () => {
 
 async function appWith(
   reader?: OzavOnrampReader,
+  sandboxPaymentSimulator?: SandboxPixPaymentSimulator,
 ) {
   const app = Fastify();
   applications.push(app);
   await registerOzavOnrampRoutes(app, {
     reader,
+    sandboxPaymentSimulator,
     now: () => new Date("2026-10-07T13:01:00Z"),
   });
   return app;
@@ -98,7 +101,7 @@ describe("GET /v1/settlements/:id/onramp", () => {
     });
   });
 
-  it("returns persisted Pix data without provider credentials", async () => {
+  it("returns Pix readiness without payment payloads", async () => {
     const app = await appWith(readerReturning({
       settlementId,
       settlementStatus: "awaiting_pix",
@@ -129,12 +132,12 @@ describe("GET /v1/settlements/:id/onramp", () => {
         quote_id: "ozav_q_test",
         transfer_id: "ozav_tr_test",
         pix: {
-          intent_id: "sim_pix_test",
-          br_code: "000201-test",
           expired: true,
         },
       },
     });
+    expect(response.body).not.toContain("000201-test");
+    expect(response.body).not.toContain("data:image");
   });
 
   it("returns 404 for an unknown settlement", async () => {
@@ -176,5 +179,54 @@ describe("GET /v1/settlements/:id/onramp", () => {
       url: `/v1/settlements/${settlementId}/onramp`,
     });
     expect(response.statusCode).toBe(503);
+  });
+
+  it("keeps sandbox payment controls disabled by default", async () => {
+    const app = await appWith();
+    const response = await app.inject({
+      method: "POST",
+      url:
+        `/v1/settlements/${settlementId}/onramp/simulate-payment`,
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      error: { code: "SANDBOX_DEMO_DISABLED" },
+    });
+  });
+
+  it("accepts an explicitly enabled sandbox payment", async () => {
+    const calls: string[] = [];
+    const app = await appWith(undefined, {
+      async execute(id) {
+        calls.push(id);
+        return {
+          settlementId: id,
+          settlementStatus: "awaiting_pix",
+          accepted: true,
+          idempotentReplay: false,
+          reconciliationScheduled: true,
+        };
+      },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url:
+        `/v1/settlements/${settlementId}/onramp/simulate-payment`,
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(calls).toEqual([settlementId]);
+    expect(response.json()).toMatchObject({
+      data: {
+        settlement_id: settlementId,
+        accepted: true,
+        reconciliation_scheduled: true,
+      },
+      meta: {
+        idempotent_replay: false,
+        environment: "sandbox",
+      },
+    });
   });
 });

@@ -98,7 +98,10 @@ let contingencyReserveResolver:
   | undefined;
 
 if (env.SOLANA_CONTINGENCY_RESERVE_ENABLED) {
-  if (env.NODE_ENV === "production") {
+  if (
+    env.NODE_ENV === "production"
+    && !env.PERAGUS_SANDBOX_DEMO_ENABLED
+  ) {
     throw new Error(
       "Local Solana contingency reserve signers cannot be enabled in production; configure an HSM/KMS signer adapter",
     );
