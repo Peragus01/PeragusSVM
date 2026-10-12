@@ -42,7 +42,7 @@ import {
   type SettlementOrchestrationJob,
 } from "./jobs/settlement-orchestration.js";
 import { OzavClient } from "./providers/ozav-client.js";
-import { loadLocalSolanaAuthority } from "./providers/local-solana-authority.js";
+import { loadConfiguredSolanaAuthority } from "./providers/local-solana-authority.js";
 import { PostgresOzavOnrampIntentRepository } from "./repositories/postgres-ozav-onramp-intent-repository.js";
 import { PostgresOzavOfframpIntentRepository } from "./repositories/postgres-ozav-offramp-intent-repository.js";
 import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onramp-repository.js";
@@ -107,18 +107,21 @@ if (env.SOLANA_CONTINGENCY_RESERVE_ENABLED) {
     );
   }
 
-  const feePayer = loadLocalSolanaAuthority(
-    env.SOLANA_FEE_PAYER_KEYPAIR_PATH!,
-    "SOLANA_FEE_PAYER_KEYPAIR_PATH",
-  );
-  const attestationAuthority = loadLocalSolanaAuthority(
-    env.SOLANA_ATTESTATION_KEYPAIR_PATH!,
-    "SOLANA_ATTESTATION_KEYPAIR_PATH",
-  );
-  const liquidityAuthority = loadLocalSolanaAuthority(
-    env.SOLANA_LIQUIDITY_KEYPAIR_PATH!,
-    "SOLANA_LIQUIDITY_KEYPAIR_PATH",
-  );
+  const feePayer = loadConfiguredSolanaAuthority({
+    filePath: env.SOLANA_FEE_PAYER_KEYPAIR_PATH,
+    keypairBase64: env.SOLANA_FEE_PAYER_KEYPAIR_BASE64,
+    label: "SOLANA_FEE_PAYER",
+  });
+  const attestationAuthority = loadConfiguredSolanaAuthority({
+    filePath: env.SOLANA_ATTESTATION_KEYPAIR_PATH,
+    keypairBase64: env.SOLANA_ATTESTATION_KEYPAIR_BASE64,
+    label: "SOLANA_ATTESTATION",
+  });
+  const liquidityAuthority = loadConfiguredSolanaAuthority({
+    filePath: env.SOLANA_LIQUIDITY_KEYPAIR_PATH,
+    keypairBase64: env.SOLANA_LIQUIDITY_KEYPAIR_BASE64,
+    label: "SOLANA_LIQUIDITY",
+  });
   const connection = new Connection(
     env.SOLANA_RPC_URL,
     "confirmed",

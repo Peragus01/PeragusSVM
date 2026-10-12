@@ -108,7 +108,15 @@ const envSchema = z.object({
     .string()
     .min(1)
     .optional(),
+  SOLANA_ATTESTATION_KEYPAIR_BASE64: z
+    .string()
+    .min(1)
+    .optional(),
   SOLANA_LIQUIDITY_KEYPAIR_PATH: z
+    .string()
+    .min(1)
+    .optional(),
+  SOLANA_LIQUIDITY_KEYPAIR_BASE64: z
     .string()
     .min(1)
     .optional(),
@@ -116,7 +124,34 @@ const envSchema = z.object({
     .string()
     .min(1)
     .optional(),
+  SOLANA_FEE_PAYER_KEYPAIR_BASE64: z
+    .string()
+    .min(1)
+    .optional(),
 }).superRefine((env, context) => {
+  const validateSigner = (
+    pathValue: string | undefined,
+    base64Value: string | undefined,
+    label: string,
+    required: boolean,
+  ) => {
+    if (pathValue && base64Value) {
+      context.addIssue({
+        code: "custom",
+        path: [`${label}_KEYPAIR_BASE64`],
+        message:
+          `${label} must use either KEYPAIR_PATH or KEYPAIR_BASE64, not both`,
+      });
+    } else if (required && !pathValue && !base64Value) {
+      context.addIssue({
+        code: "custom",
+        path: [`${label}_KEYPAIR_BASE64`],
+        message:
+          `${label}_KEYPAIR_PATH or ${label}_KEYPAIR_BASE64 is required`,
+      });
+    }
+  };
+
   if (env.PERAGUS_SANDBOX_DEMO_ENABLED) {
     for (const field of [
       "DATABASE_URL",
@@ -125,9 +160,6 @@ const envSchema = z.object({
       "OZAV_WALLET_ID",
       "SOLANA_SOURCE_MINT",
       "SOLANA_DESTINATION_MINT",
-      "SOLANA_ATTESTATION_KEYPAIR_PATH",
-      "SOLANA_LIQUIDITY_KEYPAIR_PATH",
-      "SOLANA_FEE_PAYER_KEYPAIR_PATH",
     ] as const) {
       if (!env[field]) {
         context.addIssue({
@@ -190,8 +222,6 @@ const envSchema = z.object({
     for (const field of [
       "SOLANA_SOURCE_MINT",
       "SOLANA_DESTINATION_MINT",
-      "SOLANA_ATTESTATION_KEYPAIR_PATH",
-      "SOLANA_LIQUIDITY_KEYPAIR_PATH",
     ] as const) {
       if (!env[field]) {
         context.addIssue({
@@ -207,9 +237,6 @@ const envSchema = z.object({
   if (env.SOLANA_CONTINGENCY_RESERVE_ENABLED) {
     for (const field of [
       "SOLANA_DESTINATION_MINT",
-      "SOLANA_ATTESTATION_KEYPAIR_PATH",
-      "SOLANA_LIQUIDITY_KEYPAIR_PATH",
-      "SOLANA_FEE_PAYER_KEYPAIR_PATH",
     ] as const) {
       if (!env[field]) {
         context.addIssue({
@@ -230,6 +257,30 @@ const envSchema = z.object({
       });
     }
   }
+
+  validateSigner(
+    env.SOLANA_ATTESTATION_KEYPAIR_PATH,
+    env.SOLANA_ATTESTATION_KEYPAIR_BASE64,
+    "SOLANA_ATTESTATION",
+    env.PERAGUS_SANDBOX_DEMO_ENABLED
+      || env.SOLANA_COSIGNING_ENABLED
+      || env.SOLANA_CONTINGENCY_RESERVE_ENABLED,
+  );
+  validateSigner(
+    env.SOLANA_LIQUIDITY_KEYPAIR_PATH,
+    env.SOLANA_LIQUIDITY_KEYPAIR_BASE64,
+    "SOLANA_LIQUIDITY",
+    env.PERAGUS_SANDBOX_DEMO_ENABLED
+      || env.SOLANA_COSIGNING_ENABLED
+      || env.SOLANA_CONTINGENCY_RESERVE_ENABLED,
+  );
+  validateSigner(
+    env.SOLANA_FEE_PAYER_KEYPAIR_PATH,
+    env.SOLANA_FEE_PAYER_KEYPAIR_BASE64,
+    "SOLANA_FEE_PAYER",
+    env.PERAGUS_SANDBOX_DEMO_ENABLED
+      || env.SOLANA_CONTINGENCY_RESERVE_ENABLED,
+  );
 });
 
 export type Env = z.infer<typeof envSchema>;

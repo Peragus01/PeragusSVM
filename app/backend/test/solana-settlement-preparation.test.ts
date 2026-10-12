@@ -21,7 +21,10 @@ import type {
   Settlement,
   SettlementStatus,
 } from "../src/domain/settlement.js";
-import { parseSolanaKeypair } from "../src/providers/local-solana-authority.js";
+import {
+  loadConfiguredSolanaAuthority,
+  parseSolanaKeypair,
+} from "../src/providers/local-solana-authority.js";
 import { LocalKeypairAuthoritySigner } from "../src/providers/peragus-solana-transaction.js";
 import type { SettlementRepository } from "../src/repositories/settlement-repository.js";
 import type {
@@ -224,5 +227,28 @@ describe("local Solana authority parser", () => {
       JSON.stringify([1, 2, 3]),
       "test signer",
     )).toThrow("64-byte Solana keypair array");
+  });
+
+  it("loads a base64 keypair without writing a cloud secret to disk", () => {
+    const expected = Keypair.generate();
+    const keypairBase64 = Buffer.from(
+      JSON.stringify(Array.from(expected.secretKey)),
+      "utf8",
+    ).toString("base64");
+
+    const authority = loadConfiguredSolanaAuthority({
+      keypairBase64,
+      label: "TEST_SIGNER",
+    });
+
+    expect(authority.publicKey.equals(expected.publicKey)).toBe(true);
+  });
+
+  it("rejects ambiguous signer configuration", () => {
+    expect(() => loadConfiguredSolanaAuthority({
+      filePath: "/tmp/test-keypair.json",
+      keypairBase64: "Zm9v",
+      label: "TEST_SIGNER",
+    })).toThrow("either KEYPAIR_PATH or KEYPAIR_BASE64");
   });
 });

@@ -9,7 +9,9 @@ export default defineConfig({
   plugins: [
     tailwindcss(),
     tanstackStart({ server: { entry: "server" } }),
-    nitro({ preset: "node-server" }),
+    // Nitro selects node-server locally and the Vercel preset during a
+    // Vercel build, keeping the same proxy route in both environments.
+    nitro(),
     react(),
   ],
   resolve: {

@@ -53,7 +53,7 @@ import {
   NoopSettlementJobPublisher,
   type SettlementJobPublisher,
 } from "./jobs/settlement-orchestration.js";
-import { loadLocalSolanaAuthority } from "./providers/local-solana-authority.js";
+import { loadConfiguredSolanaAuthority } from "./providers/local-solana-authority.js";
 import { OzavClient } from "./providers/ozav-client.js";
 import { InMemorySettlementRepository } from "./repositories/in-memory-settlement-repository.js";
 import { PostgresOzavOfframpIntentRepository } from "./repositories/postgres-ozav-offramp-intent-repository.js";
@@ -226,8 +226,6 @@ if (env.DATABASE_URL) {
     if (
       !env.SOLANA_SOURCE_MINT
       || !env.SOLANA_DESTINATION_MINT
-      || !env.SOLANA_ATTESTATION_KEYPAIR_PATH
-      || !env.SOLANA_LIQUIDITY_KEYPAIR_PATH
     ) {
       throw new Error(
         "Solana cosigning configuration is incomplete",
@@ -247,21 +245,24 @@ if (env.DATABASE_URL) {
     const destinationMint = new PublicKey(
       env.SOLANA_DESTINATION_MINT,
     );
-    const attestationAuthority = loadLocalSolanaAuthority(
-      env.SOLANA_ATTESTATION_KEYPAIR_PATH,
-      "SOLANA_ATTESTATION_KEYPAIR_PATH",
-    );
-    const liquidityAuthority = loadLocalSolanaAuthority(
-      env.SOLANA_LIQUIDITY_KEYPAIR_PATH,
-      "SOLANA_LIQUIDITY_KEYPAIR_PATH",
-    );
+    const attestationAuthority = loadConfiguredSolanaAuthority({
+      filePath: env.SOLANA_ATTESTATION_KEYPAIR_PATH,
+      keypairBase64: env.SOLANA_ATTESTATION_KEYPAIR_BASE64,
+      label: "SOLANA_ATTESTATION",
+    });
+    const liquidityAuthority = loadConfiguredSolanaAuthority({
+      filePath: env.SOLANA_LIQUIDITY_KEYPAIR_PATH,
+      keypairBase64: env.SOLANA_LIQUIDITY_KEYPAIR_BASE64,
+      label: "SOLANA_LIQUIDITY",
+    });
 
     if (env.PERAGUS_SANDBOX_DEMO_ENABLED) {
       const fundingAuthority =
-        loadLocalSolanaAuthority(
-          env.SOLANA_FEE_PAYER_KEYPAIR_PATH!,
-          "SOLANA_FEE_PAYER_KEYPAIR_PATH",
-        );
+        loadConfiguredSolanaAuthority({
+          filePath: env.SOLANA_FEE_PAYER_KEYPAIR_PATH,
+          keypairBase64: env.SOLANA_FEE_PAYER_KEYPAIR_BASE64,
+          label: "SOLANA_FEE_PAYER",
+        });
       demoWalletFunder =
         new FundDevnetDemoWalletService({
           connection: solanaConnection,
