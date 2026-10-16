@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { assertSmokeTestSafety, registerWorkerSmokeTest, smokePayload } from '../src/jobs/worker-smoke-test.js';
 const safe = {
- DATABASE_URL: 'postgresql://postgres.lybdkqkbwlfwvmmvstzi:unused@aws-0-sa-east-1.pooler.supabase.com:5432/postgres',
+ DATABASE_URL: 'postgresql://postgres.lybdkqkbwlfwvmmvstzi:unused@aws-1-sa-east-1.pooler.supabase.com:5432/postgres',
  OZAV_ONRAMP_WRITES_ENABLED: false, OZAV_OFFRAMP_WRITES_ENABLED: false,
  SOLANA_COSIGNING_ENABLED: false, SOLANA_CONTINGENCY_RESERVE_ENABLED: false,
  PERAGUS_SANDBOX_DEMO_ENABLED: false,
@@ -9,7 +9,7 @@ const safe = {
 describe('isolated staging worker diagnostic', () => {
  it('accepts only the pinned staging database', () => {
   expect(() => assertSmokeTestSafety(safe)).not.toThrow();
-  for (const DATABASE_URL of [undefined, 'postgresql://postgres.other:x@aws-0-sa-east-1.pooler.supabase.com:5432/postgres', safe.DATABASE_URL.replace('5432', '6543'), safe.DATABASE_URL.replace('supabase.com', 'supabase.com.evil.test')]) {
+  for (const DATABASE_URL of [safe.DATABASE_URL.replace('aws-1-', 'aws-0-'), undefined, 'postgresql://postgres.other:x@aws-1-sa-east-1.pooler.supabase.com:5432/postgres', safe.DATABASE_URL.replace('5432', '6543'), safe.DATABASE_URL.replace('supabase.com', 'supabase.com.evil.test')]) {
    expect(() => assertSmokeTestSafety({ ...safe, DATABASE_URL })).toThrow();
   }
  });
