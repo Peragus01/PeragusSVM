@@ -1,3 +1,4 @@
+import { assertSmokeTestSafety, registerWorkerSmokeTest } from "./jobs/worker-smoke-test.js";
 import {
   Connection,
   PublicKey,
@@ -71,6 +72,10 @@ if (
     "OZAV_CUSTOMER_ID and OZAV_WALLET_ID are required "
     + "when OZAV on-ramp writes are enabled",
   );
+}
+
+if (env.WORKER_SMOKE_TEST_ENABLED) {
+  assertSmokeTestSafety(env);
 }
 
 const pool = createDatabasePool(
@@ -274,6 +279,10 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 try {
   await boss.start();
   await ensureSettlementQueues(boss);
+
+  if (env.WORKER_SMOKE_TEST_ENABLED) {
+    await registerWorkerSmokeTest(boss);
+  }
 
   const handler =
     new SettlementOrchestrationHandler(repository);

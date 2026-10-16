@@ -15,6 +15,8 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  WORKER_SMOKE_TEST_ENABLED: z.enum(["true", "false"])
+    .default("false").transform((value) => value === "true"),
   DATABASE_URL: z.string().url().optional(),
   DATABASE_SSL: z
     .enum(["true", "false"])
