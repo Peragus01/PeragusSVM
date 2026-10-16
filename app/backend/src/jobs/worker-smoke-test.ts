@@ -17,7 +17,7 @@ export function assertSmokeTestSafety(env: {
   let url: URL;
   try { url = new URL(env.DATABASE_URL ?? ""); }
   catch { throw new Error("Smoke test requires the staging database"); }
-  const pooler = url.hostname === "aws-0-sa-east-1.pooler.supabase.com"
+  const pooler = url.hostname === "aws-1-sa-east-1.pooler.supabase.com"
     && url.port === "5432"
     && decodeURIComponent(url.username) === `postgres.${STAGING_PROJECT}`;
   const direct = url.hostname === `db.${STAGING_PROJECT}.supabase.co`
@@ -26,7 +26,7 @@ export function assertSmokeTestSafety(env: {
   if (!pooler && !direct) {
     // Report comparisons only; never include any part of the supplied URL.
     const checks = {
-      poolerHostMatches: url.hostname === "aws-0-sa-east-1.pooler.supabase.com",
+      poolerHostMatches: url.hostname === "aws-1-sa-east-1.pooler.supabase.com",
       poolerPortMatches: url.port === "5432",
       poolerUserMatches: decodeURIComponent(url.username) === `postgres.${STAGING_PROJECT}`,
       directHostMatches: url.hostname === `db.${STAGING_PROJECT}.supabase.co`,
