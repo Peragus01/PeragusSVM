@@ -1,3 +1,4 @@
+import { registerCustomerAccess, type CustomerAccess } from "./auth/customer-access.js";
 import sensible from "@fastify/sensible";
 import Fastify, {
   type FastifyInstance,
@@ -26,6 +27,7 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  customerAccess?: CustomerAccess;
   logger?: FastifyServerOptions["logger"];
   settlementRepository?: SettlementRepository;
   settlementJobPublisher?: SettlementJobPublisher;
@@ -64,6 +66,8 @@ export async function buildApp(
   });
 
   await app.register(sensible);
+
+  if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
 
   app.get("/health", async () => ({
     status: "ok",

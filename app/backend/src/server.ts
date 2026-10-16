@@ -1,3 +1,5 @@
+import { createSupabaseAuthenticator } from "./auth/supabase-authenticator.js";
+import { PostgresCustomerRepository } from "./repositories/postgres-customer-repository.js";
 import {
   Connection,
   PublicKey,
@@ -66,6 +68,18 @@ import { PostgresSolanaSettlementPreparationRepository } from "./repositories/so
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
 
 const env = getEnv();
+
+// The executable API has no unauthenticated fallback. buildApp supports isolated
+// dependency-injected tests, but the deployed server must always enforce access.
+if (!env.DATABASE_URL || !env.SUPABASE_URL || !env.SUPABASE_PUBLISHABLE_KEY) {
+  throw new Error("DATABASE_URL, SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are required for the authenticated API");
+}
+if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
+  || env.SOLANA_COSIGNING_ENABLED || env.SOLANA_CONTINGENCY_RESERVE_ENABLED
+  || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
+  throw new Error("Authenticated customer onboarding requires financial and demo flags disabled until per-customer routing is implemented");
+}
+const authenticate = createSupabaseAuthenticator(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY);
 
 let pool: Pool | undefined;
 let boss: PgBoss | undefined;
@@ -326,7 +340,9 @@ if (env.DATABASE_URL) {
 }
 
 const app = await buildApp({
+  customerAccess: { authenticate, customers: new PostgresCustomerRepository(pool!) },
   logger: {
+    redact: ["req.headers.authorization", "req.headers.cookie", 'res.headers["set-cookie"]'],
     level: env.LOG_LEVEL,
   },
   settlementRepository,
