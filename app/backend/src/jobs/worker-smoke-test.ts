@@ -23,7 +23,18 @@ export function assertSmokeTestSafety(env: {
   const direct = url.hostname === `db.${STAGING_PROJECT}.supabase.co`
     && (url.port === "5432" || url.port === "")
     && decodeURIComponent(url.username) === "postgres";
-  if (!pooler && !direct) throw new Error("Smoke test requires the pinned staging database");
+  if (!pooler && !direct) {
+    // Report comparisons only; never include any part of the supplied URL.
+    const checks = {
+      poolerHostMatches: url.hostname === "aws-0-sa-east-1.pooler.supabase.com",
+      poolerPortMatches: url.port === "5432",
+      poolerUserMatches: decodeURIComponent(url.username) === `postgres.${STAGING_PROJECT}`,
+      directHostMatches: url.hostname === `db.${STAGING_PROJECT}.supabase.co`,
+      directPortMatches: url.port === "5432" || url.port === "",
+      directUserMatches: decodeURIComponent(url.username) === "postgres",
+    };
+    throw new Error("Smoke test requires the pinned staging database; checks=" + JSON.stringify(checks));
+  }
   if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
     || env.SOLANA_COSIGNING_ENABLED || env.SOLANA_CONTINGENCY_RESERVE_ENABLED
     || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
