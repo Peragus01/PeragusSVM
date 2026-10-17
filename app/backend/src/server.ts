@@ -1,3 +1,4 @@
+import { assertSmokeTestSafety } from "./jobs/worker-smoke-test.js";
 import { createSupabaseAuthenticator } from "./auth/supabase-authenticator.js";
 import { PostgresCustomerRepository } from "./repositories/postgres-customer-repository.js";
 import {
@@ -78,6 +79,12 @@ if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
   || env.SOLANA_COSIGNING_ENABLED || env.SOLANA_CONTINGENCY_RESERVE_ENABLED
   || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
   throw new Error("Authenticated customer onboarding requires financial and demo flags disabled until per-customer routing is implemented");
+}
+if (env.SETTLEMENT_DRAFTS_ENABLED) {
+  assertSmokeTestSafety(env);
+  if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co") {
+    throw new Error("Settlement drafts require the pinned staging Auth project");
+  }
 }
 const authenticate = createSupabaseAuthenticator(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY);
 
@@ -341,6 +348,9 @@ if (env.DATABASE_URL) {
 
 const app = await buildApp({
   customerAccess: { authenticate, customers: new PostgresCustomerRepository(pool!) },
+  ...(env.SETTLEMENT_DRAFTS_ENABLED ? {
+    customerDraftRepository: (customerId: string) => PostgresSettlementRepository.forCustomerDrafts(pool!, customerId),
+  } : {}),
   logger: {
     redact: ["req.headers.authorization", "req.headers.cookie", 'res.headers["set-cookie"]'],
     level: env.LOG_LEVEL,

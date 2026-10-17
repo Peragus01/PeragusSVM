@@ -24,6 +24,8 @@ export interface SettlementRequestPayload {
 }
 
 export interface Settlement {
+  customerId?: string | null;
+  recordOnly?: boolean;
   id: string;
   requestId: string;
   requestPayloadHash: string;

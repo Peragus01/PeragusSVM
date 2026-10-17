@@ -6,6 +6,8 @@ const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
+  SETTLEMENT_DRAFTS_ENABLED: z.enum(["true", "false"])
+    .default("false").transform(value => value === "true"),
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_PUBLISHABLE_KEY: z.string().min(1).optional(),
   HOST: z.string().min(1).default("127.0.0.1"),

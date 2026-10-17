@@ -39,7 +39,7 @@ const solanaPublicKeySchema = z
     }
   }, "must be a valid Solana public key");
 
-const createSettlementSchema = z
+export const createSettlementSchema = z
   .object({
     request_id: z
       .string()
@@ -77,10 +77,11 @@ export interface SettlementRoutesOptions {
   now: () => Date;
 }
 
-function serializeSettlement(settlement: Settlement) {
+export function serializeSettlement(settlement: Settlement) {
   return {
     id: settlement.id,
     request_id: settlement.requestId,
+    ...(settlement.recordOnly ? { record_only: true, customer_id: settlement.customerId } : {}),
     corridor_id: settlement.corridorId,
     payer_wallet: settlement.payerWallet,
     recipient_wallet: settlement.recipientWallet,

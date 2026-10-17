@@ -183,3 +183,10 @@ Rollback is staging-only and must keep financial flags disabled. Do not roll bac
 to an unauthenticated API while exposing customer data; disable access/stop staging
 API instead if needed. Migration is additive: leave the table and nullable column
 in place rather than delete customer records. Keep token values out of PRs/logs.
+
+## Subsequent record-isolation milestone
+
+See owned-settlement-drafts.md for the staging-only, non-executable owned record
+endpoint. It adds customer-scoped idempotency without opening financial POSTs.
+The account-access contract above continues to apply; approval and payments remain
+unimplemented. Record-only rows are never promoted to real payments.
