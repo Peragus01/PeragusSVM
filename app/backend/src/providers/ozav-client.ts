@@ -50,6 +50,17 @@ export interface OzavSandboxCustomer {
   verificationMode: "full" | "reliance" | null;
 }
 
+export interface OzavCustomerSnapshot {
+  provider_status: string;
+  verification_mode: "full" | "reliance" | null;
+  verification_status: string | null;
+  due_codes: string[] | null;
+  due_count: number | null;
+  missing_fields_count: number | null;
+  documents_due_count: number | null;
+  requirements_pending: boolean | null;
+}
+
 export interface OzavTransfer {
   id: string;
   status: string;
@@ -566,6 +577,34 @@ export class OzavClient {
       email: text(row.email), status: text(row.status), verificationMode: mode };
     if (result.externalRef !== input.externalRef || result.email !== input.email || result.verificationMode === "reliance") return invalidResponse();
     return result;
+  }
+
+  async getSandboxCustomerSnapshot(id: string, externalRef: string): Promise<OzavCustomerSnapshot> {
+    identifier(id, "ozav_cus_");
+    const row = object(await this.get(`/v2/customers/${encodeURIComponent(id)}`));
+    if (row.id !== id || row.object !== "customer" || row.type !== "individual" || row.external_ref !== externalRef) return invalidResponse();
+    const code = (value: unknown): string => {
+      if (typeof value !== "string" || !/^[a-z][a-z0-9_]{0,79}$/.test(value)) return invalidResponse();
+      return value;
+    };
+    const verification = row.verification == null ? {} : object(row.verification);
+    const mode = verification.mode ?? null;
+    if (mode !== null && mode !== "full" && mode !== "reliance") return invalidResponse();
+    const requirements = row.requirements == null ? {} : object(row.requirements);
+    const count = (value: unknown): number | null => {
+      if (value == null) return null;
+      if (!Array.isArray(value) || value.length > 1000) return invalidResponse();
+      return value.length;
+    };
+    const dueCount = count(requirements.due), missingCount = count(requirements.missing_fields), documentCount = count(requirements.documents_due);
+    const codesCount = count(requirements.due_codes);
+    const dueCodes = codesCount === null ? null : (requirements.due_codes as unknown[]).map(code);
+    const counts = [dueCount, missingCount, documentCount, codesCount];
+    const pending = counts.some(n => n !== null && n > 0) ? true : counts.every(n => n !== null) ? false : null;
+    return { provider_status: code(row.status), verification_mode: mode,
+      verification_status: verification.status == null ? null : code(verification.status),
+      due_codes: dueCodes, due_count: dueCount, missing_fields_count: missingCount,
+      documents_due_count: documentCount, requirements_pending: pending };
   }
 
   async getTransfer(id: string): Promise<OzavTransfer> {

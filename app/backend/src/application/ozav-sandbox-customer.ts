@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { OzavClient, OzavSandboxCustomerInput, OzavSandboxCustomer } from "../providers/ozav-client.js";
+import type { OzavClient, OzavSandboxCustomerInput, OzavSandboxCustomer, OzavCustomerSnapshot } from "../providers/ozav-client.js";
 
 export interface SandboxCustomerLink {
   customerId: string;
@@ -10,8 +10,12 @@ export interface SandboxCustomerLink {
   ozavCustomerId: string | null;
   providerStatus: string | null;
   verificationMode: "full" | "reliance" | null;
+  snapshot: OzavCustomerSnapshot | null;
+  snapshotVersion: number;
+  refreshedAt: string | null;
 }
 export interface SandboxCustomerLinkRepository {
+  saveSnapshot(customerId: string, providerId: string, version: number, snapshot: OzavCustomerSnapshot): Promise<SandboxCustomerLink>;
   find(customerId: string): Promise<SandboxCustomerLink | null>;
   reserve(customerId: string, requestHash: string, idempotencyKey: string): Promise<SandboxCustomerLink>;
   complete(customerId: string, requestHash: string, result: OzavSandboxCustomer): Promise<SandboxCustomerLink>;
@@ -40,8 +44,21 @@ export function sandboxCustomerFixture(customerId: string): OzavSandboxCustomerI
 }
 export class OzavSandboxCustomerService {
   constructor(private readonly links: SandboxCustomerLinkRepository,
-    private readonly client: Pick<OzavClient, "getCustomerCapabilities" | "createSandboxCustomer">) {}
+    private readonly client: Pick<OzavClient, "getCustomerCapabilities" | "createSandboxCustomer" | "getSandboxCustomerSnapshot">) {}
   async read(customerId: string) { return this.links.find(customerId); }
+  async refresh(customerId: string) {
+    const link = await this.links.find(customerId);
+    if (!link || link.state !== "linked" || !link.ozavCustomerId || link.environment !== "test") {
+      throw new SandboxCustomerError("SANDBOX_CUSTOMER_CONFLICT");
+    }
+    const capabilities = await this.client.getCustomerCapabilities();
+    if (capabilities.environment !== "test") throw new SandboxCustomerError("SANDBOX_CUSTOMER_ENVIRONMENT_MISMATCH");
+    if (!capabilities.entitlements.includes("customers") || !capabilities.scopes.includes("customers:read")) {
+      throw new SandboxCustomerError("SANDBOX_CUSTOMER_CAPABILITY_MISSING");
+    }
+    const snapshot = await this.client.getSandboxCustomerSnapshot(link.ozavCustomerId, sandboxCustomerFixture(customerId).externalRef);
+    return this.links.saveSnapshot(customerId, link.ozavCustomerId, link.snapshotVersion, snapshot);
+  }
   async execute(customerId: string) {
     const fixture = sandboxCustomerFixture(customerId);
     const hash = createHash("sha256").update(JSON.stringify({ version: 1, fixture, verificationMode: "full", custodyModel: "managed" })).digest("hex");

@@ -33,3 +33,15 @@ Live onboarding needs a separate design and explicit real identity collection. T
 5. Disable the flag and redeploy after acceptance. Keep the link for audit and deterministic replay.
 
 The feature has no frontend changes. A frontend integration must forward Authorization and permit this path in its proxy. Display this as a sandbox fixture test, never as completed KYC.
+
+## Explicit provider status refresh
+
+Apply migration 013 before deploying this revision, even when the feature remains disabled: repository reads now include the new columns. It adds a sanitized JSON snapshot, a revision counter and a last-successful-refresh timestamp to the existing RLS-protected table.
+
+`POST /v1/me/ozav-sandbox-customer/refresh` accepts `{}` and reads the authenticated PF's existing linked fixture from OZAV. It does not create customers or verifications and never accepts an external customer ID. It uses the existing staging-only feature flag and requires test capabilities plus `customers:read`. Missing or pending bindings return 409 without a provider request. Disabled/unauthenticated/PJ behavior matches the existing fixture route.
+
+The response and subsequent local GET include `provider_snapshot` and `refreshed_at`. Before the first successful refresh both are null. The snapshot includes provider status, verification mode/status, machine-readable due codes, and counts of due requirements, missing fields and documents. It excludes names, email, CPF, addresses, requirement prose, owner details, checks and raw response data. `requirements_pending` is true when any count is positive, false only when all four lists are explicitly empty, and null when absence makes the answer unknown. Approved status and pending requirements may coexist. Neither an approved status nor an empty requirement set enables operations or updates local customer approval.
+
+Refresh failures preserve the prior snapshot and timestamp. Provider ID/external-reference mismatches or malformed data are rejected. Concurrent refreshes use a revision comparison; a stale write returns 409 and can be retried. A local GET remains a cached observation, never a current authorization decision. No periodic polling, webhook processing or live KYC is added here.
+
+Staging acceptance: with migration 013 applied and the existing flag temporarily enabled, POST refresh as PF, check the known fixture ID and pending residential-address code, and GET the same timestamp/snapshot. Local profile stays draft and financial POSTs stay blocked. Repeat refresh after failure only with the same authenticated account. Disable the flag again after acceptance.
