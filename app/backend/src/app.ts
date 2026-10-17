@@ -1,3 +1,5 @@
+import { registerOzavSandboxCustomerRoutes } from "./routes/ozav-sandbox-customer.js";
+import type { OzavSandboxCustomerService } from "./application/ozav-sandbox-customer.js";
 import { registerSettlementDraftRoutes } from "./routes/settlement-drafts.js";
 import { registerCustomerAccess, type CustomerAccess } from "./auth/customer-access.js";
 import sensible from "@fastify/sensible";
@@ -29,6 +31,7 @@ import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
   customerAccess?: CustomerAccess;
+  ozavSandboxCustomerService?: OzavSandboxCustomerService;
   customerDraftRepository?: (customerId: string) => SettlementRepository;
   logger?: FastifyServerOptions["logger"];
   settlementRepository?: SettlementRepository;
@@ -70,6 +73,8 @@ export async function buildApp(
   await app.register(sensible);
 
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
+
+  registerOzavSandboxCustomerRoutes(app, options.customerAccess ? options.ozavSandboxCustomerService : undefined);
 
   app.get("/health", async () => ({
     status: "ok",

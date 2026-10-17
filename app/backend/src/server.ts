@@ -1,3 +1,5 @@
+import { OzavSandboxCustomerService } from "./application/ozav-sandbox-customer.js";
+import { PostgresSandboxCustomerLinkRepository } from "./repositories/postgres-sandbox-customer-link.js";
 import { assertSmokeTestSafety } from "./jobs/worker-smoke-test.js";
 import { createSupabaseAuthenticator } from "./auth/supabase-authenticator.js";
 import { PostgresCustomerRepository } from "./repositories/postgres-customer-repository.js";
@@ -80,11 +82,14 @@ if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
   || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
   throw new Error("Authenticated customer onboarding requires financial and demo flags disabled until per-customer routing is implemented");
 }
-if (env.SETTLEMENT_DRAFTS_ENABLED) {
+if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED) {
   assertSmokeTestSafety(env);
   if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co") {
     throw new Error("Settlement drafts require the pinned staging Auth project");
   }
+}
+if (env.OZAV_SANDBOX_CUSTOMERS_ENABLED && !env.OZAV_API_KEY) {
+  throw new Error("OZAV_API_KEY sandbox key is required for customer fixture onboarding");
 }
 const authenticate = createSupabaseAuthenticator(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY);
 
@@ -348,6 +353,11 @@ if (env.DATABASE_URL) {
 
 const app = await buildApp({
   customerAccess: { authenticate, customers: new PostgresCustomerRepository(pool!) },
+  ...(env.OZAV_SANDBOX_CUSTOMERS_ENABLED ? {
+    ozavSandboxCustomerService: new OzavSandboxCustomerService(
+      new PostgresSandboxCustomerLinkRepository(pool!), new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1 }),
+    ),
+  } : {}),
   ...(env.SETTLEMENT_DRAFTS_ENABLED ? {
     customerDraftRepository: (customerId: string) => PostgresSettlementRepository.forCustomerDrafts(pool!, customerId),
   } : {}),
