@@ -1,3 +1,4 @@
+import { registerSettlementDraftRoutes } from "./routes/settlement-drafts.js";
 import { registerCustomerAccess, type CustomerAccess } from "./auth/customer-access.js";
 import sensible from "@fastify/sensible";
 import Fastify, {
@@ -28,6 +29,7 @@ import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
   customerAccess?: CustomerAccess;
+  customerDraftRepository?: (customerId: string) => SettlementRepository;
   logger?: FastifyServerOptions["logger"];
   settlementRepository?: SettlementRepository;
   settlementJobPublisher?: SettlementJobPublisher;
@@ -76,6 +78,11 @@ export async function buildApp(
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
   }));
+
+  await registerSettlementDraftRoutes(app, {
+    repositoryForCustomer: options.customerAccess ? options.customerDraftRepository : undefined,
+    now: options.now ?? (() => new Date()),
+  });
 
   await registerSettlementRoutes(app, {
     repository:

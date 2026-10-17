@@ -26,7 +26,7 @@ export interface CustomerAccess {
 }
 
 declare module "fastify" {
-  interface FastifyRequest { authenticatedUser: AuthenticatedUser | null; }
+  interface FastifyRequest { authenticatedUser: AuthenticatedUser | null; authenticatedCustomer: Customer | null; }
 }
 const profileSchema = z.object({
   type: z.enum(["pf", "pj"]),
@@ -42,6 +42,7 @@ const isVersioned = (path: string) => path === "/v1" || path.startsWith("/v1/");
 
 export function registerCustomerAccess(app: FastifyInstance, access: CustomerAccess): void {
   app.decorateRequest("authenticatedUser", null);
+  app.decorateRequest("authenticatedCustomer", null);
   app.addHook("preHandler", async (request, reply) => {
     const path = request.routeOptions.url ?? new URL(request.url, "http://internal").pathname;
     if (!isVersioned(path)) return;
@@ -63,6 +64,7 @@ export function registerCustomerAccess(app: FastifyInstance, access: CustomerAcc
     if (path === "/v1/me" || path === "/v1/me/customer") return;
     const customer = await access.customers.findByOwner(request.authenticatedUser.id);
     if (!customer) return reply.code(403).send({ error: { code: "CUSTOMER_REQUIRED", message: "Create a customer profile first" } });
+    request.authenticatedCustomer = customer;
     if (customer.suspended) return reply.code(403).send({ error: { code: "CUSTOMER_SUSPENDED", message: "Customer access is suspended" } });
 
     // This gate protects every settlement subresource before any provider or repository handler runs.

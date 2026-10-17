@@ -19,10 +19,12 @@ beforeAll(async () => {
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon, authenticated;");
   const dir = new URL("../migrations/", import.meta.url);
   const files = (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort();
-  for (const file of files.filter(f => !f.startsWith("010_"))) await db.exec(await readFile(new URL(file, dir), "utf8"));
-  const legacy = await new CreateSettlementService(settlements).execute({ requestId: randomUUID(), corridorId: "ab".repeat(32), payerWallet: "11111111111111111111111111111112", recipientWallet: "eD4c59FhMTkPQHBY84n8oc2YcHrAWjrn9khAL2FDBxR", sourceAmount: "1", destinationAmount: "1", expiresAt: "2099-01-01T00:00:00Z" });
-  legacyId = legacy.settlement.id;
+  for (const file of files.filter(f => Number(f.slice(0, 3)) < 10)) await db.exec(await readFile(new URL(file, dir), "utf8"));
+  legacyId = randomUUID();
+  await db.query(`insert into settlements (id,request_id,request_payload_hash,request_payload,corridor_id,payer_wallet,recipient_wallet,source_amount,destination_amount,expires_at)
+    values($1,$2,$3,'{}',$4,'payer','recipient',1,1,'2099-01-01')`, [legacyId, randomUUID(), "a".repeat(64), "ab".repeat(32)]);
   await db.exec(await readFile(new URL("010_add_customer_access.sql", dir), "utf8"));
+  await db.exec(await readFile(new URL("011_add_owned_settlement_drafts.sql", dir), "utf8"));
 }, 30000);
 afterAll(async () => { await db.close(); });
 describe("customer migration and PostgreSQL repository", () => {

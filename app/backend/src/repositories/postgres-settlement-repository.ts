@@ -12,6 +12,8 @@ import type {
 } from "./settlement-repository.js";
 
 interface SettlementRow {
+  customer_id: string | null;
+  record_only: boolean;
   id: string;
   request_id: string;
   request_payload_hash: string;
@@ -29,6 +31,8 @@ interface SettlementRow {
 }
 
 const settlementColumns = `
+  customer_id,
+  record_only,
   id,
   request_id,
   request_payload_hash,
@@ -52,6 +56,8 @@ function mapSettlementRow(row: SettlementRow): Settlement {
       : row.request_payload;
 
   return {
+    customerId: row.customer_id,
+    recordOnly: row.record_only,
     id: row.id,
     requestId: row.request_id,
     requestPayloadHash: row.request_payload_hash,
@@ -72,7 +78,12 @@ function mapSettlementRow(row: SettlementRow): Settlement {
 export class PostgresSettlementRepository
   implements SettlementRepository
 {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly customerId?: string) {}
+
+  /** Scoped repositories only create non-executable records in this milestone. */
+  static forCustomerDrafts(pool: Pool, customerId: string): PostgresSettlementRepository {
+    return new PostgresSettlementRepository(pool, customerId);
+  }
 
   async createOrGet(
     settlement: Settlement,
@@ -90,13 +101,17 @@ export class PostgresSettlementRepository
           source_amount,
           destination_amount,
           expires_at,
-          status
+          status,
+          customer_id,
+          record_only
         )
         values (
           $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11
+          $7, $8, $9, $10, $11, $12, $13
         )
-        on conflict (request_id) do nothing
+        ${this.customerId
+          ? "on conflict (customer_id, request_id) where customer_id is not null do nothing"
+          : "on conflict (request_id) where customer_id is null do nothing"}
         returning ${settlementColumns}
       `,
       [
@@ -111,6 +126,8 @@ export class PostgresSettlementRepository
         settlement.destinationAmount,
         settlement.expiresAt,
         settlement.status,
+        this.customerId ?? null,
+        Boolean(this.customerId),
       ],
     );
 
@@ -145,9 +162,10 @@ export class PostgresSettlementRepository
         select ${settlementColumns}
         from settlements
         where id = $1
+          ${this.customerId ? "and customer_id = $2" : ""}
         limit 1
       `,
-      [id],
+      this.customerId ? [id, this.customerId] : [id],
     );
 
     const row = result.rows[0];
@@ -162,9 +180,10 @@ export class PostgresSettlementRepository
         select ${settlementColumns}
         from settlements
         where request_id = $1
+          ${this.customerId ? "and customer_id = $2" : "and customer_id is null"}
         limit 1
       `,
-      [requestId],
+      this.customerId ? [requestId, this.customerId] : [requestId],
     );
 
     const row = result.rows[0];
@@ -181,6 +200,8 @@ export class PostgresSettlementRepository
         where id = $1
           and status = $2
           and version = $3
+          and record_only = false
+          ${this.customerId ? "and customer_id = $5" : ""}
         returning ${settlementColumns}
       `,
       [
@@ -188,6 +209,7 @@ export class PostgresSettlementRepository
         input.expectedStatus,
         input.expectedVersion,
         input.nextStatus,
+        ...(this.customerId ? [this.customerId] : []),
       ],
     );
 
