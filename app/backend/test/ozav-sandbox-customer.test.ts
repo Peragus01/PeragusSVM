@@ -116,7 +116,7 @@ describe("sandbox customer fixtures and durable binding", () => {
   it("recovers the same provider result after a local persistence failure", async () => {
     const actor = await profile(); let fail = true;
     const mocks = clientWith(async input => reply(input, `ozav_cus_${actor.id.replaceAll("-", "")}`));
-    const unstable = { find: links.find.bind(links), reserve: links.reserve.bind(links), complete: async (...args: Parameters<typeof links.complete>) => {
+    const unstable = { saveSnapshot: links.saveSnapshot.bind(links), find: links.find.bind(links), reserve: links.reserve.bind(links), complete: async (...args: Parameters<typeof links.complete>) => {
       if (fail) { fail = false; throw new Error("DB unavailable"); }
       return links.complete(...args);
     } };
@@ -171,5 +171,71 @@ describe("sandbox customer fixtures and durable binding", () => {
       has_table_privilege('authenticated','peragus_ozav_sandbox_customer_links','INSERT') as auth_insert
       from pg_class where relname='peragus_ozav_sandbox_customer_links'`);
     expect(r.rows[0]).toEqual({ relrowsecurity: true, anon_select: false, auth_insert: false });
+  });
+});
+
+describe("sandbox provider snapshot refresh", () => {
+  async function setup() {
+    const actor = await profile(), id = `ozav_cus_${actor.id.replaceAll("-", "")}`;
+    let statusCode = 200;
+    let body: any = { id, object: "customer", type: "individual", external_ref: `peragus-sandbox:${actor.id}`,
+      status: "approved", email: "private@example.test", verification: { mode: "full", status: "approved" },
+      requirements: { due: ["private address"], due_codes: ["residential_address"], missing_fields: Array(9).fill("private"), documents_due: [] } };
+    const transport = vi.fn(async (url: string) => url === "/v2/capabilities"
+      ? { statusCode: 200, body: caps } : { statusCode, body });
+    const writeTransport = vi.fn(async (input: OzavWriteRequest) => reply(input, id));
+    const client = new OzavClient({ apiKey, transport, writeTransport, attempts: 1 });
+    const service = new OzavSandboxCustomerService(links, client);
+    await service.execute(actor.id);
+    return { actor, id, service, transport, writeTransport, change: (change: any, status = 200) => { body = { ...body, ...change }; statusCode = status; } };
+  }
+  it("stores approved-with-pending requirements without PII, local approval or provider writes", async () => {
+    const t = await setup(), app = await appFor(t.actor, t.service);
+    const r = await app.inject({ method: "POST", url: `${path}/refresh`, headers, payload: {} });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().data).toMatchObject({ operations_enabled: false, provider_snapshot: {
+      provider_status: "approved", verification_status: "approved", requirements_pending: true,
+      due_codes: ["residential_address"], missing_fields_count: 9, documents_due_count: 0 } });
+    expect(r.json().data.refreshed_at).toEqual(expect.any(String));
+    expect(r.body).not.toContain("private");
+    const cached = await app.inject({ method: "GET", url: path, headers });
+    expect(cached.json().data.provider_snapshot).toEqual(r.json().data.provider_snapshot);
+    expect((await customers.findByOwner(t.actor.userId))?.verificationStatus).toBe("draft");
+    expect((await app.inject({ method: "POST", url: "/v1/settlements", headers, payload: {} })).statusCode).toBe(403);
+    expect(t.writeTransport).toHaveBeenCalledTimes(1);
+  });
+  it("distinguishes unknown requirements from empty arrays and records rejection", async () => {
+    const t = await setup();
+    t.change({ status: "rejected", verification: {}, requirements: {} });
+    expect((await t.service.refresh(t.actor.id)).snapshot).toMatchObject({ provider_status: "rejected",
+      verification_status: null, verification_mode: null, requirements_pending: null });
+    t.change({ requirements: { due: [], due_codes: [], missing_fields: [], documents_due: [] } });
+    expect((await t.service.refresh(t.actor.id)).snapshot?.requirements_pending).toBe(false);
+  });
+  it.each(["identity", "malformed", "unavailable"])("preserves prior snapshot on %s failure", async kind => {
+    const t = await setup(); await t.service.refresh(t.actor.id);
+    const prior = await links.find(t.actor.id);
+    if (kind === "identity") t.change({ external_ref: "other" });
+    if (kind === "malformed") t.change({ requirements: { due_codes: "invalid" } });
+    if (kind === "unavailable") t.change({}, 503);
+    await expect(t.service.refresh(t.actor.id)).rejects.toThrow();
+    expect(await links.find(t.actor.id)).toEqual(prior);
+  });
+  it("rejects stale writes and provider ID changes", async () => {
+    const t = await setup(), result = await t.service.refresh(t.actor.id);
+    await expect(links.saveSnapshot(t.actor.id, t.id, 0, result.snapshot!)).rejects.toThrow("SANDBOX_CUSTOMER_CONFLICT");
+    await expect(links.saveSnapshot(t.actor.id, "ozav_cus_foreign", 1, result.snapshot!)).rejects.toThrow();
+    expect((await links.find(t.actor.id))?.snapshotVersion).toBe(1);
+  });
+  it("blocks foreign, spoofed, PJ, unauthenticated and disabled refresh requests", async () => {
+    const t = await setup(), other = await profile(), pj = await profile("pj");
+    const app = await appFor(other, t.service);
+    expect((await app.inject({ method: "POST", url: `${path}/refresh`, headers, payload: {} })).statusCode).toBe(409);
+    expect((await app.inject({ method: "POST", url: `${path}/refresh`, headers, payload: { customer_id: t.actor.id } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: `${path}/refresh`, payload: {} })).statusCode).toBe(401);
+    const pjApp = await appFor(pj, t.service), disabled = await appFor(t.actor);
+    expect((await pjApp.inject({ method: "POST", url: `${path}/refresh`, headers, payload: {} })).statusCode).toBe(403);
+    expect((await disabled.inject({ method: "POST", url: `${path}/refresh`, headers, payload: {} })).statusCode).toBe(503);
+    expect(t.transport).toHaveBeenCalledTimes(1);
   });
 });
