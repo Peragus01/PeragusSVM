@@ -36,6 +36,20 @@ export class OzavClientError extends Error {
   }
 }
 
+export interface OzavSandboxCustomerInput {
+  externalRef: string;
+  email: string;
+  legalName: string;
+  taxId: string;
+}
+export interface OzavSandboxCustomer {
+  id: string;
+  externalRef: string;
+  email: string;
+  status: string;
+  verificationMode: "full" | "reliance" | null;
+}
+
 export interface OzavTransfer {
   id: string;
   status: string;
@@ -518,6 +532,40 @@ export class OzavClient {
       return invalidResponse();
     }
     return { environment: "test", scopes: row.scopes.map(text) };
+  }
+
+  async getCustomerCapabilities(): Promise<{ environment: "test"; entitlements: string[]; scopes: string[] }> {
+    const row = object(await this.get("/v2/capabilities"));
+    if (row.environment !== "test" || !Array.isArray(row.entitlements) || !Array.isArray(row.scopes)) return invalidResponse();
+    return { environment: "test", entitlements: row.entitlements.map(text), scopes: row.scopes.map(text) };
+  }
+
+  async createSandboxCustomer(input: OzavSandboxCustomerInput, idempotencyKey: string): Promise<OzavSandboxCustomer> {
+    if (!/^peragus-sandbox:[0-9a-f-]{36}$/.test(input.externalRef)
+      || !/^peragus-customer-test-[0-9a-f-]{36}$/.test(idempotencyKey)
+      || !/^[0-9]{11}$/.test(input.taxId)
+      || !/^peragus-sandbox-[0-9a-f-]{36}@example.com$/.test(input.email)
+      || input.legalName !== "Teste Peragus Sandbox") {
+      throw new OzavClientError("Only generated sandbox customer fixtures are allowed", false);
+    }
+    const response = await this.post({
+      path: "/v2/customers", idempotencyKey,
+      body: {
+        type: "individual", external_ref: input.externalRef, email: input.email,
+        individual: { legal_name: input.legalName, tax_id: { country: "BR", type: "cpf", value: input.taxId } },
+        verification_mode: "full", custody_model: "managed", monitoring: false,
+        metadata: { peragus_sandbox_fixture: "true" },
+      },
+    });
+    const row = object(response.body);
+    if (row.object !== "customer" || row.type !== "individual") return invalidResponse();
+    const verification = row.verification == null ? null : object(row.verification);
+    const mode = verification?.mode ?? null;
+    if (mode !== null && mode !== "full" && mode !== "reliance") return invalidResponse();
+    const result: OzavSandboxCustomer = { id: identifier(row.id, "ozav_cus_"), externalRef: text(row.external_ref),
+      email: text(row.email), status: text(row.status), verificationMode: mode };
+    if (result.externalRef !== input.externalRef || result.email !== input.email || result.verificationMode === "reliance") return invalidResponse();
+    return result;
   }
 
   async getTransfer(id: string): Promise<OzavTransfer> {

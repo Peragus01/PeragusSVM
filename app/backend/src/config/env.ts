@@ -6,6 +6,8 @@ const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
+  OZAV_SANDBOX_CUSTOMERS_ENABLED: z.enum(["true", "false"])
+    .default("false").transform(value => value === "true"),
   SETTLEMENT_DRAFTS_ENABLED: z.enum(["true", "false"])
     .default("false").transform(value => value === "true"),
   SUPABASE_URL: z.string().url().optional(),
