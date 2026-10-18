@@ -50,6 +50,27 @@ export interface OzavSandboxCustomer {
   verificationMode: "full" | "reliance" | null;
 }
 
+export interface OzavTermsSession {
+  token: string | null; status: "pending" | "accepted"; url: string; version: string; expiresAt: string; acceptedAt: string | null;
+}
+export interface OzavTermsEvidence { accepted_by: { legal_name: string }; accepted_at: string; }
+function parseTermsSession(value: unknown): OzavTermsSession {
+  const row = object(value);
+  if (row.object !== "terms_session" || (row.status !== "pending" && row.status !== "accepted")) return invalidResponse();
+  const url = new URL(text(row.terms_url));
+  if (url.origin !== "https://ozav.io" || url.username || url.password || url.search || url.hash || url.pathname.includes("ts_")) return invalidResponse();
+  const version = text(row.terms_version);
+  if (!version || version.length > 80) return invalidResponse();
+  const date = (value: unknown): string => {
+    const raw = text(value);
+    if (!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(raw) || !Number.isFinite(Date.parse(raw))) return invalidResponse();
+    return new Date(raw).toISOString();
+  };
+  const token = row.id == null ? null : text(row.id);
+  if (token !== null && !/^ts_[A-Za-z0-9_-]{8,256}$/.test(token)) return invalidResponse();
+  return { token, status: row.status, url: url.toString(), version, expiresAt: date(row.expires_at), acceptedAt: row.accepted_at == null ? null : date(row.accepted_at) };
+}
+
 export interface OzavCustomerSnapshot {
   provider_status: string;
   verification_mode: "full" | "reliance" | null;
@@ -605,6 +626,17 @@ export class OzavClient {
       verification_status: verification.status == null ? null : code(verification.status),
       due_codes: dueCodes, due_count: dueCount, missing_fields_count: missingCount,
       documents_due_count: documentCount, requirements_pending: pending };
+  }
+
+  async createCustomerTerms(idempotencyKey: string): Promise<OzavTermsSession> {
+    if (!/^peragus-terms-[0-9a-f-]{36}$/.test(idempotencyKey)) throw new OzavClientError("Invalid terms request", false);
+    return parseTermsSession((await this.post({ path: "/v2/customers/terms-sessions", body: {}, idempotencyKey })).body);
+  }
+  async acceptCustomerTerms(token: string, evidence: OzavTermsEvidence): Promise<OzavTermsSession> {
+    if (!/^ts_[A-Za-z0-9_-]{8,256}$/.test(token)) throw new OzavClientError("Invalid terms session", false);
+    return parseTermsSession((await this.post({ path: "/v2/customers/terms-sessions/accept", body: {
+      terms_session_id: token, accepted_by: evidence.accepted_by, accepted_at: evidence.accepted_at,
+    } })).body);
   }
 
   async getTransfer(id: string): Promise<OzavTransfer> {

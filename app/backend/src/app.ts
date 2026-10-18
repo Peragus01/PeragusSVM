@@ -1,3 +1,5 @@
+import { registerCustomerTermsRoutes } from "./routes/customer-terms.js";
+import type { CustomerTermsService } from "./onboarding/customer-terms-service.js";
 import { registerIndividualOnboardingRoutes } from "./routes/individual-onboarding.js";
 import type { IndividualDraftService } from "./onboarding/individual-draft-service.js";
 import { registerCustomerWebhookRoutes, type CustomerWebhookOptions } from "./routes/customer-webhooks.js";
@@ -33,6 +35,7 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  customerTermsService?: CustomerTermsService;
   individualDraftService?: IndividualDraftService;
   customerWebhooks?: CustomerWebhookOptions;
   customerAccess?: CustomerAccess;
@@ -80,6 +83,7 @@ export async function buildApp(
 
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
 
+  await registerCustomerTermsRoutes(app, options.customerAccess ? options.customerTermsService : undefined);
   await registerIndividualOnboardingRoutes(app, options.customerAccess ? options.individualDraftService : undefined);
 
   registerOzavSandboxCustomerRoutes(app, options.customerAccess ? options.ozavSandboxCustomerService : undefined);
