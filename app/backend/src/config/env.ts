@@ -6,6 +6,9 @@ const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
+  CUSTOMER_ONBOARDING_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
+  CUSTOMER_DATA_ENCRYPTION_KEY: z.string().optional(),
+  CUSTOMER_DATA_ENCRYPTION_KEY_ID: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/).default("v1"),
   CUSTOMER_WEBHOOKS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   CUSTOMER_WEBHOOK_SECRET: z.string().max(2048).regex(/^ozav_whsec_\S+$/).optional(),
   OZAV_SANDBOX_CUSTOMERS_ENABLED: z.enum(["true", "false"])
