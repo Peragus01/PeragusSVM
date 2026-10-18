@@ -99,14 +99,14 @@ Status e requisitos podem ser expostos com códigos de campos permitidos e mensa
 
 O processamento de webhook deve resolver o novo vínculo por ambiente e consultar o estado atual, não usar o snapshot do evento como autorização. Consultas manuais e notificações continuam sem liberar pagamentos. Credenciais e segredos não entram na documentação entregue a novos desenvolvedores.
 
-## 6. Endpoints Peragus propostos — ainda não implementados
+## 6. Endpoints Peragus e evolução do contrato
 
-Os caminhos abaixo são proposta de contrato, não podem ser usados no frontend como rotas já disponíveis. Consolidar schema/erros com a implementação e publicar a versão final antes de integrar a tela.
+GET e PUT /v1/me/onboarding/individual foram implementados como rascunho cifrado de staging, descrito em individual-onboarding-drafts.md. Os demais caminhos abaixo continuam propostos e indisponíveis; não integrá-los como se estivessem implementados.
 
 | Caminho proposto | Função e restrição |
 | --- | --- |
 | GET /v1/me/onboarding | Estado local da jornada, requisitos normalizados, possibilidades reais da próxima ação; nunca token secreto |
-| PUT /v1/me/onboarding/individual | Validar/salvar dados PF da própria conta; não criar cliente nem atestar aceite |
+| GET/PUT /v1/me/onboarding/individual | Implementado como rascunho cifrado de staging; ver individual-onboarding-drafts.md. Sem submissão ou aceite |
 | POST /v1/me/onboarding/terms | Criar/retomar sessão local e fornecer URL/versão/expiração |
 | POST /v1/me/onboarding/terms/accept | Registrar ação explícita da conta para sua sessão local |
 | POST /v1/me/onboarding/submit | Criar cliente full com intenção idempotente, dados e termos válidos; sem pagamento |
@@ -124,4 +124,4 @@ Todos exigem sessão confirmada, PF próprio e controle de suspensão. Não acei
 6. Integração da tela pelo responsável de frontend, incluindo proxy de Authorization, erros, sessão e apresentação honesta dos estados.
 7. Só então validar disponibilidade live de termos/captura e planejar um teste real controlado. Isso não habilita flags financeiras; KYC, carteira, Travel Rule, limites e execução financeira continuam com critérios próprios.
 
-Próxima entrega de código: schema/validação e estado da jornada antes da coleta real. Este contrato não exige migration nem deploy e não altera as flags do staging.
+Schema/validação e armazenamento do rascunho estão descritos na implementação individual-onboarding-drafts.md, que exige migration 015. Este contrato de desenho, por si só, não habilita coleta real, termos ou pagamentos. Ver payment-delivery-flow.md para o percurso de USDT confirmado por Henrique com o parceiro.
