@@ -1,3 +1,4 @@
+import { PostgresCustomerWebhookProcessor } from "./repositories/postgres-customer-webhook.js";
 import { OzavSandboxCustomerService } from "./application/ozav-sandbox-customer.js";
 import { PostgresSandboxCustomerLinkRepository } from "./repositories/postgres-sandbox-customer-link.js";
 import { assertSmokeTestSafety } from "./jobs/worker-smoke-test.js";
@@ -82,14 +83,17 @@ if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
   || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
   throw new Error("Authenticated customer onboarding requires financial and demo flags disabled until per-customer routing is implemented");
 }
-if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED) {
+if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED) {
   assertSmokeTestSafety(env);
   if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co") {
     throw new Error("Settlement drafts require the pinned staging Auth project");
   }
 }
-if (env.OZAV_SANDBOX_CUSTOMERS_ENABLED && !env.OZAV_API_KEY) {
+if ((env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED) && !env.OZAV_API_KEY) {
   throw new Error("OZAV_API_KEY sandbox key is required for customer fixture onboarding");
+}
+if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
+  throw new Error("CUSTOMER_WEBHOOK_SECRET is required for customer update notifications");
 }
 const authenticate = createSupabaseAuthenticator(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY);
 
@@ -352,6 +356,13 @@ if (env.DATABASE_URL) {
 }
 
 const app = await buildApp({
+  ...(env.CUSTOMER_WEBHOOKS_ENABLED ? {
+    customerWebhooks: { secret: env.CUSTOMER_WEBHOOK_SECRET!,
+      processor: new PostgresCustomerWebhookProcessor(pool!, new OzavClient({
+        apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 3000,
+      })),
+    },
+  } : {}),
   customerAccess: { authenticate, customers: new PostgresCustomerRepository(pool!) },
   ...(env.OZAV_SANDBOX_CUSTOMERS_ENABLED ? {
     ozavSandboxCustomerService: new OzavSandboxCustomerService(
@@ -362,7 +373,7 @@ const app = await buildApp({
     customerDraftRepository: (customerId: string) => PostgresSettlementRepository.forCustomerDrafts(pool!, customerId),
   } : {}),
   logger: {
-    redact: ["req.headers.authorization", "req.headers.cookie", 'res.headers["set-cookie"]'],
+    redact: ["req.headers.authorization", "req.headers.cookie", 'res.headers["set-cookie"]', 'req.headers["x-ozav-signature"]'],
     level: env.LOG_LEVEL,
   },
   settlementRepository,
@@ -426,6 +437,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  app.log.info({ event: "customer_webhook_receiver_configured", enabled: env.CUSTOMER_WEBHOOKS_ENABLED });
   await app.listen({
     host: env.HOST,
     port: env.PORT,

@@ -6,6 +6,8 @@ const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
+  CUSTOMER_WEBHOOKS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
+  CUSTOMER_WEBHOOK_SECRET: z.string().max(2048).regex(/^ozav_whsec_\S+$/).optional(),
   OZAV_SANDBOX_CUSTOMERS_ENABLED: z.enum(["true", "false"])
     .default("false").transform(value => value === "true"),
   SETTLEMENT_DRAFTS_ENABLED: z.enum(["true", "false"])
