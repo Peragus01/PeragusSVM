@@ -1,3 +1,4 @@
+import { registerCustomerWebhookRoutes, type CustomerWebhookOptions } from "./routes/customer-webhooks.js";
 import { registerOzavSandboxCustomerRoutes } from "./routes/ozav-sandbox-customer.js";
 import type { OzavSandboxCustomerService } from "./application/ozav-sandbox-customer.js";
 import { registerSettlementDraftRoutes } from "./routes/settlement-drafts.js";
@@ -30,6 +31,7 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  customerWebhooks?: CustomerWebhookOptions;
   customerAccess?: CustomerAccess;
   ozavSandboxCustomerService?: OzavSandboxCustomerService;
   customerDraftRepository?: (customerId: string) => SettlementRepository;
@@ -71,6 +73,7 @@ export async function buildApp(
   });
 
   await app.register(sensible);
+  await registerCustomerWebhookRoutes(app, options.customerWebhooks);
 
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
 
