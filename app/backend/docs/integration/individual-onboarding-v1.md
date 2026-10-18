@@ -101,14 +101,14 @@ O processamento de webhook deve resolver o novo vínculo por ambiente e consulta
 
 ## 6. Endpoints Peragus e evolução do contrato
 
-GET e PUT /v1/me/onboarding/individual foram implementados como rascunho cifrado de staging, descrito em individual-onboarding-drafts.md. Os demais caminhos abaixo continuam propostos e indisponíveis; não integrá-los como se estivessem implementados.
+GET e PUT /v1/me/onboarding/individual foram implementados como rascunho cifrado de staging, descrito em individual-onboarding-drafts.md. GET/POST de termos e o aceite também têm implementação de staging descrita em customer-terms-sessions.md. Os demais caminhos continuam propostos e indisponíveis; não integrá-los como se estivessem implementados.
 
 | Caminho proposto | Função e restrição |
 | --- | --- |
 | GET /v1/me/onboarding | Estado local da jornada, requisitos normalizados, possibilidades reais da próxima ação; nunca token secreto |
 | GET/PUT /v1/me/onboarding/individual | Implementado como rascunho cifrado de staging; ver individual-onboarding-drafts.md. Sem submissão ou aceite |
-| POST /v1/me/onboarding/terms | Criar/retomar sessão local e fornecer URL/versão/expiração |
-| POST /v1/me/onboarding/terms/accept | Registrar ação explícita da conta para sua sessão local |
+| GET/POST /v1/me/onboarding/terms | Implementado em staging; sessão cifrada e URL/versão/expiração, ver customer-terms-sessions.md |
+| POST /v1/me/onboarding/terms/accept | Implementado em staging; aceite explícito e evidência cifrada, sem submissão ou pagamento |
 | POST /v1/me/onboarding/submit | Criar cliente full com intenção idempotente, dados e termos válidos; sem pagamento |
 | POST /v1/me/onboarding/verification | Iniciar/recuperar verificação vinculada; URL somente quando de fato recebida |
 

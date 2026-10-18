@@ -6,6 +6,7 @@ const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
+  CUSTOMER_TERMS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   CUSTOMER_ONBOARDING_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   CUSTOMER_DATA_ENCRYPTION_KEY: z.string().optional(),
   CUSTOMER_DATA_ENCRYPTION_KEY_ID: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/).default("v1"),

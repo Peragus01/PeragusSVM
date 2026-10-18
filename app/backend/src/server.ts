@@ -1,3 +1,6 @@
+import { CustomerTermsService } from "./onboarding/customer-terms-service.js";
+import { TermsVault } from "./onboarding/terms-vault.js";
+import { PostgresCustomerTermsRepository } from "./repositories/postgres-customer-terms.js";
 import { DraftCipher } from "./onboarding/draft-cipher.js";
 import { IndividualDraftService } from "./onboarding/individual-draft-service.js";
 import { PostgresIndividualDraftRepository } from "./repositories/postgres-individual-draft.js";
@@ -86,19 +89,19 @@ if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
   || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
   throw new Error("Authenticated customer onboarding requires financial and demo flags disabled until per-customer routing is implemented");
 }
-if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED) {
+if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED) {
   assertSmokeTestSafety(env);
   if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co") {
     throw new Error("Settlement drafts require the pinned staging Auth project");
   }
 }
-if ((env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED) && !env.OZAV_API_KEY) {
+if ((env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_TERMS_ENABLED) && !env.OZAV_API_KEY) {
   throw new Error("OZAV_API_KEY sandbox key is required for customer fixture onboarding");
 }
 if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
   throw new Error("CUSTOMER_WEBHOOK_SECRET is required for customer update notifications");
 }
-const individualDraftCipher = env.CUSTOMER_ONBOARDING_ENABLED
+const individualDraftCipher = (env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED)
   ? new DraftCipher(env.CUSTOMER_DATA_ENCRYPTION_KEY ?? "", env.CUSTOMER_DATA_ENCRYPTION_KEY_ID) : undefined;
 const authenticate = createSupabaseAuthenticator(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY);
 
@@ -361,7 +364,12 @@ if (env.DATABASE_URL) {
 }
 
 const app = await buildApp({
-  ...(individualDraftCipher ? { individualDraftService: new IndividualDraftService(
+  ...(env.CUSTOMER_TERMS_ENABLED ? { customerTermsService: new CustomerTermsService(
+    new PostgresCustomerTermsRepository(pool!), new TermsVault(env.CUSTOMER_DATA_ENCRYPTION_KEY ?? "", env.CUSTOMER_DATA_ENCRYPTION_KEY_ID),
+    new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }),
+    new IndividualDraftService(new PostgresIndividualDraftRepository(pool!), individualDraftCipher!),
+  ) } : {}),
+  ...(env.CUSTOMER_ONBOARDING_ENABLED && individualDraftCipher ? { individualDraftService: new IndividualDraftService(
     new PostgresIndividualDraftRepository(pool!), individualDraftCipher,
   ) } : {}),
   ...(env.CUSTOMER_WEBHOOKS_ENABLED ? {
@@ -445,6 +453,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  app.log.info({ event: "customer_terms_configured", enabled: env.CUSTOMER_TERMS_ENABLED });
   app.log.info({ event: "customer_onboarding_configured", enabled: env.CUSTOMER_ONBOARDING_ENABLED });
   app.log.info({ event: "customer_webhook_receiver_configured", enabled: env.CUSTOMER_WEBHOOKS_ENABLED });
   await app.listen({
