@@ -871,6 +871,77 @@ export class OzavClient {
     return quote(response.body);
   }
 
+  /** Customer Pix path: exactly one POST; preserve degraded-success IDs for GET recovery. */
+  async createCustomerPixTransfer(input: CreateOzavTransferInput): Promise<{id: string; transfer: OzavTransfer | null}> {
+    identifier(input.customerId, "ozav_cus_"); identifier(input.walletId, "ozav_wal_"); identifier(input.quoteId, "ozav_q_");
+    if (!/^peragus-pix-[0-9a-f-]{36}$/.test(input.idempotencyKey)) throw new OzavClientError("Invalid Pix key", false);
+    // Do not use post(): its retries are appropriate for other paths, but this
+    // path recovers unknown outcomes through listing/GET, never another POST.
+    const response = await this.writeTransport({path: "/v2/transfers", idempotencyKey: input.idempotencyKey, body: {
+      customer_id: input.customerId, quote_id: input.quoteId,
+      source: {type: "fiat_payment", currency: "BRL", rail: "pix"},
+      destination: {type: "wallet", wallet_id: input.walletId, chain: "solana"}, metadata: input.metadata,
+    }}, this.apiKey, this.timeoutMs);
+    if (response.statusCode === 200) {
+      const row = object(response.body);
+      if (row.object !== "transfer" || row.status !== "needs_review") return invalidResponse();
+      return {id: identifier(row.id, "ozav_tr_"), transfer: null};
+    }
+    if (response.statusCode !== 201) throw new OzavClientError("Pix outcome requires reconciliation", false, response.statusCode);
+    const row = transfer(response.body);
+    return {id: row.id, transfer: row};
+  }
+
+  async getCustomerManagedWallet(customerId: string): Promise<string> {
+    identifier(customerId, "ozav_cus_");
+    const wallets: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const query = new URLSearchParams({customer_id: customerId, limit: "100"});
+      if (cursor) query.set("starting_after", cursor);
+      const row = object(await this.get(`/v2/wallets?${query}`));
+      if (!Array.isArray(row.data) || typeof row.has_more !== "boolean") return invalidResponse();
+      for (const raw of row.data) {
+        const wallet = object(raw);
+        if (wallet.customer_id !== customerId) return invalidResponse();
+        if (wallet.custody_model === "managed" && wallet.status === "active") wallets.push(identifier(wallet.id, "ozav_wal_"));
+      }
+      if (!row.has_more) {
+        if (wallets.length !== 1) throw new OzavClientError("Exactly one active managed wallet required", false);
+        return wallets[0]!;
+      }
+      const next = text(row.next_cursor);
+      if (!next || next.length > 4096 || next === cursor) return invalidResponse();
+      cursor = next;
+    }
+    throw new OzavClientError("Wallet listing incomplete", false);
+  }
+
+  async findCustomerPixTransfer(customerId: string, localId: string): Promise<string | null> {
+    identifier(customerId, "ozav_cus_");
+    let cursor: string | undefined;
+    const found = new Set<string>();
+    for (let page = 0; page < 20; page++) {
+      const query = new URLSearchParams({customer_id: customerId, limit: "100"});
+      if (cursor) query.set("starting_after", cursor);
+      const row = object(await this.get(`/v2/transfers?${query}`));
+      if (!Array.isArray(row.data) || typeof row.has_more !== "boolean") return invalidResponse();
+      for (const raw of row.data) {
+        const item = object(raw);
+        if (item.customer_id !== customerId) return invalidResponse();
+        if (item.metadata != null && object(item.metadata).peragus_pix_id === localId) found.add(identifier(item.id, "ozav_tr_"));
+      }
+      if (!row.has_more) {
+        if (found.size > 1) throw new OzavClientError("Ambiguous Pix recovery", false);
+        return [...found][0] ?? null;
+      }
+      const next = text(row.next_cursor);
+      if (!next || next.length > 4096 || next === cursor) return invalidResponse();
+      cursor = next;
+    }
+    throw new OzavClientError("Transfer listing incomplete", false);
+  }
+
   async createTransfer(
     input: CreateOzavTransferInput,
   ): Promise<{

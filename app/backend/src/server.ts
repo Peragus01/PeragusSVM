@@ -1,3 +1,5 @@
+import {CustomerSandboxPixService} from "./purchases/customer-sandbox-pix.js";
+import {PostgresCustomerPixRepository} from "./repositories/postgres-customer-sandbox-pix.js";
 import { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
 import { PostgresCustomerPurchaseIntentRepository } from "./repositories/postgres-customer-purchase-intents.js";
 import { CustomerQuoteService } from "./quotes/customer-quotes.js";
@@ -104,13 +106,13 @@ if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
   || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
   throw new Error("Authenticated customer onboarding requires financial and demo flags disabled until per-customer routing is implemented");
 }
-if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_ONBOARDING_STATUS_ENABLED || env.CUSTOMER_WALLET_LINKING_ENABLED || env.CUSTOMER_QUOTES_ENABLED || env.CUSTOMER_PURCHASE_INTENTS_ENABLED) {
+if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_ONBOARDING_STATUS_ENABLED || env.CUSTOMER_WALLET_LINKING_ENABLED || env.CUSTOMER_QUOTES_ENABLED || env.CUSTOMER_PURCHASE_INTENTS_ENABLED || env.CUSTOMER_SANDBOX_PIX_ENABLED) {
   assertSmokeTestSafety(env);
   if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co") {
     throw new Error("Settlement drafts require the pinned staging Auth project");
   }
 }
-if ((env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_QUOTES_ENABLED) && !env.OZAV_API_KEY) {
+if ((env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_QUOTES_ENABLED || env.CUSTOMER_SANDBOX_PIX_ENABLED) && !env.OZAV_API_KEY) {
   throw new Error("OZAV_API_KEY sandbox key is required for customer fixture onboarding");
 }
 if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
@@ -387,6 +389,7 @@ const customerTermsService = env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSI
   new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }), draftService!,
 ) : undefined;
 const app = await buildApp({
+  ...(env.CUSTOMER_SANDBOX_PIX_ENABLED ? {customerSandboxPixService: new CustomerSandboxPixService(new PostgresCustomerPixRepository(pool!), new OzavClient({apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000}))} : {}),
   ...(env.CUSTOMER_PURCHASE_INTENTS_ENABLED ? { customerPurchaseIntentService: new CustomerPurchaseIntentService(new PostgresCustomerPurchaseIntentRepository(pool!)) } : {}),
   ...(env.CUSTOMER_QUOTES_ENABLED ? { customerQuoteService: new CustomerQuoteService(
     new PostgresCustomerQuoteRepository(pool!), new PostgresOnboardingSubmissionRepository(pool!),
@@ -495,6 +498,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  app.log.info({ event: "customer_sandbox_pix_configured", enabled: env.CUSTOMER_SANDBOX_PIX_ENABLED });
   app.log.info({ event: "customer_purchase_intents_configured", enabled: env.CUSTOMER_PURCHASE_INTENTS_ENABLED });
   app.log.info({ event: "customer_quotes_configured", enabled: env.CUSTOMER_QUOTES_ENABLED });
   app.log.info({ event: "customer_wallet_linking_configured", enabled: env.CUSTOMER_WALLET_LINKING_ENABLED });
