@@ -1,3 +1,5 @@
+import { registerCustomerVerificationRoutes } from "./routes/customer-verification.js";
+import type { CustomerVerificationService } from "./onboarding/customer-verification-service.js";
 import { registerCustomerSubmissionRoutes } from "./routes/customer-submission.js";
 import type { CustomerSubmissionService } from "./onboarding/customer-submission-service.js";
 import { registerCustomerTermsRoutes } from "./routes/customer-terms.js";
@@ -37,6 +39,8 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  customerVerificationService?: CustomerVerificationService;
+  verificationSimulationEnabled?: boolean;
   customerSubmissionService?: CustomerSubmissionService;
   customerTermsService?: CustomerTermsService;
   individualDraftService?: IndividualDraftService;
@@ -86,6 +90,7 @@ export async function buildApp(
 
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
 
+  await registerCustomerVerificationRoutes(app, options.customerAccess ? options.customerVerificationService : undefined, options.verificationSimulationEnabled);
   await registerCustomerSubmissionRoutes(app, options.customerAccess ? options.customerSubmissionService : undefined);
   await registerCustomerTermsRoutes(app, options.customerAccess ? options.customerTermsService : undefined);
   await registerIndividualOnboardingRoutes(app, options.customerAccess ? options.individualDraftService : undefined);
