@@ -3,6 +3,7 @@ import type { OzavVerification } from "../providers/ozav-client.js";
 import type { TermsState } from "./terms-types.js";
 export interface OverviewFacts {
   binding_consistent: boolean;
+  wallet: { wallet_address: string; verified_at: string } | null;
   draft: { version: number; updated_at: string } | null;
   terms: { session_id: string; state: TermsState; version: string | null; expires_at: string | null; accepted_at: string | null; active: boolean } | null;
   registration: { state: "pending" | "linked"; draft_version: number; provider_status: string | null;
@@ -14,7 +15,7 @@ export interface OverviewFacts {
 }
 export interface OnboardingOverviewRepository { read(customerId: string): Promise<OverviewFacts>; }
 export interface OnboardingActions {
-  draft: boolean; terms: boolean; submission: boolean; verification: boolean; screening: boolean;
+  draft: boolean; terms: boolean; submission: boolean; verification: boolean; screening: boolean; wallet: boolean;
 }
 const captureChecks = ["kyc_document", "liveness", "face_match"] as const;
 const allowedChecks = [...captureChecks,"aml_name_screening"] as const;
@@ -39,6 +40,7 @@ export class CustomerOnboardingOverview {
     const terms = facts.terms;
     const expired = terms?.expires_at != null && Date.parse(terms.expires_at) <= this.now().getTime();
     const pending: string[] = [];
+    if (!facts.wallet) pending.push("WALLET_OWNERSHIP_REQUIRED");
     if (!facts.draft) pending.push("INDIVIDUAL_DRAFT_REQUIRED");
     if (!terms) pending.push("PROVIDER_TERMS_REQUIRED");
     else if (terms.state !== "accepted" || !terms.accepted_at) pending.push(
@@ -77,6 +79,8 @@ export class CustomerOnboardingOverview {
       screening: facts.screening ? { status: facts.screening.status, result: facts.screening.result,
         lists: facts.screening.lists, matches_count: facts.screening.matches_count,
         suggested_decision: facts.screening.suggested_decision, refreshed_at: facts.screening.refreshed_at } : null,
+      wallet: facts.wallet ? { wallet_address: facts.wallet.wallet_address, verified_at: facts.wallet.verified_at,
+        network: "solana:devnet", proof_type: "signed_message" } : null,
       pending_steps: pending, actions_enabled: { ...this.actions },
       observation_freshness: "not_evaluated", operations_enabled: false,
       operation_blockers: ["SANDBOX_ONLY", "FINANCIAL_OPERATIONS_DISABLED"],

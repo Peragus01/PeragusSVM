@@ -1,3 +1,5 @@
+import { CustomerWalletService } from "./wallets/customer-wallet.js";
+import { PostgresCustomerWalletRepository } from "./repositories/postgres-customer-wallet.js";
 import { CustomerOnboardingOverview } from "./onboarding/customer-onboarding-overview.js";
 import { PostgresOnboardingOverviewRepository } from "./repositories/postgres-onboarding-overview.js";
 import { CustomerScreeningService } from "./onboarding/customer-screening-service.js";
@@ -98,7 +100,7 @@ if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
   || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
   throw new Error("Authenticated customer onboarding requires financial and demo flags disabled until per-customer routing is implemented");
 }
-if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_ONBOARDING_STATUS_ENABLED) {
+if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_ONBOARDING_STATUS_ENABLED || env.CUSTOMER_WALLET_LINKING_ENABLED) {
   assertSmokeTestSafety(env);
   if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co") {
     throw new Error("Settlement drafts require the pinned staging Auth project");
@@ -381,11 +383,12 @@ const customerTermsService = env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSI
   new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }), draftService!,
 ) : undefined;
 const app = await buildApp({
+  ...(env.CUSTOMER_WALLET_LINKING_ENABLED ? { customerWalletService: new CustomerWalletService(new PostgresCustomerWalletRepository(pool!)) } : {}),
   ...(env.CUSTOMER_ONBOARDING_STATUS_ENABLED ? { customerOnboardingOverview: new CustomerOnboardingOverview(
     new PostgresOnboardingOverviewRepository(pool!), {
       draft: env.CUSTOMER_ONBOARDING_ENABLED, terms: env.CUSTOMER_TERMS_ENABLED,
       submission: env.CUSTOMER_SUBMISSION_ENABLED, verification: env.CUSTOMER_VERIFICATIONS_ENABLED,
-      screening: env.CUSTOMER_SCREENINGS_ENABLED,
+      screening: env.CUSTOMER_SCREENINGS_ENABLED, wallet: env.CUSTOMER_WALLET_LINKING_ENABLED,
     },
   ) } : {}),
   ...(env.CUSTOMER_SCREENINGS_ENABLED ? { customerScreeningService: new CustomerScreeningService(
@@ -483,6 +486,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  app.log.info({ event: "customer_wallet_linking_configured", enabled: env.CUSTOMER_WALLET_LINKING_ENABLED });
   app.log.info({ event: "customer_onboarding_status_configured", enabled: env.CUSTOMER_ONBOARDING_STATUS_ENABLED });
   app.log.info({ event: "customer_screening_configured", enabled: env.CUSTOMER_SCREENINGS_ENABLED });
   app.log.info({ event: "customer_verification_configured", enabled: env.CUSTOMER_VERIFICATIONS_ENABLED, simulation_enabled: env.CUSTOMER_VERIFICATION_SIMULATION_ENABLED });

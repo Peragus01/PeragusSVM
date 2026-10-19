@@ -7,6 +7,8 @@ export class PostgresOnboardingOverviewRepository implements OnboardingOverviewR
   async read(customerId: string): Promise<OverviewFacts> {
     const r = await this.pool.query<OverviewFacts>(`
       select
+        case when w.customer_id is null then null else jsonb_build_object(
+          'wallet_address',w.wallet_address,'verified_at',w.verified_at) end as wallet,
         (v.customer_id is null or (s.state='linked' and v.provider_customer_id=s.provider_customer_id))
         and (sc.customer_id is null or (s.state='linked' and sc.provider_customer_id=s.provider_customer_id)) as binding_consistent,
         case when d.customer_id is null then null else jsonb_build_object(
@@ -33,6 +35,7 @@ export class PostgresOnboardingOverviewRepository implements OnboardingOverviewR
         and ((s.customer_id is not null and t.id=s.terms_session_id) or (s.customer_id is null and t.active))
       left join peragus_customer_verifications v on v.customer_id=c.id and v.environment='test'
       left join peragus_customer_screenings sc on sc.customer_id=c.id and sc.environment='test'
+      left join peragus_customer_wallets w on w.customer_id=c.id and w.environment='test' and w.network='solana:devnet'
       where c.id=$1`, [customerId]);
     if (r.rows.length !== 1) throw new Error("ONBOARDING_OVERVIEW_UNAVAILABLE");
     return r.rows[0]!;
