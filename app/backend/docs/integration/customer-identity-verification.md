@@ -108,7 +108,17 @@ Em nenhuma resposta/update há concessão de operações. peragus_customers.veri
 1. Build/testes da branch e migration 018 no staging com os guardas existentes. Merge develop e deploy com ambos os flags false.
 2. Ativar CUSTOMER_VERIFICATIONS_ENABLED=true na API e manter simulação false. Não alterar worker, chaves, webhooks ou flags financeiras. Conferir o log de configuração.
 3. Com PF de teste e novo vínculo cadastral, POST início retorna sessão própria pending/sem URL (ou recupera uma já existente). Repetir mantém ID sem segunda criação. GET deve ler cache, refresh busca o estado atual. Registrar ausência de URL como esperado para sandbox.
-4. Ativar temporariamente CUSTOMER_VERIFICATION_SIMULATION_ENABLED=true. Testar rejected e approved, um por vez, observando checks e snapshot cadastral. Repetir resultado já observado não deve refazer o POST externo. Conferir que o perfil local continua draft e operações false.
+4. Ativar temporariamente CUSTOMER_VERIFICATION_SIMULATION_ENABLED=true. Usar clientes sintéticos distintos para rejected e approved: o staging retornou conflito ao tentar mudar uma sessão já concluída. Observar os três checks de captura separadamente do screening AML. Repetir resultado já observado não deve refazer o POST externo. Conferir que o perfil local continua draft e operações false.
 5. Desativar primeiro simulação e depois verificação ao encerrar, ou desligar ambos no mesmo deploy. Preservar o webhook ativo e os registros de auditoria. Nenhum dado real deve ser enviado ao sandbox.
 
-Os testes usam respostas simuladas e banco PostgreSQL embutido: cobrem transporte/parsing, criação/retomada, recuperação de timeout/falha local/409, ausência de resultado recuperável, simulação/falha local, checks desconhecidos, ambiguidade, identidade/URL incorretas, escopos, concorrência de revisão, isolamento, bloqueios e RLS. Entrega externa e comportamento real do helper continuam pendentes de aceite no staging. Não declarar KYC real ou prontidão live a partir desses testes.
+Os testes usam respostas simuladas e banco PostgreSQL embutido: cobrem transporte/parsing, criação/retomada, recuperação de timeout/falha local/409, ausência de resultado recuperável, simulação/falha local, checks desconhecidos, ambiguidade, identidade/URL incorretas, escopos, concorrência de revisão, isolamento, bloqueios e RLS. No staging foram observados criação/replay, rejeição e captura aprovada; o helper deixou aml_name_screening em not_started. O screening separado foi completed/clear e repetido com o mesmo ID. A integração local do screening e o campo identity_outcome ainda exigem aceite após o deploy deste PR. Não declarar KYC real ou prontidão live a partir desses testes.
+
+## Separate capture and screening evidence
+
+See [customer-screening-evidence.md](customer-screening-evidence.md). Staging showed
+that approval simulation passes the three identity capture checks but can leave
+aml_name_screening at not_started. `identity_outcome` now reports capture separately;
+legacy observed_outcome remains conservative for all four checks. Simulation retry
+acknowledges capture results via fresh GET instead of re-simulating an already
+completed capture. Neither field authorizes operations. An independent sanctions/PEP
+screening remains its own point-in-time evidence and does not modify these checks.

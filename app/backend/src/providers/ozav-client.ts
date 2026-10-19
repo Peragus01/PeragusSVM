@@ -51,6 +51,25 @@ export interface OzavSandboxCustomer {
   verificationMode: "full" | "reliance" | null;
 }
 
+export interface OzavScreening {
+  id: string; customerId: string; status: "pending" | "completed";
+  result: "clear" | "match_found" | "review"; lists: ("sanctions" | "pep")[];
+  matchesCount: number; suggestedDecision: "clear" | "review" | "decline" | null;
+}
+function parseScreening(input: unknown, customerId: string, expectedId?: string): OzavScreening {
+  const row = object(input), subject = object(row.subject), id = identifier(row.id, "ozav_scr_");
+  if (row.object !== "screening" || subject.customer_id !== customerId || (expectedId && expectedId !== id)
+    || Object.keys(subject).length !== 1 || !["pending", "completed"].includes(text(row.status))
+    || !["clear", "match_found", "review"].includes(text(row.result)) || !Array.isArray(row.matches)
+    || !Array.isArray(row.lists) || row.lists.length !== 2 || new Set(row.lists).size !== 2
+    || !row.lists.includes("sanctions") || !row.lists.includes("pep")
+    || (row.suggested_decision != null && !["clear", "review", "decline"].includes(text(row.suggested_decision)))
+    || (row.result === "clear" && row.matches.length !== 0)) return invalidResponse();
+  return { id, customerId, status: row.status as OzavScreening["status"], result: row.result as OzavScreening["result"],
+    lists: ["sanctions", "pep"], matchesCount: row.matches.length,
+    suggestedDecision: (row.suggested_decision ?? null) as OzavScreening["suggestedDecision"] };
+}
+
 export interface OzavVerification {
   id: string; customerId: string; status: "pending" | "in_progress" | "completed" | "expired";
   checks: Partial<Record<"kyc_document" | "liveness" | "face_match" | "aml_name_screening", "pass" | "fail" | "review" | "pending" | "not_started">>;
@@ -679,6 +698,35 @@ export class OzavClient {
     const status = text(row.status);
     if (!/^[a-z][a-z0-9_]{0,79}$/.test(status)) return invalidResponse();
     return { id: identifier(row.id, "ozav_cus_"), externalRef: payload.external_ref, email: payload.email, status, verificationMode: "full" };
+  }
+
+  async listCustomerScreenings(customerId: string): Promise<OzavScreening[]> {
+    identifier(customerId, "ozav_cus_");
+    const screenings: OzavScreening[] = [], seen = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 0; page < 10; page++) {
+      const params = new URLSearchParams({ customer_id: customerId, limit: "100" });
+      if (cursor) params.set("starting_after", cursor);
+      const row = object(await this.get(`/v2/screenings?${params}`));
+      if (!Array.isArray(row.data) || row.data.length > 100 || typeof row.has_more !== "boolean") return invalidResponse();
+      for (const item of row.data) {
+        const value = parseScreening(item, customerId);
+        if (seen.has(value.id)) return invalidResponse(); seen.add(value.id); screenings.push(value);
+      }
+      if (!row.has_more) return screenings;
+      const next = text(row.next_cursor);
+      if (!next || next.length > 4096 || next === cursor) return invalidResponse(); cursor = next;
+    }
+    throw new OzavClientError("Screening listing needs reconciliation", false);
+  }
+  async createCustomerScreening(customerId: string, idempotencyKey: string): Promise<OzavScreening> {
+    identifier(customerId, "ozav_cus_");
+    return parseScreening((await this.post({ path: "/v2/screenings", idempotencyKey,
+      body: { subject: { customer_id: customerId }, lists: ["sanctions", "pep"] } })).body, customerId);
+  }
+  async getCustomerScreening(customerId: string, screeningId: string): Promise<OzavScreening> {
+    identifier(customerId, "ozav_cus_"); identifier(screeningId, "ozav_scr_");
+    return parseScreening(await this.get(`/v2/screenings/${encodeURIComponent(screeningId)}`), customerId, screeningId);
   }
 
   async listCustomerVerifications(customerId: string): Promise<OzavVerification[]> {
