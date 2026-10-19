@@ -1,3 +1,5 @@
+import { registerCustomerPurchaseIntentRoutes } from "./routes/customer-purchase-intents.js";
+import type { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
 import { registerCustomerQuoteRoutes } from "./routes/customer-quotes.js";
 import type { CustomerQuoteService } from "./quotes/customer-quotes.js";
 import { registerCustomerWalletRoutes } from "./routes/customer-wallet.js";
@@ -47,6 +49,7 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  customerPurchaseIntentService?: CustomerPurchaseIntentService;
   customerQuoteService?: CustomerQuoteService;
   customerWalletService?: CustomerWalletService;
   customerOnboardingOverview?: CustomerOnboardingOverview;
@@ -102,6 +105,7 @@ export async function buildApp(
 
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
 
+  await registerCustomerPurchaseIntentRoutes(app, options.customerAccess ? options.customerPurchaseIntentService : undefined);
   await registerCustomerQuoteRoutes(app, options.customerAccess ? options.customerQuoteService : undefined);
   await registerCustomerWalletRoutes(app, options.customerAccess ? options.customerWalletService : undefined);
   await registerCustomerOnboardingOverviewRoute(app, options.customerAccess ? options.customerOnboardingOverview : undefined);

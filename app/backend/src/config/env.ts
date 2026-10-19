@@ -6,6 +6,7 @@ const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
+  CUSTOMER_PURCHASE_INTENTS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   CUSTOMER_QUOTES_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   CUSTOMER_WALLET_LINKING_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   CUSTOMER_ONBOARDING_STATUS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
