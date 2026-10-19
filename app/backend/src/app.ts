@@ -1,3 +1,5 @@
+import { registerCustomerQuoteRoutes } from "./routes/customer-quotes.js";
+import type { CustomerQuoteService } from "./quotes/customer-quotes.js";
 import { registerCustomerWalletRoutes } from "./routes/customer-wallet.js";
 import type { CustomerWalletService } from "./wallets/customer-wallet.js";
 import { registerCustomerOnboardingOverviewRoute } from "./routes/customer-onboarding-overview.js";
@@ -45,6 +47,7 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  customerQuoteService?: CustomerQuoteService;
   customerWalletService?: CustomerWalletService;
   customerOnboardingOverview?: CustomerOnboardingOverview;
   customerScreeningService?: CustomerScreeningService;
@@ -99,6 +102,7 @@ export async function buildApp(
 
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
 
+  await registerCustomerQuoteRoutes(app, options.customerAccess ? options.customerQuoteService : undefined);
   await registerCustomerWalletRoutes(app, options.customerAccess ? options.customerWalletService : undefined);
   await registerCustomerOnboardingOverviewRoute(app, options.customerAccess ? options.customerOnboardingOverview : undefined);
   await registerCustomerScreeningRoutes(app, options.customerAccess ? options.customerScreeningService : undefined);

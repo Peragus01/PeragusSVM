@@ -173,6 +173,9 @@ export interface OzavQuote {
   createdAt: string;
 }
 
+export interface OzavIndicativeQuote extends OzavQuote {
+  rateWithoutSpread: string | null; amountDeducted: string | null;
+}
 export interface CreateOzavQuoteInput {
   customerId: string;
   sourceAmountBrl: string;
@@ -811,6 +814,31 @@ export class OzavClient {
       hasMore: row.has_more,
       nextCursor,
     };
+  }
+
+  async createCustomerIndicativeQuote(customerId: string, amountBrl: string): Promise<OzavIndicativeQuote> {
+    identifier(customerId, "ozav_cus_");
+    if (!/^(0|[1-9]\d{0,4})\.\d{2}$/.test(amountBrl) || BigInt(amountBrl.replace(".","")) <= 0n
+      || BigInt(amountBrl.replace(".","")) > 1000000n) throw new OzavClientError("Invalid quote input", false);
+    const row = object((await this.post({ path: "/v2/quotes", body: {
+      customer_id: customerId, source: { currency: "BRL", amount: amountBrl },
+      target: { currency: "USDT", chain: "solana" }, source_rail: "pix", spread_bps: 0,
+    } })).body);
+    const result = quote(row), source = object(row.source), target = object(row.target), conditions = object(row.exchange_conditions);
+    const positive = (value: string, precision: number) => new RegExp(`^(0|[1-9]\\d{0,14})(\\.\\d{1,${precision}})?$`).test(value)
+      && BigInt(value.replace(".", "")) > 0n;
+    const cents = (value: string) => { const [whole, fraction=""] = value.split("."); return BigInt(whole!)*100n+BigInt(fraction.padEnd(2,"0")); };
+    if (result.customerId !== customerId || result.source.currency !== "BRL" || result.target.currency !== "USDT"
+      || !positive(result.source.amount,2) || cents(result.source.amount) !== cents(amountBrl)
+      || !positive(result.target.amount,6) || !positive(result.rate,12) || result.rateType !== "floating"
+      || row.expires_at !== null || result.spreadBps !== 0 || row.via != null || row.legs != null
+      || (target.chain != null && target.chain !== "solana") || source.chain != null) return invalidResponse();
+    const without = conditions.rate_without_spread == null ? null : text(conditions.rate_without_spread);
+    const deducted = conditions.amount_deducted == null ? null : text(conditions.amount_deducted);
+    const rateUnits = (value: string) => { const [whole,fraction=""] = value.split("."); return BigInt(whole!)*10n**12n+BigInt(fraction.padEnd(12,"0")); };
+    if (without !== null && (!positive(without,12) || rateUnits(without) !== rateUnits(result.rate))) return invalidResponse();
+    if (deducted !== null && (!/^(0|[1-9]\d{0,4})(\.\d{1,2})?$/.test(deducted) || cents(deducted) >= cents(amountBrl))) return invalidResponse();
+    return { ...result, source: {currency:"BRL",amount:amountBrl}, rateWithoutSpread:without, amountDeducted:deducted };
   }
 
   async createQuote(input: CreateOzavQuoteInput): Promise<OzavQuote> {
