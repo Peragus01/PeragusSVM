@@ -1,3 +1,4 @@
+import {Keypair} from "@solana/web3.js";
 import {randomUUID} from "node:crypto";
 import {readdir,readFile} from "node:fs/promises";
 import {PGlite} from "@electric-sql/pglite";
@@ -11,7 +12,7 @@ import {CustomerOnboardingOverview} from "../src/onboarding/customer-onboarding-
 const db=new PGlite(),queries:string[]=[];
 const pool={query:async(sql:string,params?:unknown[])=>{queries.push(sql);const r=await db.query(sql,params);return{...r,rowCount:r.rows.length};}} as unknown as Pool;
 const customers=new PostgresCustomerRepository(pool),repo=new PostgresOnboardingOverviewRepository(pool);
-const actions={draft:false,terms:false,submission:false,verification:false,screening:false};
+const actions={draft:false,terms:false,submission:false,verification:false,screening:false,wallet:false};
 const service=new CustomerOnboardingOverview(repo,actions,()=>new Date("2026-10-20T12:00:00Z"));
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
@@ -33,6 +34,7 @@ async function seed(s:Awaited<ReturnType<typeof setup>>){
  const observation={id:"ozav_vrf_test",customerId:provider,status:"completed",checks:{kyc_document:"pass",liveness:"pass",face_match:"pass",aml_name_screening:"not_started",private_data:"never expose"}};
  await db.query("insert into peragus_customer_verifications(customer_id,provider_customer_id,verification_id,observation,refreshed_at) values($1,$2,$3,$4,now())",[id,provider,`ozav_vrf_${id.replaceAll("-","")}`,observation]);
  await db.query("insert into peragus_customer_screenings(customer_id,provider_customer_id,idempotency_key,screening_id,observation,refreshed_at) values($1,$2,$3,$4,$5,now())",[id,provider,randomUUID(),`ozav_scr_${id.replaceAll("-","")}`,{status:"completed",result:"clear",lists:["sanctions","pep"],matchesCount:0,suggestedDecision:"clear",private_data:"not exposed"}]);
+ await db.query("insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature) values($1,$2,$3,now(),'test message','test signature')",[id,Keypair.generate().publicKey.toBase58(),randomUUID()]);
  return{terms,provider};
 }
 const path="/v1/me/onboarding/status",headers={authorization:"Bearer valid"};
@@ -43,7 +45,7 @@ describe("stored onboarding overview",()=>{
  it("returns missing stages without provider calls, keys, decryption or writes",async()=>{
   const s=await setup();queries.length=0;const view=await service.read(s.customer);
   expect(queries).toHaveLength(1);expect(queries[0].trim().startsWith("select")).toBe(true);expect(queries[0]).not.toContain("encrypted_");
-  expect(view.pending_steps).toEqual(["INDIVIDUAL_DRAFT_REQUIRED","PROVIDER_TERMS_REQUIRED","PROVIDER_SUBMISSION_REQUIRED"]);
+  expect(view.pending_steps).toEqual(["WALLET_OWNERSHIP_REQUIRED","INDIVIDUAL_DRAFT_REQUIRED","PROVIDER_TERMS_REQUIRED","PROVIDER_SUBMISSION_REQUIRED"]);
   expect(view).toMatchObject({environment:"test",source:"stored_observations",operations_enabled:false,actions_enabled:actions});
  });
  it("consolidates recorded identity and independent screening while keeping all-checks unknown and financial gates closed",async()=>{

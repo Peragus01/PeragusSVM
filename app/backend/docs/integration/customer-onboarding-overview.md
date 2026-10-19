@@ -108,3 +108,11 @@ approved, separate screening clear, old AML check still not_started, profile dra
 operations false and all actions_enabled false. Verify the rejected PF remains a
 different result. No migration is run for this feature. Post-deploy acceptance is
 pending until these authenticated requests are observed in staging.
+
+## Wallet proof extension
+
+Migration 020 adds a metadata-only join to the verified test wallet. Apply it
+before deploying this overview update. The response gains wallet (public address,
+verified time, devnet context and signed-message proof type), actions_enabled.wallet,
+and WALLET_OWNERSHIP_REQUIRED if absent. See customer-wallet-ownership.md for proof
+creation, privacy, replay protection and the remaining frontend acceptance.
