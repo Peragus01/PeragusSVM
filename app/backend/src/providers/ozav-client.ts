@@ -1,3 +1,4 @@
+import type { IndividualDraft } from "../onboarding/individual-schema.js";
 import https from "node:https";
 
 export interface OzavResponse {
@@ -50,6 +51,12 @@ export interface OzavSandboxCustomer {
   verificationMode: "full" | "reliance" | null;
 }
 
+export interface OzavRegistrationPayload {
+  type: "individual"; external_ref: string; email: string;
+  individual: Omit<IndividualDraft, "cpf"> & { tax_id: { country: "BR"; type: "cpf"; value: string } };
+  terms_session_id: string; verification_mode: "full"; custody_model: "managed";
+  monitoring: false; metadata: { peragus_onboarding_test: "true" };
+}
 export interface OzavTermsSession {
   token: string | null; status: "pending" | "accepted"; url: string; version: string; expiresAt: string; acceptedAt: string | null;
 }
@@ -637,6 +644,20 @@ export class OzavClient {
     return parseTermsSession((await this.post({ path: "/v2/customers/terms-sessions/accept", body: {
       terms_session_id: token, accepted_by: evidence.accepted_by, accepted_at: evidence.accepted_at,
     } })).body);
+  }
+
+  async createOnboardingCustomer(payload: OzavRegistrationPayload, idempotencyKey: string): Promise<OzavSandboxCustomer & { verificationMode: "full" }> {
+    if (!/^peragus-registration-test-[0-9a-f-]{36}$/.test(idempotencyKey)
+      || !/^peragus-onboarding-test:[0-9a-f-]{36}$/.test(payload.external_ref)
+      || !/^peragus-onboarding-test-[0-9a-f-]{36}@example.com$/.test(payload.email)
+      || payload.verification_mode !== "full" || payload.custody_model !== "managed" || payload.type !== "individual"
+      || !/^ts_[A-Za-z0-9_-]{8,256}$/.test(payload.terms_session_id)) throw new OzavClientError("Invalid sandbox registration", false);
+    const row = object((await this.post({ path: "/v2/customers", body: { ...payload }, idempotencyKey })).body);
+    if (row.object !== "customer" || row.type !== "individual" || row.external_ref !== payload.external_ref
+      || row.email !== payload.email || object(row.verification).mode !== "full") return invalidResponse();
+    const status = text(row.status);
+    if (!/^[a-z][a-z0-9_]{0,79}$/.test(status)) return invalidResponse();
+    return { id: identifier(row.id, "ozav_cus_"), externalRef: payload.external_ref, email: payload.email, status, verificationMode: "full" };
   }
 
   async getTransfer(id: string): Promise<OzavTransfer> {

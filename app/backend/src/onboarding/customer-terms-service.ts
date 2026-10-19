@@ -53,6 +53,15 @@ export class CustomerTermsService {
       url: session.url, version: session.version, expiresAt: session.expiresAt });
     return { data: this.view(row), created: true };
   }
+  // Internal capability only; never return this token through an HTTP handler.
+  async resolveForSubmission(customerId: string, sessionId: string, legalName: string): Promise<string> {
+    const row = await this.repository.findOwned(customerId, sessionId);
+    if (!row || !row.active || row.state !== "accepted") throw new TermsFlowError("TERMS_SESSION_NOT_FOUND");
+    if (!row.expiresAt || Date.parse(row.expiresAt) <= this.now().getTime()) throw new TermsFlowError("TERMS_SESSION_EXPIRED");
+    const evidence = evidenceSchema.parse(this.vault.open(this.context(row), "acceptance", row.encryptedAcceptance));
+    if (evidence.accepted_by.legal_name !== legalName || evidence.accepted_at !== row.acceptedAt) throw new TermsFlowError("TERMS_RESPONSE_CONFLICT");
+    return this.token(row);
+  }
   private matches(row: TermsRecord, response: OzavTermsSession, evidence: OzavTermsEvidence) {
     return response.token === null && response.status === "accepted" && response.url === row.termsUrl && response.version === row.termsVersion
       && response.expiresAt === row.expiresAt && response.acceptedAt === evidence.accepted_at;
