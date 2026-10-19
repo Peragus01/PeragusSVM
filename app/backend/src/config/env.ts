@@ -3,6 +3,7 @@ import "dotenv/config";
 import { z } from "zod";
 
 const envSchema = z.object({
+  CUSTOMER_SANDBOX_PIX_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
