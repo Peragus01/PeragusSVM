@@ -132,6 +132,16 @@ describe("sandbox identity verification",()=>{
     expect((await s.service.simulate(s.actor.id,"approved")).replayed).toBe(true);
     expect(s.writeTransport).toHaveBeenCalledTimes(2);
   });
+  it("separates passed identity capture from AML not started and acknowledges a completed simulation without resubmitting",async()=>{
+    const s=await setup();await s.service.start(s.actor.id);
+    const observed=s.rawSession("pass","completed");observed.checks.aml_name_screening.outcome="not_started";s.seed(observed);
+    const refreshed=await s.service.refresh(s.actor.id);
+    expect(refreshed).toMatchObject({identity_outcome:"approved",observed_outcome:null,operations_enabled:false});
+    const simulation=await s.service.simulate(s.actor.id,"approved");
+    expect(simulation.replayed).toBe(true);expect(simulation.data?.identity_outcome).toBe("approved");
+    expect(s.writeTransport).toHaveBeenCalledTimes(1);
+    expect((await customers.findByOwner(s.owner))?.verificationStatus).toBe("draft");
+  });
   it("does not pretend an inconclusive or contradictory result is approved",async()=>{
     const s=await setup();await s.service.start(s.actor.id);s.setContradictory();
     await expect(s.service.simulate(s.actor.id,"approved")).rejects.toThrow("VERIFICATION_OUTCOME_MISMATCH");

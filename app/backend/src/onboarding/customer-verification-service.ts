@@ -6,9 +6,15 @@ import { verificationChecks, VerificationError, type VerificationRepository, typ
 const observedOutcome = (value: OzavVerification): SimulationOutcome | null => value.status !== "completed" ? null
   : verificationChecks.every(check => value.checks[check] === "pass") ? "approved"
   : verificationChecks.some(check => value.checks[check] === "fail") ? "rejected" : null;
+// Identity capture and AML list screening are independent evidence. Keep the legacy
+// all-checks outcome conservative; simulation acknowledgment uses capture only.
+const identityOutcome = (value: OzavVerification): SimulationOutcome | null => value.status !== "completed" ? null
+  : (["kyc_document", "liveness", "face_match"] as const).every(check => value.checks[check] === "pass") ? "approved"
+  : (["kyc_document", "liveness", "face_match"] as const).some(check => value.checks[check] === "fail") ? "rejected" : null;
 const view = (row: VerificationRecord | null) => row ? ({ provider_customer_id: row.providerCustomerId,
   verification_id: row.verificationId, state: row.verificationId ? "linked" : "creating",
   status: row.observation?.status ?? null, checks: row.observation?.checks ?? {},
+  identity_outcome: row.observation ? identityOutcome(row.observation) : null,
   observed_outcome: row.observation ? observedOutcome(row.observation) : null,
   refreshed_at: row.refreshedAt, last_simulated_outcome: row.lastSimulatedOutcome,
   environment: "test", sandbox_only: true, session_url: null, operations_enabled: false,
@@ -84,10 +90,10 @@ export class CustomerVerificationService {
     await this.capabilities(true); const row = await this.linked(customerId);
     let observation = await this.provider.getCustomerVerification(row.providerCustomerId, row.verificationId!);
     this.assertIdentity(row, observation);
-    const replayed = observedOutcome(observation) === outcome;
+    const replayed = identityOutcome(observation) === outcome;
     if (!replayed) observation = await this.provider.simulateCustomerVerification(row.providerCustomerId, row.verificationId!, outcome);
     this.assertIdentity(row, observation);
-    if (observedOutcome(observation) !== outcome) throw new VerificationError("VERIFICATION_OUTCOME_MISMATCH");
+    if (identityOutcome(observation) !== outcome) throw new VerificationError("VERIFICATION_OUTCOME_MISMATCH");
     const saved = await this.repository.save(row, observation, outcome);
     await new RegistrationSnapshotService(this.submissions, this.provider).refresh(customerId);
     return { data: view(saved), replayed };
