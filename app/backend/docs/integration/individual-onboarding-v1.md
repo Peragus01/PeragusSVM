@@ -101,7 +101,7 @@ O processamento de webhook deve resolver o novo vínculo por ambiente e consulta
 
 ## 6. Endpoints Peragus e evolução do contrato
 
-GET e PUT /v1/me/onboarding/individual foram implementados como rascunho cifrado de staging, descrito em individual-onboarding-drafts.md. GET/POST de termos e o aceite também têm implementação de staging descrita em customer-terms-sessions.md. GET /v1/me/onboarding e POST submit/refresh têm implementação sintética em customer-onboarding-submission.md. Verificação/captura continua proposta e indisponível; não integrá-la como se estivesse implementada.
+GET e PUT /v1/me/onboarding/individual foram implementados como rascunho cifrado de staging, descrito em individual-onboarding-drafts.md. GET/POST de termos e o aceite também têm implementação de staging descrita em customer-terms-sessions.md. GET /v1/me/onboarding e POST submit/refresh têm implementação sintética em customer-onboarding-submission.md. Verificação tem implementação de sandbox em customer-identity-verification.md; captura real permanece indisponível neste backend.
 
 | Caminho proposto | Função e restrição |
 | --- | --- |
@@ -110,7 +110,7 @@ GET e PUT /v1/me/onboarding/individual foram implementados como rascunho cifrado
 | GET/POST /v1/me/onboarding/terms | Implementado em staging; sessão cifrada e URL/versão/expiração, ver customer-terms-sessions.md |
 | POST /v1/me/onboarding/terms/accept | Implementado em staging; aceite explícito e evidência cifrada, sem submissão ou pagamento |
 | POST /v1/me/onboarding/submit | Implementado apenas no sandbox, com dados sintéticos e intenção cifrada; ver customer-onboarding-submission.md |
-| POST /v1/me/onboarding/verification | Iniciar/recuperar verificação vinculada; URL somente quando de fato recebida |
+| GET/POST /v1/me/onboarding/verification | Implementado apenas no sandbox; ver customer-identity-verification.md. Sem URL de captura e sem aprovação local |
 
 Todos exigem sessão confirmada, PF próprio e controle de suspensão. Não aceitar email/senha Supabase nesses endpoints. Sem seleção de outro customer por query/body. Provider errors precisam de tradução para erros seguros; não expor identidades duplicadas. A revisão de PJ e a assinatura de carteira são fluxos distintos.
 

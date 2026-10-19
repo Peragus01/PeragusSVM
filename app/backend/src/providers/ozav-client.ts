@@ -51,6 +51,27 @@ export interface OzavSandboxCustomer {
   verificationMode: "full" | "reliance" | null;
 }
 
+export interface OzavVerification {
+  id: string; customerId: string; status: "pending" | "in_progress" | "completed" | "expired";
+  checks: Partial<Record<"kyc_document" | "liveness" | "face_match" | "aml_name_screening", "pass" | "fail" | "review" | "pending" | "not_started">>;
+}
+function parseVerification(input: unknown, customerId: string, expectedId?: string): OzavVerification {
+  const row = object(input);
+  const id = identifier(row.id, "ozav_vrf_");
+  if (row.object !== "verification" || row.customer_id !== customerId || (expectedId && id !== expectedId)
+    || (row.session_url !== undefined && row.session_url !== null)) return invalidResponse();
+  if (!["pending", "in_progress", "completed", "expired"].includes(text(row.status))) return invalidResponse();
+  const raw = row.checks == null ? {} : object(row.checks);
+  const checks: OzavVerification["checks"] = {};
+  for (const key of ["kyc_document", "liveness", "face_match", "aml_name_screening"] as const) {
+    if (raw[key] === undefined) continue;
+    const outcome = object(raw[key]).outcome;
+    if (!["pass", "fail", "review", "pending", "not_started"].includes(text(outcome))) return invalidResponse();
+    checks[key] = outcome as NonNullable<OzavVerification["checks"][typeof key]>;
+  }
+  return { id, customerId, status: row.status as OzavVerification["status"], checks };
+}
+
 export interface OzavRegistrationPayload {
   type: "individual"; external_ref: string; email: string;
   individual: Omit<IndividualDraft, "cpf"> & { tax_id: { country: "BR"; type: "cpf"; value: string } };
@@ -658,6 +679,41 @@ export class OzavClient {
     const status = text(row.status);
     if (!/^[a-z][a-z0-9_]{0,79}$/.test(status)) return invalidResponse();
     return { id: identifier(row.id, "ozav_cus_"), externalRef: payload.external_ref, email: payload.email, status, verificationMode: "full" };
+  }
+
+  async listCustomerVerifications(customerId: string): Promise<OzavVerification[]> {
+    identifier(customerId, "ozav_cus_");
+    const sessions: OzavVerification[] = [], seen = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 0; page < 10; page++) {
+      const params = new URLSearchParams({ customer_id: customerId, limit: "100" });
+      if (cursor) params.set("starting_after", cursor);
+      const row = object(await this.get(`/v2/verifications?${params}`));
+      if (!Array.isArray(row.data) || row.data.length > 100 || typeof row.has_more !== "boolean") return invalidResponse();
+      for (const item of row.data) {
+        const session = parseVerification(item, customerId);
+        if (seen.has(session.id)) return invalidResponse(); seen.add(session.id); sessions.push(session);
+      }
+      if (!row.has_more) return sessions;
+      const next = text(row.next_cursor);
+      if (!next || next.length > 4096 || next === cursor) return invalidResponse(); cursor = next;
+    }
+    throw new OzavClientError("Verification listing needs reconciliation", false);
+  }
+  async createCustomerVerification(customerId: string): Promise<OzavVerification> {
+    identifier(customerId, "ozav_cus_");
+    const response = await this.post({ path: "/v2/verifications", body: { customer_id: customerId,
+      capabilities: ["kyc_document", "liveness", "face_match", "aml_name_screening"] } });
+    return parseVerification(response.body, customerId);
+  }
+  async getCustomerVerification(customerId: string, verificationId: string): Promise<OzavVerification> {
+    identifier(customerId, "ozav_cus_"); identifier(verificationId, "ozav_vrf_");
+    return parseVerification(await this.get(`/v2/verifications/${encodeURIComponent(verificationId)}`), customerId, verificationId);
+  }
+  async simulateCustomerVerification(customerId: string, verificationId: string, outcome: "approved" | "rejected"): Promise<OzavVerification> {
+    identifier(customerId, "ozav_cus_"); identifier(verificationId, "ozav_vrf_");
+    if (outcome !== "approved" && outcome !== "rejected") throw new OzavClientError("Invalid simulation outcome", false);
+    return parseVerification((await this.post({ path: `/v2/verifications/${encodeURIComponent(verificationId)}/simulate`, body: { outcome } })).body, customerId, verificationId);
   }
 
   async getTransfer(id: string): Promise<OzavTransfer> {

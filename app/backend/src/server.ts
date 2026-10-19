@@ -1,3 +1,5 @@
+import { CustomerVerificationService } from "./onboarding/customer-verification-service.js";
+import { PostgresCustomerVerificationRepository } from "./repositories/postgres-customer-verification.js";
 import { CustomerSubmissionService } from "./onboarding/customer-submission-service.js";
 import { SubmissionVault } from "./onboarding/submission-vault.js";
 import { PostgresOnboardingSubmissionRepository } from "./repositories/postgres-onboarding-submission.js";
@@ -92,17 +94,20 @@ if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
   || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
   throw new Error("Authenticated customer onboarding requires financial and demo flags disabled until per-customer routing is implemented");
 }
-if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED) {
+if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED) {
   assertSmokeTestSafety(env);
   if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co") {
     throw new Error("Settlement drafts require the pinned staging Auth project");
   }
 }
-if ((env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED) && !env.OZAV_API_KEY) {
+if ((env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED) && !env.OZAV_API_KEY) {
   throw new Error("OZAV_API_KEY sandbox key is required for customer fixture onboarding");
 }
 if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
   throw new Error("CUSTOMER_WEBHOOK_SECRET is required for customer update notifications");
+}
+if (env.CUSTOMER_VERIFICATION_SIMULATION_ENABLED && !env.CUSTOMER_VERIFICATIONS_ENABLED) {
+  throw new Error("Verification simulation requires the sandbox verification feature");
 }
 const individualDraftCipher = (env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED)
   ? new DraftCipher(env.CUSTOMER_DATA_ENCRYPTION_KEY ?? "", env.CUSTOMER_DATA_ENCRYPTION_KEY_ID) : undefined;
@@ -372,6 +377,10 @@ const customerTermsService = env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSI
   new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }), draftService!,
 ) : undefined;
 const app = await buildApp({
+  ...(env.CUSTOMER_VERIFICATIONS_ENABLED ? { customerVerificationService: new CustomerVerificationService(
+    new PostgresCustomerVerificationRepository(pool!), new PostgresOnboardingSubmissionRepository(pool!),
+    new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }),
+  ), verificationSimulationEnabled: env.CUSTOMER_VERIFICATION_SIMULATION_ENABLED } : {}),
   ...(env.CUSTOMER_SUBMISSION_ENABLED ? { customerSubmissionService: new CustomerSubmissionService(
     new PostgresOnboardingSubmissionRepository(pool!), new SubmissionVault(env.CUSTOMER_DATA_ENCRYPTION_KEY ?? "", env.CUSTOMER_DATA_ENCRYPTION_KEY_ID),
     draftService!, customerTermsService!, new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }),
@@ -459,6 +468,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  app.log.info({ event: "customer_verification_configured", enabled: env.CUSTOMER_VERIFICATIONS_ENABLED, simulation_enabled: env.CUSTOMER_VERIFICATION_SIMULATION_ENABLED });
   app.log.info({ event: "customer_submission_configured", enabled: env.CUSTOMER_SUBMISSION_ENABLED });
   app.log.info({ event: "customer_terms_configured", enabled: env.CUSTOMER_TERMS_ENABLED });
   app.log.info({ event: "customer_onboarding_configured", enabled: env.CUSTOMER_ONBOARDING_ENABLED });
