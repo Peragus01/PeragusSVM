@@ -2,7 +2,7 @@
 
 ## Scope and trust boundaries
 
-`POST /webhooks/customer-updates` receives signed provider notifications. It is outside `/v1` and uses signature authentication, not a Supabase bearer token. Existing customer routes retain bearer authentication. This receiver only refreshes **existing linked PF sandbox fixtures**. It never creates or adopts a customer, updates local approval, enqueues financial work or enables operations.
+`POST /webhooks/customer-updates` receives signed provider notifications. It is outside `/v1` and uses signature authentication, not a Supabase bearer token. Existing customer routes retain bearer authentication. This receiver only refreshes **existing linked PF sandbox customers**: diagnostic fixtures and, after migration 017, form-based synthetic registrations. It never creates or adopts a customer, updates local approval, enqueues financial work or enables operations.
 
 Subscribe to `customer.updated`. Other well-formed sandbox event types, including `webhook.test`, are acknowledged and recorded as ignored. This milestone does not process verification, requirement, transfer or payment event types. A `customer.updated` without a valid `data.customer.id` is refused. An unlinked customer ID is acknowledged as ignored; it cannot be adopted by email, external reference or event contents. If an event arrives before fixture binding completes, use the existing explicit refresh afterwards to reconcile it.
 
@@ -62,3 +62,7 @@ Defaults: `CUSTOMER_WEBHOOKS_ENABLED=false`; `CUSTOMER_WEBHOOK_SECRET` absent. W
 Automated tests cover exact-byte signatures, full-secret use, old/future timestamps, event-ID matching, missing environment, live exclusion, body limits, bearer separation, end-to-end receipt/snapshot updates, repeated deliveries, transaction rollback after snapshot writes, provider failures, foreign IDs, out-of-order notifications and browser-role restrictions. Embedded PostgreSQL tests serialize their single connection; real multi-connection locking and external delivery still require staging acceptance. No provider endpoint has been registered by this change.
 
 Receipt hashes/outcomes are retained without an automatic cleanup job to preserve deduplication. Define retention against the provider replay window before adding cleanup. No webhook secret rotation orchestration, live-customer KYC integration or production-readiness claim is included in this milestone.
+
+## Extensão para o cadastro do formulário
+
+A migration 017 e customer-onboarding-submission.md estendem o receiver para vínculos sintéticos criados a partir do rascunho/termos. O ID resolve uma única tabela de origem; ambiguidades são recusadas. A migration precisa estar aplicada antes de publicar a extensão, mesmo com a flag de submissão desligada, porque o receiver ativo consulta a nova tabela. Assinatura, dedupe, atualizações atômicas e limites de produção deste documento continuam válidos.

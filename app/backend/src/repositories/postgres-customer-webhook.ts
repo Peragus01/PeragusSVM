@@ -1,3 +1,5 @@
+import { PostgresOnboardingSubmissionRepository } from "./postgres-onboarding-submission.js";
+import { RegistrationSnapshotService } from "../onboarding/customer-submission-service.js";
 import type { Pool } from "pg";
 import { OzavSandboxCustomerService } from "../application/ozav-sandbox-customer.js";
 import type { OzavClient } from "../providers/ozav-client.js";
@@ -29,14 +31,22 @@ export class PostgresCustomerWebhookProcessor implements CustomerWebhookProcesso
       if (event.type === "customer.updated" && data && typeof data === "object" && !Array.isArray(data)) {
         const providerId = (data as Record<string, unknown>).id;
         if (typeof providerId !== "string" || !/^ozav_cus_[A-Za-z0-9_]{1,160}$/.test(providerId)) throw new CustomerWebhookConflict();
-        // No linking by email or external_ref. Only an existing test fixture can be refreshed.
+        // No linking by email or external_ref. Only an existing test fixture or form-based test binding can be refreshed.
         // Serialize events for the same customer before reading the latest provider observation.
         const binding = await connection.query<{ customer_id: string }>(`select l.customer_id
           from peragus_ozav_sandbox_customer_links l join peragus_customers c on c.id=l.customer_id
           where l.environment='test' and l.state='linked' and l.ozav_customer_id=$1 and c.customer_type='pf'
           for update of l`, [providerId]);
-        if (binding.rows[0]) {
-          const transactionalPool = { query: connection.query.bind(connection) } as unknown as Pool;
+        const registration = await connection.query<{ customer_id: string }>(`select s.customer_id
+          from peragus_customer_onboarding_submissions s join peragus_customers c on c.id=s.customer_id
+          where s.environment='test' and s.state='linked' and s.provider_customer_id=$1 and c.customer_type='pf'
+          for update of s`, [providerId]);
+        if (binding.rows[0] && registration.rows[0]) throw new CustomerWebhookConflict();
+        const transactionalPool = { query: connection.query.bind(connection) } as unknown as Pool;
+        if (registration.rows[0]) {
+          await new RegistrationSnapshotService(new PostgresOnboardingSubmissionRepository(transactionalPool), this.provider).refresh(registration.rows[0].customer_id);
+          result = "processed";
+        } else if (binding.rows[0]) {
           const service = new OzavSandboxCustomerService(new PostgresSandboxCustomerLinkRepository(transactionalPool), this.provider);
           await service.refresh(binding.rows[0].customer_id);
           result = "processed";
