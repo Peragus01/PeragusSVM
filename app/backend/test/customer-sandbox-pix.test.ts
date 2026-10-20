@@ -50,7 +50,7 @@ async function fixture(){
  const s=await setup();
  await db.query("update peragus_customer_indicative_quotes set source_amount_brl=1000,observation=jsonb_set(observation,'{source,amount}','\"1000.00\"') where id=$1",[s.quoteId]);
  const p=await service.record(s.customer.id,s.requestId,s.quoteId),pixRepo=new PostgresCustomerPixRepository(pool);
- let posts=0,gets=0,listed:string|null=null;let mode="normal";
+ let posts=0,gets=0,simulations=0,listed:string|null=null;let mode="normal";
  const transfer:OzavTransfer={id:`ozav_tr_${randomUUID().replaceAll('-','')}`,status:"awaiting_payment",customerId:s.provider,
   quoteId:(await pixRepo.context(s.customer.id,p.data.id))!.providerQuoteId,
   source:{type:"fiat_payment",currency:"BRL",rail:"pix",paymentInstructions:{intentId:randomUUID(),brCode:"sandbox-code",qrCodeImage:null,expiresAt:new Date(Date.now()+60000).toISOString()}},
@@ -60,10 +60,17 @@ async function fixture(){
   getSandboxCustomerSnapshot:async()=>({provider_status:"approved",verification_mode:"full",requirements_pending:false}),
   getCustomerManagedWallet:async()=>"ozav_wal_testmanaged",
   createCustomerPixTransfer:async(input:any)=>{posts++;expect(input.metadata.peragus_pix_id).toBe(input.idempotencyKey.slice("peragus-pix-".length));if(mode==="timeout")throw new Error("private timeout");return{id:transfer.id,transfer:mode==="degraded"?null:transfer};},
+  simulateCustomerPixPayment:async()=>{
+   simulations++;
+   if(mode!=="simulation-pending"){
+    transfer.status="completed";transfer.sourceLegStatus="completed";transfer.destinationLegStatus="completed";
+   }
+   if(mode==="simulation-timeout")throw new Error("simulation response lost");
+  },
   findCustomerPixTransfer:async()=>listed,
   getTransfer:async()=>{gets++;return transfer;}} as any;
  const pix=new CustomerSandboxPixService(pixRepo,provider),requestId=randomUUID();
- return{s,p,pix,pixRepo,provider,transfer,requestId,stats:()=>({posts,gets}),setMode:(v:string)=>{mode=v;},setListed:(v:string|null)=>{listed=v;}};
+ return{s,p,pix,pixRepo,provider,transfer,requestId,stats:()=>({posts,gets}),simulationCount:()=>simulations,setMode:(v:string)=>{mode=v;},setListed:(v:string|null)=>{listed=v;}};
 }
 describe("customer-owned sandbox Pix",()=>{
  it("creates once, preserves the purchase reference and never queues settlement or delivery",async()=>{
@@ -116,6 +123,57 @@ describe("customer-owned sandbox Pix",()=>{
   }
   f.transfer.status="awaiting_payment";await expect(f.pix.reconcile(f.s.customer.id,r.data.id)).rejects.toThrow("PIX_TERMINAL_STATE_CONFLICT");
   expect((await f.pix.read(f.s.customer.id,r.data.id)).state).toBe("completed");
+ });
+ it("confirms sandbox pay-in through GET evidence and replays without another simulation",async()=>{
+  const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+  const first=await f.pix.simulatePayment(f.s.customer.id,charge.data.id);
+  expect(first.replayed).toBe(false);expect(first.data).toMatchObject({state:"completed",simulation_attempted:true,payment_confirmed:true,custody_conversion_completed:true,payment_instructions:null,subsequent_delivery:{started:false},job_enqueued:false,real_money:false});
+  const replay=await f.pix.simulatePayment(f.s.customer.id,charge.data.id);expect(replay.replayed).toBe(true);expect(f.simulationCount()).toBe(1);expect(f.stats().posts).toBe(1);
+  expect(await service.read(f.s.customer.id,f.p.data.id)).toEqual(f.p.data);
+ });
+ it("never repeats a simulation whose response was lost and recovers with GET",async()=>{
+  const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);f.setMode("simulation-timeout");
+  await expect(f.pix.simulatePayment(f.s.customer.id,charge.data.id)).rejects.toThrow("simulation response lost");
+  const stored=await f.pix.read(f.s.customer.id,charge.data.id);expect(stored.simulation_attempted).toBe(true);expect(stored.recovery_required).toBe(true);expect(stored.payment_instructions).toBeNull();
+  const recovered=await f.pix.reconcile(f.s.customer.id,charge.data.id);expect(recovered.payment_confirmed).toBe(true);
+  await f.pix.simulatePayment(f.s.customer.id,charge.data.id);expect(f.simulationCount()).toBe(1);
+ });
+ it("keeps pending simulation outcomes uncertain and hides payment instructions",async()=>{
+  const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);f.setMode("simulation-pending");
+  const first=await f.pix.simulatePayment(f.s.customer.id,charge.data.id);expect(first.data).toMatchObject({recovery_required:true,payment_confirmed:false,payment_instructions:null});
+  const replay=await f.pix.simulatePayment(f.s.customer.id,charge.data.id);expect(replay.replayed).toBe(true);expect(f.simulationCount()).toBe(1);
+ });
+ it("never simulates foreign, expired, uncertain or review-state charges",async()=>{
+  const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id),other=await fixture();
+  await expect(f.pix.simulatePayment(other.s.customer.id,charge.data.id)).rejects.toThrow("PIX_NOT_FOUND");expect(f.simulationCount()).toBe(0);
+  for(const status of ["expired","needs_review"]){const x=await fixture(),c=await x.pix.create(x.s.customer.id,x.requestId,x.p.data.id);x.transfer.status=status;await expect(x.pix.simulatePayment(x.s.customer.id,c.data.id)).rejects.toThrow("PIX_SIMULATION_NOT_READY");expect(x.simulationCount()).toBe(0);}
+  f.transfer.source.paymentInstructions!.expiresAt=new Date(Date.now()-1).toISOString();await expect(f.pix.simulatePayment(f.s.customer.id,charge.data.id)).rejects.toThrow("PIX_SIMULATION_NOT_READY");expect(f.simulationCount()).toBe(0);
+ });
+ it("blocks changed eligibility, ownership, capability and provider status before simulation",async()=>{
+  for(const change of ["identity","amount","capability","provider"]){
+   const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+   if(change==="identity")await db.query("update peragus_customer_verifications set observation='{}' where customer_id=$1",[f.s.customer.id]);
+   if(change==="amount")f.transfer.amounts.source.amount="99.00";
+   if(change==="capability")f.provider.getCustomerCapabilities=async()=>({environment:"live"});
+   if(change==="provider")f.provider.getSandboxCustomerSnapshot=async()=>({provider_status:"suspended"});
+   await expect(f.pix.simulatePayment(f.s.customer.id,charge.data.id)).rejects.toThrow();expect(f.simulationCount()).toBe(0);
+  }
+ });
+ it("claims a simulation only once across competing calls and persists the claim",async()=>{
+  const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+  await Promise.allSettled([f.pix.simulatePayment(f.s.customer.id,charge.data.id),f.pix.simulatePayment(f.s.customer.id,charge.data.id)]);
+  expect(f.simulationCount()).toBe(1);
+  const r=await db.query("select simulation_attempted,simulation_attempted_at from peragus_customer_sandbox_pix where id=$1",[charge.data.id]);expect((r.rows[0] as any).simulation_attempted).toBe(true);expect((r.rows[0] as any).simulation_attempted_at).not.toBeNull();
+ });
+ it("requires simulation flag, auth and an empty body on the owned simulation route",async()=>{
+  const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id),url=`/v1/me/sandbox-pix/${charge.data.id}/simulate`;
+  const access={customers,authenticate:async()=>({id:f.s.owner})};
+  const disabled=await buildApp({customerAccess:access,customerSandboxPixService:f.pix});apps.push(disabled);
+  expect((await disabled.inject({method:"POST",url,headers})).statusCode).toBe(503);
+  const app=await buildApp({customerAccess:access,customerSandboxPixService:f.pix,customerSandboxPixSimulationEnabled:true});apps.push(app);
+  expect((await app.inject({method:"POST",url})).statusCode).toBe(401);
+  expect((await app.inject({method:"POST",url,headers,payload:{provider_transfer_id:"foreign"}})).statusCode).toBe(400);
+  const result=await app.inject({method:"POST",url,headers});expect(result.statusCode).toBe(200);expect(result.json().data.payment_confirmed).toBe(true);expect(result.headers["cache-control"]).toBe("no-store");
  });
  it("hides expired instructions, and route requires auth, enabled flag and strict input",async()=>{
   const f=await fixture();f.transfer.source.paymentInstructions!.expiresAt=new Date(Date.now()-1000).toISOString();

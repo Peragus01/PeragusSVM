@@ -986,6 +986,16 @@ export class OzavClient {
     };
   }
 
+  /** One-shot customer sandbox simulation. Caller persists a claim before this POST. */
+  async simulateCustomerPixPayment(id: string): Promise<void> {
+    identifier(id, "ozav_tr_");
+    const response = await this.writeTransport({path: `/v2/transfers/${encodeURIComponent(id)}/simulate`, body: {}}, this.apiKey, this.timeoutMs);
+    // The body is never evidence of payment: the customer path always GETs again.
+    if (response.statusCode !== 200 && response.statusCode !== 202) {
+      throw new OzavClientError("Sandbox payment outcome requires reconciliation", false, response.statusCode);
+    }
+  }
+
   async simulateTransfer(id: string): Promise<void> {
     identifier(id, "ozav_tr_");
     await this.post(

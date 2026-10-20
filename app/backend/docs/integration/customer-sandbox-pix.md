@@ -57,3 +57,56 @@ payment in this step. Keep the flag false after the controlled staging test.
 Protocol reference: the supplied OZAV OpenAPI snapshot (`doc ozav(1)`),
 POST /transfers (201 full resource, 200 reduced needs_review), GET /transfers,
 GET /transfers/{id}, GET /wallets. No external calls are used in automated tests.
+
+## Controlled pay-in confirmation (migration 024)
+
+`CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED` defaults false, separately from Pix
+creation. Startup refuses it unless `CUSTOMER_SANDBOX_PIX_ENABLED` is also true.
+The financial and old demo/simulation flags remain false. The route is
+`POST /v1/me/sandbox-pix/:id/simulate`, authenticated, owned, PF-only, empty body,
+no query selectors, with Cache-Control:no-store. Apply 024 before enabling it.
+
+Before the one-shot mutation it GETs the bound provider transfer and verifies
+customer, quote, source amount/rail and destination wallet. It saves that verified
+observation. Only an unexpired awaiting_payment transfer can be simulated;
+unknown IDs, expired/review/failed/cancelled charges and missing bindings cannot.
+Already advanced states are returned through GET without another simulation.
+Current stored identity, separate screening, accepted terms and wallet evidence
+are rechecked, along with live sandbox capabilities and approved/full/no-pending
+provider customer status. The final SQL claim rechecks local prerequisites and
+instruction expiry against the database clock.
+
+Migration 024 adds the durable simulation_attempted flag and attempt timestamp.
+The claim is taken atomically before the provider POST and never reset, including
+on timeout, refusal, save failure or process death. The provider method sends at
+most one POST, without generic transport retries. Repetitions of the local route
+perform GET only once a claim exists. Recovery remains the existing reconcile
+endpoint and never repeats a simulation POST. An uncertain attempt may require
+manual investigation or a new independent future test; it is never made safe by
+clearing a claim.
+
+The simulate response body is deliberately ignored. A subsequent verified
+GET is the only evidence saved. `payment_confirmed` requires source_leg.status
+completed plus a payment-confirmed-or-later transfer state;
+`custody_conversion_completed` additionally requires transfer.status completed
+and both legs completed. This refers to simulated credit in the provider-managed
+wallet. It does not assert delivery on Solana or to the proved self-custody wallet.
+No settlement, worker, RPC, reserve or delivery job is created.
+
+If simulation was attempted but the saved state is still awaiting_payment,
+recovery_required stays true, the simulation route returns 202, and Pix
+instructions are hidden. Uncertain/provider errors are 503 with automatic_retry
+false; query via reconcile before deciding what happened. A successful observed
+confirmation returns 200; local repeats include meta.idempotent_replay=true.
+
+For acceptance, first create a new charge for a new saved purchase reference,
+then simulate promptly within the Pix validity window, read/reconcile, verify
+confirmation evidence and no self-custody delivery, repeat without another POST,
+and test foreign-account 404s. Preserve prior expired charges. Disable both
+customer sandbox Pix flags after the controlled test. External acceptance remains
+pending; automated tests mock OZAV and use the migrations on local PostgreSQL
+semantics through PGlite.
+
+Reference: supplied OZAV OpenAPI POST /transfers/{transfer_id}/simulate. It is
+test-only, normally advances pay-in then managed-wallet credit and may stop at
+payment_confirmed; therefore terminal completion is observed rather than assumed.

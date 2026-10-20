@@ -30,10 +30,10 @@ const eligible = `select p.id as purchase_id,p.provider_customer_id,q.provider_q
     and sc.observation->'lists' @> '["sanctions","pep"]'::jsonb
  and p.source_amount_brl>=1000 and p.source_amount_brl=q.source_amount_brl and p.wallet_address=w.wallet_address and p.provider_customer_id=q.provider_customer_id`;
 interface Row {id:string;customer_id:string;request_id:string;purchase_intent_id:string;provider_customer_id:string;provider_quote_id:string;
- source_amount_brl:string;wallet_address:string;provider_wallet_id:string;create_attempted:boolean;provider_transfer_id:string|null;observation:OzavTransfer|null;}
+ source_amount_brl:string;wallet_address:string;provider_wallet_id:string;create_attempted:boolean;simulation_attempted:boolean;provider_transfer_id:string|null;observation:OzavTransfer|null;}
 const map=(r:Row):CustomerPixRecord=>({id:r.id,customerId:r.customer_id,requestId:r.request_id,purchaseId:r.purchase_intent_id,
  providerCustomerId:r.provider_customer_id,providerQuoteId:r.provider_quote_id,amountBrl:r.source_amount_brl,walletAddress:r.wallet_address,
- providerWalletId:r.provider_wallet_id,attempted:r.create_attempted,transferId:r.provider_transfer_id,observation:r.observation});
+ providerWalletId:r.provider_wallet_id,attempted:r.create_attempted,simulationAttempted:r.simulation_attempted,transferId:r.provider_transfer_id,observation:r.observation});
 export class PostgresCustomerPixRepository implements CustomerPixRepository {
  constructor(private readonly pool:Pool){}
  async context(customerId:string,purchaseId:string):Promise<PixContext|null>{
@@ -57,6 +57,14 @@ export class PostgresCustomerPixRepository implements CustomerPixRepository {
   const row=await this.pool.query<Row>("select * from peragus_customer_sandbox_pix where id=$1",[id]);const r=row.rows[0];if(!r)return false;
   const result=await this.pool.query(`update peragus_customer_sandbox_pix set create_attempted=true,updated_at=now()
    where id=$3 and not create_attempted and exists(${eligible}) returning id`,[r.customer_id,r.purchase_intent_id,id]);return Boolean(result.rows[0]);
+ }
+ async claimSimulation(row:CustomerPixRecord){
+  const r=await this.pool.query(`update peragus_customer_sandbox_pix set simulation_attempted=true,simulation_attempted_at=now(),updated_at=now()
+   where id=$3 and customer_id=$1 and purchase_intent_id=$2 and not simulation_attempted and create_attempted
+    and provider_transfer_id=$4 and observation->>'status'='awaiting_payment'
+    and (observation->'source'->'paymentInstructions'->>'expiresAt')::timestamptz>clock_timestamp()
+    and exists(${eligible}) returning id`,[row.customerId,row.purchaseId,row.id,row.transferId]);
+  return Boolean(r.rows[0]);
  }
  async bind(row:CustomerPixRecord,transferId:string){
   const r=await this.pool.query(`update peragus_customer_sandbox_pix set provider_transfer_id=$3,updated_at=now()

@@ -121,6 +121,9 @@ if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
 if (env.CUSTOMER_VERIFICATION_SIMULATION_ENABLED && !env.CUSTOMER_VERIFICATIONS_ENABLED) {
   throw new Error("Verification simulation requires the sandbox verification feature");
 }
+if (env.CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED && !env.CUSTOMER_SANDBOX_PIX_ENABLED) {
+  throw new Error("Customer Pix simulation requires the customer sandbox Pix feature");
+}
 const individualDraftCipher = (env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED)
   ? new DraftCipher(env.CUSTOMER_DATA_ENCRYPTION_KEY ?? "", env.CUSTOMER_DATA_ENCRYPTION_KEY_ID) : undefined;
 const authenticate = createSupabaseAuthenticator(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY);
@@ -389,6 +392,7 @@ const customerTermsService = env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSI
   new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }), draftService!,
 ) : undefined;
 const app = await buildApp({
+  customerSandboxPixSimulationEnabled: env.CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED,
   ...(env.CUSTOMER_SANDBOX_PIX_ENABLED ? {customerSandboxPixService: new CustomerSandboxPixService(new PostgresCustomerPixRepository(pool!), new OzavClient({apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000}))} : {}),
   ...(env.CUSTOMER_PURCHASE_INTENTS_ENABLED ? { customerPurchaseIntentService: new CustomerPurchaseIntentService(new PostgresCustomerPurchaseIntentRepository(pool!)) } : {}),
   ...(env.CUSTOMER_QUOTES_ENABLED ? { customerQuoteService: new CustomerQuoteService(
@@ -498,6 +502,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  app.log.info({ event: "customer_sandbox_pix_simulation_configured", enabled: env.CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED });
   app.log.info({ event: "customer_sandbox_pix_configured", enabled: env.CUSTOMER_SANDBOX_PIX_ENABLED });
   app.log.info({ event: "customer_purchase_intents_configured", enabled: env.CUSTOMER_PURCHASE_INTENTS_ENABLED });
   app.log.info({ event: "customer_quotes_configured", enabled: env.CUSTOMER_QUOTES_ENABLED });

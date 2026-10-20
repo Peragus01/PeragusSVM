@@ -28,5 +28,13 @@ describe("customer Pix OZAV protocol",()=>{
   const write=vi.fn(),c=new OzavClient({apiKey:"ozav_sk_test_example",transport:read,writeTransport:write});
   expect(await c.findCustomerPixTransfer(customer,"local")).toBe(id);expect(read).toHaveBeenCalledTimes(2);expect(write).not.toHaveBeenCalled();
  });
+ it.each([409,500])("never retries simulation after HTTP %i",async statusCode=>{
+  const write=vi.fn(async()=>({statusCode,body:{}})),client=new OzavClient({apiKey:"ozav_sk_test_example",attempts:3,writeTransport:write});
+  await expect(client.simulateCustomerPixPayment(id)).rejects.toThrow();expect(write).toHaveBeenCalledTimes(1);
+ });
+ it("does not trust simulation response body as payment evidence",async()=>{
+  const write=vi.fn(async()=>({statusCode:200,body:{status:"completed",untrusted:true}})),client=new OzavClient({apiKey:"ozav_sk_test_example",writeTransport:write});
+  await expect(client.simulateCustomerPixPayment(id)).resolves.toBeUndefined();expect(write.mock.calls[0]![0]).toMatchObject({path:`/v2/transfers/${id}/simulate`,body:{}});
+ });
  it("rejects live keys before any request",()=>{expect(()=>new OzavClient({apiKey:"ozav_sk_live_example"})).toThrow();});
 });
