@@ -1,3 +1,5 @@
+import {registerCustomerWithdrawalRequestRoutes} from "./routes/customer-withdrawal-requests.js";
+import type {CustomerWithdrawalRequestService} from "./withdrawals/customer-withdrawal-requests.js";
 import {registerCustomerSandboxPixRoutes} from "./routes/customer-sandbox-pix.js";
 import type {CustomerSandboxPixService} from "./purchases/customer-sandbox-pix.js";
 import { registerCustomerPurchaseIntentRoutes } from "./routes/customer-purchase-intents.js";
@@ -51,6 +53,7 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  customerWithdrawalRequestService?: CustomerWithdrawalRequestService;
   customerSandboxPixService?: CustomerSandboxPixService;
   customerSandboxPixSimulationEnabled?: boolean;
   customerPurchaseIntentService?: CustomerPurchaseIntentService;
@@ -109,6 +112,7 @@ export async function buildApp(
 
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
 
+  await registerCustomerWithdrawalRequestRoutes(app, options.customerAccess ? options.customerWithdrawalRequestService : undefined);
   await registerCustomerSandboxPixRoutes(app, options.customerAccess ? options.customerSandboxPixService : undefined, options.customerSandboxPixSimulationEnabled ?? false);
   await registerCustomerPurchaseIntentRoutes(app, options.customerAccess ? options.customerPurchaseIntentService : undefined);
   await registerCustomerQuoteRoutes(app, options.customerAccess ? options.customerQuoteService : undefined);
