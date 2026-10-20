@@ -42,7 +42,7 @@ observations or wallet changes do not alter an existing record on replay; this
 is retrieval of history, not execution authorization. Auth/suspension gates remain.
 
 The only state is recorded, with record_only=true, manual_approval_required=true,
-approved=false, withdrawal_started=false, balance_reserved=false,
+approved=false initially, withdrawal_started=false, balance_reserved=false,
 provider_freshness_evaluated=false, delivery_costs_evaluated=false,
 net_delivery_amount=null, job_enqueued=false and operations_enabled=false.
 The stored Solana address was proved in test/devnet context; this does not prove
@@ -60,3 +60,9 @@ USDT amount and frozen address with all execution markers false; repeat the same
 request for 200; try another request ID for a duplicate conflict; read by owner
 and verify another customer's 404. Disable the feature after staging validation.
 No actual withdrawal or approval should occur in this acceptance test.
+
+Migration 026 adds a separate append-only operator approval audit. Customer
+reads/replays reflect approved and approval_recorded_at when a decision exists;
+the frozen amount, wallet and proof remain unchanged. Operator ID and reason
+stay on the protected admin resource. Approval still never executes a send.
+See withdrawal-operator-approvals.md for account separation, allowlist and MFA.

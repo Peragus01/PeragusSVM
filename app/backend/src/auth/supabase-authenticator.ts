@@ -31,6 +31,18 @@ export function createSupabaseAuthenticator(url: string, publishableKey: string,
     if (user && !user.email_confirmed_at) throw new AuthenticationError("EMAIL_NOT_CONFIRMED");
     const parsed = userSchema.safeParse(user);
     if (!parsed.success) throw new AuthenticationError("INVALID_TOKEN");
-    return { id: parsed.data.id, email: parsed.data.email };
+    // Decode assurance ONLY after getUser accepted this exact bearer token at the
+    // pinned Auth server. Never derive identity or role from an unverified JWT.
+    let assuranceLevel: "aal2" | undefined;
+    try {
+      const parts = token.split(".");
+      if (parts.length === 3) {
+        const claims = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8"));
+        if (claims.sub === parsed.data.id && claims.iss === `${endpoint.origin}/auth/v1`
+          && claims.aud === "authenticated" && claims.aal === "aal2"
+          && Number.isInteger(claims.exp) && claims.exp > Date.now()/1000) assuranceLevel = "aal2";
+      }
+    } catch { /* Unknown assurance is never privileged. */ }
+    return { id: parsed.data.id, email: parsed.data.email, ...(assuranceLevel ? {assuranceLevel} : {}) };
   };
 }

@@ -1,13 +1,13 @@
 import {randomUUID} from "node:crypto";
 import type {Pool} from "pg";
 import {WithdrawalRequestError, type WithdrawalRequest, type WithdrawalRequestRepository} from "../withdrawals/customer-withdrawal-requests.js";
-interface Row {id:string;customer_id:string;request_id:string;pix_id:string;purchase_intent_id:string;amount_usdt:string;wallet_address:string;wallet_verified_at:Date|string;created_at:Date|string;}
+interface Row {id:string;customer_id:string;request_id:string;pix_id:string;purchase_intent_id:string;amount_usdt:string;wallet_address:string;wallet_verified_at:Date|string;created_at:Date|string;approved_at?:Date|string|null;}
 const map=(r:Row):WithdrawalRequest=>({id:r.id,customerId:r.customer_id,requestId:r.request_id,pixId:r.pix_id,purchaseId:r.purchase_intent_id,
- amountUsdt:r.amount_usdt,walletAddress:r.wallet_address,walletVerifiedAt:new Date(r.wallet_verified_at).toISOString(),createdAt:new Date(r.created_at).toISOString()});
+ amountUsdt:r.amount_usdt,walletAddress:r.wallet_address,walletVerifiedAt:new Date(r.wallet_verified_at).toISOString(),createdAt:new Date(r.created_at).toISOString(),approvedAt:r.approved_at?new Date(r.approved_at).toISOString():null});
 export class PostgresCustomerWithdrawalRequestRepository implements WithdrawalRequestRepository {
  constructor(private readonly pool:Pool){}
- async read(customerId:string,id:string){const r=await this.pool.query<Row>("select * from peragus_customer_withdrawal_requests where customer_id=$1 and id=$2 and environment='test'",[customerId,id]);return r.rows[0]?map(r.rows[0]):null;}
- private async findRequest(customerId:string,requestId:string){const r=await this.pool.query<Row>("select * from peragus_customer_withdrawal_requests where customer_id=$1 and request_id=$2 and environment='test'",[customerId,requestId]);return r.rows[0]?map(r.rows[0]):null;}
+ async read(customerId:string,id:string){const r=await this.pool.query<Row>("select r.*,a.created_at as approved_at from peragus_customer_withdrawal_requests r left join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id where r.customer_id=$1 and r.id=$2 and r.environment='test'",[customerId,id]);return r.rows[0]?map(r.rows[0]):null;}
+ private async findRequest(customerId:string,requestId:string){const r=await this.pool.query<Row>("select r.*,a.created_at as approved_at from peragus_customer_withdrawal_requests r left join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id where r.customer_id=$1 and r.request_id=$2 and r.environment='test'",[customerId,requestId]);return r.rows[0]?map(r.rows[0]):null;}
  private replay(record:WithdrawalRequest,pixId:string){if(record.pixId!==pixId)throw new WithdrawalRequestError("WITHDRAWAL_IDEMPOTENCY_CONFLICT");return{record,replayed:true};}
  async record(customerId:string,requestId:string,pixId:string){
   const prior=await this.findRequest(customerId,requestId);if(prior)return this.replay(prior,pixId);

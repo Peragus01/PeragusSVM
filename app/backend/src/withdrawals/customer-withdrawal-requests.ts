@@ -3,7 +3,7 @@ export class WithdrawalRequestError extends Error {
 }
 export interface WithdrawalRequest {
   id: string; customerId: string; requestId: string; pixId: string; purchaseId: string;
-  amountUsdt: string; walletAddress: string; walletVerifiedAt: string; createdAt: string;
+  amountUsdt: string; walletAddress: string; walletVerifiedAt: string; createdAt: string; approvedAt?: string | null;
 }
 export interface WithdrawalRequestRepository {
   read(customerId: string, id: string): Promise<WithdrawalRequest | null>;
@@ -14,7 +14,7 @@ const view = (r: WithdrawalRequest) => ({
   state: "recorded", environment: "test", record_only: true,
   source: {currency: "USDT", amount: r.amountUsdt, basis: "recorded_completed_conversion"},
   destination: {wallet_address: r.walletAddress, chain: "solana", proof_network: "solana:devnet", verified_at: r.walletVerifiedAt},
-  created_at: r.createdAt, manual_approval_required: true, approved: false,
+  created_at: r.createdAt, manual_approval_required: true, approved: r.approvedAt != null, approval_recorded_at: r.approvedAt ?? null,
   provider_freshness_evaluated: false, balance_reserved: false,
   delivery_costs_evaluated: false, net_delivery_amount: null,
   withdrawal_started: false, job_enqueued: false, operations_enabled: false,
