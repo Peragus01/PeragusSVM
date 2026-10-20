@@ -1,12 +1,12 @@
 import {randomUUID} from "node:crypto";
 import type {Pool} from "pg";
 import {OperatorApprovalError,type OperatorApproval,type OperatorApprovalRepository} from "../withdrawals/operator-approvals.js";
-interface Row {id:string;withdrawal_request_id:string;customer_id:string;operator_user_id:string;request_id:string;reason:string;amount_usdt:string;wallet_address:string;created_at:Date|string;}
-const map=(r:Row):OperatorApproval=>({id:r.id,withdrawalId:r.withdrawal_request_id,customerId:r.customer_id,operatorId:r.operator_user_id,requestId:r.request_id,reason:r.reason,amountUsdt:r.amount_usdt,walletAddress:r.wallet_address,createdAt:new Date(r.created_at).toISOString()});
+interface Row {id:string;withdrawal_request_id:string;customer_id:string;operator_user_id:string;request_id:string;reason:string;amount_usdt:string;wallet_address:string;created_at:Date|string;execution_attempted?:boolean;}
+const map=(r:Row):OperatorApproval=>({id:r.id,withdrawalId:r.withdrawal_request_id,customerId:r.customer_id,operatorId:r.operator_user_id,requestId:r.request_id,reason:r.reason,amountUsdt:r.amount_usdt,walletAddress:r.wallet_address,createdAt:new Date(r.created_at).toISOString(),executionAttempted:r.execution_attempted===true});
 export class PostgresWithdrawalOperatorApprovalRepository implements OperatorApprovalRepository {
  constructor(private readonly pool:Pool){}
- async read(id:string){const r=await this.pool.query<Row>("select * from peragus_withdrawal_operator_approvals where withdrawal_request_id=$1 and environment='test'",[id]);return r.rows[0]?map(r.rows[0]):null;}
- private async findRequest(operatorId:string,requestId:string){const r=await this.pool.query<Row>("select * from peragus_withdrawal_operator_approvals where operator_user_id=$1 and request_id=$2",[operatorId,requestId]);return r.rows[0]?map(r.rows[0]):null;}
+ async read(id:string){const r=await this.pool.query<Row>("select a.*,e.create_attempted as execution_attempted from peragus_withdrawal_operator_approvals a left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=a.withdrawal_request_id where a.withdrawal_request_id=$1 and a.environment='test'",[id]);return r.rows[0]?map(r.rows[0]):null;}
+ private async findRequest(operatorId:string,requestId:string){const r=await this.pool.query<Row>("select a.*,e.create_attempted as execution_attempted from peragus_withdrawal_operator_approvals a left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=a.withdrawal_request_id where a.operator_user_id=$1 and a.request_id=$2",[operatorId,requestId]);return r.rows[0]?map(r.rows[0]):null;}
  private replay(r:OperatorApproval,id:string,reason:string){if(r.withdrawalId!==id || r.reason!==reason)throw new OperatorApprovalError("WITHDRAWAL_APPROVAL_IDEMPOTENCY_CONFLICT");return{record:r,replayed:true};}
  async record(id:string,operatorId:string,requestId:string,reason:string){
   const prior=await this.findRequest(operatorId,requestId);if(prior)return this.replay(prior,id,reason);

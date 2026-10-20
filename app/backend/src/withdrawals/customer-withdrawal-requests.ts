@@ -3,7 +3,7 @@ export class WithdrawalRequestError extends Error {
 }
 export interface WithdrawalRequest {
   id: string; customerId: string; requestId: string; pixId: string; purchaseId: string;
-  amountUsdt: string; walletAddress: string; walletVerifiedAt: string; createdAt: string; approvedAt?: string | null;
+  amountUsdt: string; walletAddress: string; walletVerifiedAt: string; createdAt: string; approvedAt?: string | null; executionAttempted?: boolean; executionStatus?: string | null;
 }
 export interface WithdrawalRequestRepository {
   read(customerId: string, id: string): Promise<WithdrawalRequest | null>;
@@ -17,7 +17,7 @@ const view = (r: WithdrawalRequest) => ({
   created_at: r.createdAt, manual_approval_required: true, approved: r.approvedAt != null, approval_recorded_at: r.approvedAt ?? null,
   provider_freshness_evaluated: false, balance_reserved: false,
   delivery_costs_evaluated: false, net_delivery_amount: null,
-  withdrawal_started: false, job_enqueued: false, operations_enabled: false,
+  withdrawal_started: r.executionAttempted === true, sandbox_execution_status: r.executionStatus ?? null, onchain_delivery_verified: false, job_enqueued: false, operations_enabled: false,
 });
 /** Local read/record only: intentionally has no provider, signer or queue dependency. */
 export class CustomerWithdrawalRequestService {

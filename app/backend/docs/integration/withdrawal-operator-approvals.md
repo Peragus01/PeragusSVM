@@ -60,3 +60,10 @@ identity, aal1, customer-account separation, strict input, first approval, repla
 conflicting reason and safe owner readback without provider/queue effects.
 Disable the approval feature after staging acceptance. Mainnet remains out of
 this milestone and no production key is used.
+
+Migration 027 adds an independently gated sandbox execution resource. Readback
+now reflects withdrawal_started from its durable attempt claim; this does not
+mean verified delivery. Customer views expose sandbox_execution_status and keep
+onchain_delivery_verified=false. Economic and approval audit fields remain frozen.
+See sandbox-withdrawal-execution.md for the explicit test-only send boundary,
+recovery rules and unresolved pilot-slot limitation.
