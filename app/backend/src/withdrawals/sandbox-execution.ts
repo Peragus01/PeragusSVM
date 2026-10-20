@@ -24,7 +24,7 @@ export interface SandboxExecutionRepository {
 export function validateWithdrawal(row:SandboxExecution,t:WithdrawalObservation){
  if((row.sendTransferId && row.sendTransferId!==t.id) || t.customerId!==row.providerCustomerId || t.sourceWalletId!==row.providerWalletId
   || t.destinationAddress!==row.walletAddress || t.network!=="solana" || t.sourceCurrency!=="USDT"
-  || usdtUnits(t.sourceAmount)!==usdtUnits(row.amountUsdt) || usdtUnits(t.targetAmount)<=0n || usdtUnits(t.targetAmount)>usdtUnits(row.amountUsdt))throw new SandboxExecutionError("WITHDRAWAL_PROVIDER_CONTEXT_MISMATCH");
+  || usdtUnits(t.sourceAmount)!==usdtUnits(row.amountUsdt) || (t.targetAmount!==null && (usdtUnits(t.targetAmount)<=0n || usdtUnits(t.targetAmount)>usdtUnits(row.amountUsdt))))throw new SandboxExecutionError("WITHDRAWAL_PROVIDER_CONTEXT_MISMATCH");
 }
 export function executionView(r:SandboxExecution){return{id:r.id,withdrawal_request_id:r.withdrawalId,request_id:r.requestId,
  state:r.observation?`provider_${r.observation.status}`:r.attempted?"uncertain":"reserved",environment:"test",real_money:false,

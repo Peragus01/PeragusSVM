@@ -12,14 +12,14 @@ export const usdtUnits=(amount:string)=>{decimal.parse(amount);const [whole,frac
 export interface WithdrawalIdentity {name:string;cpf:string;street:string;city:string;country:"BR";}
 export interface WithdrawalObservation {
  id:string;customerId:string;status:string;sourceWalletId:string;sourceCurrency:"USDT";
- destinationAddress:string;network:"solana";sourceAmount:string;targetAmount:string;
+ destinationAddress:string;network:"solana";sourceAmount:string;targetAmount:string|null;
  sourceLegStatus:string|null;destinationLegStatus:string|null;
  transactionReference:string|null;
 }
 function observation(value:unknown):WithdrawalObservation {
  const row=record.parse(value),source=record.parse(row.source),dest=record.parse(row.destination),amounts=record.parse(row.amounts);
  const from=z.object({currency:z.literal("USDT"),amount:decimal}).parse(amounts.source);
- const to=z.object({currency:z.literal("USDT"),amount:decimal}).parse(amounts.target);
+ const to=amounts.target===undefined?null:z.object({currency:z.literal("USDT"),amount:decimal}).parse(amounts.target);
  if(row.object!=="transfer" || source.type!=="wallet" || source.currency!=="USDT"
   || (source.chain!=null && source.chain!=="solana") || dest.type!=="crypto_address"
   || dest.network!=="solana" || dest.currency!=="USDT" || row.quote_id!=null)throw new OzavClientError("Withdrawal context mismatch",false);
@@ -29,7 +29,7 @@ function observation(value:unknown):WithdrawalObservation {
  return {id:id("ozav_tr_").parse(row.id),customerId:id("ozav_cus_").parse(row.customer_id),
   status:z.enum(["awaiting_payment","payment_confirmed","converting","payout_initiated","completed","failed","cancelled","expired","needs_review","awaiting_approval"]).parse(row.status),
   sourceWalletId:id("ozav_wal_").parse(source.wallet_id),sourceCurrency:"USDT",destinationAddress:z.string().min(32).max(44).parse(dest.address),network:"solana",
-  sourceAmount:from.amount,targetAmount:to.amount,sourceLegStatus:leg(row.source_leg),destinationLegStatus:leg(row.destination_leg),
+  sourceAmount:from.amount,targetAmount:to?.amount??null,sourceLegStatus:leg(row.source_leg),destinationLegStatus:leg(row.destination_leg),
   transactionReference:refs.tx_hash==null?null:z.string().min(1).max(256).parse(refs.tx_hash)};
 }
 /** A separate sandbox-only send boundary; no live key or generic POST retry is accepted. */
