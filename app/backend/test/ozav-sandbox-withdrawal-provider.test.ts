@@ -6,6 +6,17 @@ const customerId="ozav_cus_testing",walletId="ozav_wal_testing",transferId="ozav
 const input={executionId:randomUUID(),withdrawalId:randomUUID(),customerId,walletId,amount:"198.050000",address,verifiedAt:new Date(Date.now()-1000).toISOString(),identity:{name:"Synthetic User",cpf:"11144477735",street:"Synthetic Street, 1",city:"Test",country:"BR" as const}};
 const raw=()=>({id:transferId,object:"transfer",customer_id:customerId,status:"completed",source:{type:"wallet",wallet_id:walletId,currency:"USDT",chain:"solana"},destination:{type:"crypto_address",address,network:"solana",currency:"USDT"},amounts:{source:{currency:"USDT",amount:"198.05"},target:{currency:"USDT",amount:"198.05"}},source_leg:{status:"completed"},destination_leg:{status:"completed"},settlement_references:{network:"solana",tx_hash:"synthetic-reference"},travel_rule:{private:"NEVER_PERSIST_THIS"}});
 describe("sandbox withdrawal provider contract",()=>{
+ it("accepts an omitted target amount without inventing net delivery or sending again",async()=>{
+  const body:any=raw();delete body.amounts.target;
+  const write=vi.fn(),p=new OzavSandboxWithdrawalProvider("ozav_sk_test_example",{read:async()=>({statusCode:200,body}),write});
+  expect(await p.transfer(transferId)).toMatchObject({status:"completed",sourceAmount:"198.05",targetAmount:null});
+  expect(write).not.toHaveBeenCalled();
+ });
+ it("rejects an explicit null target as malformed evidence",async()=>{
+  const body:any=raw();body.amounts.target=null;
+  const p=new OzavSandboxWithdrawalProvider("ozav_sk_test_example",{read:async()=>({statusCode:200,body})});
+  await expect(p.transfer(transferId)).rejects.toThrow();
+ });
  it("rejects production keys before any read or send",()=>{expect(()=>new OzavSandboxWithdrawalProvider("ozav_sk_live_example")).toThrow();});
  it("sends explicit Solana with amount, stable idempotency and backend-derived Travel Rule, without a quote",async()=>{
   const write=vi.fn(async()=>({statusCode:201,body:raw()})),p=new OzavSandboxWithdrawalProvider("ozav_sk_test_example",{write});

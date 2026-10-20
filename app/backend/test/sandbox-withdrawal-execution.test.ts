@@ -138,6 +138,16 @@ describe("approved sandbox withdrawal execution",()=>{
   expect((await f.execution.reconcile(f.user,f.wr.data.id)).recovery_required).toBe(true);
   f.setFound(f.sendId);const recovered=await f.execution.reconcile(f.user,f.wr.data.id);expect(recovered.provider_completed).toBe(true);expect(f.sends()).toBe(1);
  });
+ it("recovers missing target evidence without inventing net delivery or repeating send",async()=>{
+  const f=await executionFixture();f.setMode("timeout");
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+  f.setFound(f.sendId);f.provider.transfer=async()=>({...f.observed,targetAmount:null});
+  const recovered=await f.execution.reconcile(f.user,f.wr.data.id);
+  expect(recovered.provider_completed).toBe(true);expect(recovered.provider_target_amount).toBeNull();
+  expect(recovered.onchain_delivery_verified).toBe(false);expect(recovered.recovery_required).toBe(false);
+  expect((await f.execution.read(f.user,f.wr.data.id)).provider_target_amount).toBeNull();
+  expect(f.sends()).toBe(1);
+ });
  it("blocks changed funding, insufficient balance and unready customer before any POST",async()=>{
   for(const change of ["funding","amount","balance","identity","eligibility","approver"]){
    const f=await executionFixture();if(change==="funding")f.transfer.status="needs_review";
