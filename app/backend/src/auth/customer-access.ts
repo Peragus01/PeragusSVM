@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 
-export interface AuthenticatedUser { id: string; email: string; }
+export interface AuthenticatedUser { id: string; email: string; assuranceLevel?: "aal2"; }
 export interface Customer {
   id: string;
   ownerUserId: string;
@@ -62,6 +62,14 @@ export function registerCustomerAccess(app: FastifyInstance, access: CustomerAcc
       return reply.code(status).send({ error: { code: error.code, message: "Authentication could not be completed" } });
     }
     if (path === "/v1/me" || path === "/v1/me/customer") return;
+    // Exact operator resource: authentication still runs above. Its own handler
+    // requires the server allowlist and verified MFA; a customer profile is not a role.
+    if (path === "/v1/admin/withdrawal-requests/:id/approval") {
+      if (await access.customers.findByOwner(request.authenticatedUser.id)) {
+        return reply.code(403).send({error:{code:"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"}});
+      }
+      return;
+    }
     const customer = await access.customers.findByOwner(request.authenticatedUser.id);
     if (!customer) return reply.code(403).send({ error: { code: "CUSTOMER_REQUIRED", message: "Create a customer profile first" } });
     request.authenticatedCustomer = customer;

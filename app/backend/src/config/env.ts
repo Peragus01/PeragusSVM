@@ -1,8 +1,11 @@
+import {parseWithdrawalOperators} from "../withdrawals/operator-approvals.js";
 import "dotenv/config";
 
 import { z } from "zod";
 
 const envSchema = z.object({
+  WITHDRAWAL_OPERATOR_APPROVALS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
+  WITHDRAWAL_OPERATOR_USER_IDS: z.string().default("").transform((value,ctx)=>{try{return parseWithdrawalOperators(value);}catch{ctx.addIssue({code:"custom",message:"Expected up to five comma-separated operator UUIDs"});return z.NEVER;}}),
   CUSTOMER_WITHDRAWAL_REQUESTS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   CUSTOMER_SANDBOX_PIX_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),

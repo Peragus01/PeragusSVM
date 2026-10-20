@@ -1,3 +1,5 @@
+import {registerWithdrawalOperatorApprovalRoutes} from "./routes/withdrawal-operator-approvals.js";
+import type {WithdrawalOperatorApprovalService} from "./withdrawals/operator-approvals.js";
 import {registerCustomerWithdrawalRequestRoutes} from "./routes/customer-withdrawal-requests.js";
 import type {CustomerWithdrawalRequestService} from "./withdrawals/customer-withdrawal-requests.js";
 import {registerCustomerSandboxPixRoutes} from "./routes/customer-sandbox-pix.js";
@@ -53,6 +55,7 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  withdrawalOperatorApprovalService?: WithdrawalOperatorApprovalService;
   customerWithdrawalRequestService?: CustomerWithdrawalRequestService;
   customerSandboxPixService?: CustomerSandboxPixService;
   customerSandboxPixSimulationEnabled?: boolean;
@@ -112,6 +115,7 @@ export async function buildApp(
 
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
 
+  await registerWithdrawalOperatorApprovalRoutes(app, options.customerAccess ? options.withdrawalOperatorApprovalService : undefined);
   await registerCustomerWithdrawalRequestRoutes(app, options.customerAccess ? options.customerWithdrawalRequestService : undefined);
   await registerCustomerSandboxPixRoutes(app, options.customerAccess ? options.customerSandboxPixService : undefined, options.customerSandboxPixSimulationEnabled ?? false);
   await registerCustomerPurchaseIntentRoutes(app, options.customerAccess ? options.customerPurchaseIntentService : undefined);

@@ -29,3 +29,13 @@ describe("Supabase server token validation", () => {
     expect(() => createSupabaseAuthenticator(url, "key")).toThrow();
   });
 });
+describe("verified operator assurance",()=>{
+ const jwt=(claims:Record<string,unknown>)=>`header.${Buffer.from(JSON.stringify({sub:user.id,iss:`${origin}/auth/v1`,aud:"authenticated",exp:Math.floor(Date.now()/1000)+600,aal:"aal2",...claims})).toString("base64url")}.signature`;
+ it("returns MFA assurance only after Auth accepts the same token",async()=>{
+  expect(await createSupabaseAuthenticator(origin,"key",mockFetch(user))(jwt({}))).toMatchObject({id:user.id,assuranceLevel:"aal2"});
+  await expect(createSupabaseAuthenticator(origin,"key",mockFetch({},401))(jwt({}))).rejects.toThrow("INVALID_TOKEN");
+ });
+ it.each([{aal:"aal1"},{sub:randomUUID()},{iss:"https://other.supabase.co/auth/v1"},{exp:0},{aud:"service_role"}])("does not grant operator assurance from mismatched claims",async claims=>{
+  expect((await createSupabaseAuthenticator(origin,"key",mockFetch(user))(jwt(claims))).assuranceLevel).toBeUndefined();
+ });
+});
