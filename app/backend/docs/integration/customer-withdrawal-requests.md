@@ -66,3 +66,10 @@ reads/replays reflect approved and approval_recorded_at when a decision exists;
 the frozen amount, wallet and proof remain unchanged. Operator ID and reason
 stay on the protected admin resource. Approval still never executes a send.
 See withdrawal-operator-approvals.md for account separation, allowlist and MFA.
+
+Migration 027 adds an independently gated sandbox execution resource. Readback
+now reflects withdrawal_started from its durable attempt claim; this does not
+mean verified delivery. Customer views expose sandbox_execution_status and keep
+onchain_delivery_verified=false. Economic and approval audit fields remain frozen.
+See sandbox-withdrawal-execution.md for the explicit test-only send boundary,
+recovery rules and unresolved pilot-slot limitation.

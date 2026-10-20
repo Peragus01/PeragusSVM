@@ -8,7 +8,7 @@ export function parseWithdrawalOperators(input:string):string[]{
 }
 export interface OperatorApproval {
  id:string;withdrawalId:string;customerId:string;operatorId:string;requestId:string;reason:string;
- amountUsdt:string;walletAddress:string;createdAt:string;
+ amountUsdt:string;walletAddress:string;createdAt:string;executionAttempted?:boolean;
 }
 export interface OperatorApprovalRepository {
  read(withdrawalId:string):Promise<OperatorApproval|null>;
@@ -18,11 +18,12 @@ const view=(r:OperatorApproval)=>({id:r.id,withdrawal_request_id:r.withdrawalId,
  operator_user_id:r.operatorId,reason:r.reason,created_at:r.createdAt,
  source:{currency:"USDT",amount:r.amountUsdt},destination:{wallet_address:r.walletAddress,proof_network:"solana:devnet"},
  approved:true,environment:"test",record_only:true,execution_authorized:false,
- provider_freshness_evaluated:false,balance_reserved:false,withdrawal_started:false,job_enqueued:false});
+ provider_freshness_evaluated:false,balance_reserved:false,withdrawal_started:r.executionAttempted===true,job_enqueued:false});
 export class WithdrawalOperatorApprovalService {
  constructor(private readonly repository:OperatorApprovalRepository,private readonly operators:ReadonlySet<string>){}
+ isAllowed(id:string){return this.operators.has(id.toLowerCase());}
  authorize(user:AuthenticatedUser){
-  if(!this.operators.has(user.id.toLowerCase()))throw new OperatorApprovalError("WITHDRAWAL_OPERATOR_REQUIRED");
+  if(!this.isAllowed(user.id))throw new OperatorApprovalError("WITHDRAWAL_OPERATOR_REQUIRED");
   if(user.assuranceLevel!=="aal2")throw new OperatorApprovalError("WITHDRAWAL_OPERATOR_MFA_REQUIRED");
  }
  async read(user:AuthenticatedUser,withdrawalId:string){this.authorize(user);const row=await this.repository.read(withdrawalId);if(!row)throw new OperatorApprovalError("WITHDRAWAL_APPROVAL_NOT_FOUND");return view(row);}

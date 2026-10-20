@@ -29,7 +29,7 @@ const cents = (value: string) => {
   const [whole, fraction = ""] = value.split(".");
   return BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, "0"));
 };
-export function validatePixTransfer(row: CustomerPixRecord, t: OzavTransfer) {
+export function validatePixTransfer(row: Pick<CustomerPixRecord, "providerCustomerId" | "providerQuoteId" | "transferId" | "providerWalletId" | "amountBrl">, t: OzavTransfer) {
   if (t.customerId !== row.providerCustomerId || t.quoteId !== row.providerQuoteId || (row.transferId && t.id !== row.transferId)
     || t.source.type !== "fiat_payment" || t.source.currency !== "BRL" || t.source.rail !== "pix"
     || t.destination.type !== "wallet" || t.destination.walletId !== row.providerWalletId
