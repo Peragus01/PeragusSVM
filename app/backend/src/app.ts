@@ -52,6 +52,7 @@ import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
   customerSandboxPixService?: CustomerSandboxPixService;
+  customerSandboxPixSimulationEnabled?: boolean;
   customerPurchaseIntentService?: CustomerPurchaseIntentService;
   customerQuoteService?: CustomerQuoteService;
   customerWalletService?: CustomerWalletService;
@@ -108,7 +109,7 @@ export async function buildApp(
 
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
 
-  await registerCustomerSandboxPixRoutes(app, options.customerAccess ? options.customerSandboxPixService : undefined);
+  await registerCustomerSandboxPixRoutes(app, options.customerAccess ? options.customerSandboxPixService : undefined, options.customerSandboxPixSimulationEnabled ?? false);
   await registerCustomerPurchaseIntentRoutes(app, options.customerAccess ? options.customerPurchaseIntentService : undefined);
   await registerCustomerQuoteRoutes(app, options.customerAccess ? options.customerQuoteService : undefined);
   await registerCustomerWalletRoutes(app, options.customerAccess ? options.customerWalletService : undefined);

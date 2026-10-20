@@ -10,7 +10,7 @@ export interface PixContext {
 }
 export interface CustomerPixRecord extends PixContext {
   id: string; customerId: string; requestId: string; providerWalletId: string;
-  attempted: boolean; transferId: string | null; observation: OzavTransfer | null;
+  attempted: boolean; simulationAttempted: boolean; transferId: string | null; observation: OzavTransfer | null;
 }
 export interface CustomerPixRepository {
   context(customerId: string, purchaseId: string): Promise<PixContext | null>;
@@ -18,11 +18,12 @@ export interface CustomerPixRepository {
   read(customerId: string, id: string): Promise<CustomerPixRecord | null>;
   reserve(customerId: string, requestId: string, context: PixContext, walletId: string): Promise<CustomerPixRecord>;
   claim(id: string): Promise<boolean>;
+  claimSimulation(row: CustomerPixRecord): Promise<boolean>;
   bind(row: CustomerPixRecord, transferId: string): Promise<void>;
   save(row: CustomerPixRecord, transfer: OzavTransfer): Promise<CustomerPixRecord>;
 }
 type Provider = Pick<OzavClient, "getCustomerCapabilities" | "getSandboxCustomerSnapshot" | "getCustomerManagedWallet" |
-  "createCustomerPixTransfer" | "findCustomerPixTransfer" | "getTransfer">;
+  "createCustomerPixTransfer" | "findCustomerPixTransfer" | "getTransfer" | "simulateCustomerPixPayment">;
 const cents = (value: string) => {
   if (!/^(0|[1-9]\d{0,4})(\.\d{1,2})?$/.test(value)) throw new CustomerPixError("PIX_PROVIDER_CONTEXT_MISMATCH");
   const [whole, fraction = ""] = value.split(".");
@@ -42,14 +43,18 @@ export function validatePixTransfer(row: CustomerPixRecord, t: OzavTransfer) {
 }
 export function pixView(row: CustomerPixRecord) {
   const t = row.observation, instructions = t?.source.paymentInstructions;
-  const payable = t?.status === "awaiting_payment" && instructions && Date.parse(instructions.expiresAt) > Date.now();
+  const payable = !row.simulationAttempted && t?.status === "awaiting_payment" && instructions && Date.parse(instructions.expiresAt) > Date.now();
   return {id: row.id, purchase_intent_id: row.purchaseId, request_id: row.requestId,
     state: t?.status ?? (row.attempted ? "uncertain" : "reserved"), environment: "test",
     source: {currency: "BRL", amount: row.amountBrl},
     funding_destination: {type: "provider_managed_wallet"},
     subsequent_delivery: {wallet_address: row.walletAddress, proof_network: "solana:devnet", started: false},
     payment_instructions: payable ? {br_code: instructions.brCode, qr_code_image: instructions.qrCodeImage, expires_at: instructions.expiresAt} : null,
-    recovery_required: row.attempted && !t, automatic_retry: false,
+    simulation_attempted: row.simulationAttempted,
+    source_leg_status: t?.sourceLegStatus ?? null, destination_leg_status: t?.destinationLegStatus ?? null,
+    payment_confirmed: t?.sourceLegStatus === "completed" && ["payment_confirmed", "converting", "payout_initiated", "completed"].includes(t.status),
+    custody_conversion_completed: t?.status === "completed" && t.sourceLegStatus === "completed" && t.destinationLegStatus === "completed",
+    recovery_required: (row.attempted && !t) || (row.simulationAttempted && t?.status === "awaiting_payment"), automatic_retry: false,
     real_money: false, job_enqueued: false, operations_enabled: false};
 }
 export class CustomerSandboxPixService {
@@ -95,6 +100,48 @@ export class CustomerSandboxPixService {
     if (!result.transfer) return {data: pixView(row), replayed: false};
     validatePixTransfer(row, result.transfer);
     return {data: pixView(await this.repo.save(row, result.transfer)), replayed: false};
+  }
+  async simulatePayment(customerId: string, id: string) {
+    let row = await this.repo.read(customerId, id);
+    if (!row) throw new CustomerPixError("PIX_NOT_FOUND");
+    if (!row.attempted || !row.transferId) throw new CustomerPixError("PIX_SIMULATION_NOT_READY");
+    // Refresh and verify the actual bound transfer before making any mutation.
+    // A repetition always reads first; it never resets the persisted one-shot claim.
+    const current = await this.provider.getTransfer(row.transferId);
+    validatePixTransfer(row, current);
+    row = await this.repo.save(row, current);
+    if (row.simulationAttempted) return {data: pixView(row), replayed: true};
+    if (["payment_confirmed", "converting", "payout_initiated", "completed"].includes(current.status)) {
+      return {data: pixView(row), replayed: true};
+    }
+    if (current.status !== "awaiting_payment" || !current.source.paymentInstructions
+      || Date.parse(current.source.paymentInstructions.expiresAt) <= Date.now()) {
+      throw new CustomerPixError("PIX_SIMULATION_NOT_READY");
+    }
+    const context = await this.repo.context(customerId, row.purchaseId);
+    if (!context || context.providerCustomerId !== row.providerCustomerId || context.providerQuoteId !== row.providerQuoteId
+      || context.amountBrl !== row.amountBrl || context.walletAddress !== row.walletAddress) {
+      throw new CustomerPixError("PIX_PURCHASE_NOT_ELIGIBLE");
+    }
+    const caps = await this.provider.getCustomerCapabilities();
+    if (caps.environment !== "test" || !["customers", "liquidity"].every(v => caps.entitlements.includes(v))
+      || !["customers:read", "transfers:read", "transfers:write"].every(v => caps.scopes.includes(v))) {
+      throw new CustomerPixError("PIX_CAPABILITY_REQUIRED");
+    }
+    const customer = await this.provider.getSandboxCustomerSnapshot(row.providerCustomerId, onboardingExternalRef(customerId));
+    if (customer.provider_status !== "approved" || customer.verification_mode !== "full" || customer.requirements_pending !== false) {
+      throw new CustomerPixError("PIX_CUSTOMER_NOT_READY");
+    }
+    if (!await this.repo.claimSimulation(row)) {
+      const latest = await this.repo.read(customerId, id);
+      if (!latest?.simulationAttempted) throw new CustomerPixError("PIX_SIMULATION_NOT_READY");
+      return {data: pixView(latest), replayed: true};
+    }
+    row.simulationAttempted = true;
+    await this.provider.simulateCustomerPixPayment(row.transferId!);
+    const after = await this.provider.getTransfer(row.transferId!);
+    validatePixTransfer(row, after);
+    return {data: pixView(await this.repo.save(row, after)), replayed: false};
   }
   async reconcile(customerId: string, id: string) {
     const row = await this.repo.read(customerId, id);
