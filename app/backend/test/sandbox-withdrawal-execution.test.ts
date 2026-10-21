@@ -1,3 +1,4 @@
+import {CustomerWithdrawalResultService} from "../src/withdrawals/customer-withdrawal-results.js";
 import {randomUUID} from "node:crypto";
 import {Keypair} from "@solana/web3.js";
 import {readFile,readdir} from "node:fs/promises";
@@ -114,6 +115,35 @@ async function executionFixture(){
  return{...f,provider,repo,execution,observed,sendId,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;}};
 }
 describe("approved sandbox withdrawal execution",()=>{
+ it("serves owned stored results while all write services are disabled",async()=>{
+  const f=await executionFixture();await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  const reads=new CustomerWithdrawalResultService(pool);
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner,email:"synthetic@example.test"})},customerWithdrawalResultService:reads});
+  apps.push(app);
+  const path=`/v1/me/withdrawal-requests/${f.wr.data.id}/result`;
+  const response=await app.inject({method:"GET",url:path,headers:{authorization:"Bearer valid"}});
+  expect(response.statusCode).toBe(200);expect(response.headers["cache-control"]).toBe("no-store");
+  expect(response.json().data).toMatchObject({state:"provider_completed",provider_completed:true,amounts:{gross_amount:"200.000000",net_amount:"199.500000",deducted_amount:"0.500000",fee_breakdown:null},onchain_delivery_verified:false});
+  const text=response.body;
+  for(const secret of [f.user.id,f.sendId,"PRIVATE_SYNTHETIC","operator_id","travel_rule",'"request_id"'])expect(text).not.toContain(secret);
+  expect(f.sends()).toBe(1);
+  expect((await app.inject({method:"POST",url:"/v1/me/withdrawal-requests",headers:{authorization:"Bearer valid"},payload:{}})).statusCode).toBe(503);
+  expect((await app.inject({method:"GET",url:path+"?refresh=true",headers:{authorization:"Bearer valid"}})).statusCode).toBe(400);
+  expect((await app.inject({method:"GET",url:path})).statusCode).toBe(401);
+  expect((await app.inject({method:"GET",url:`/v1/me/withdrawal-requests/${randomUUID()}/result`,headers:{authorization:"Bearer valid"}})).statusCode).toBe(404);
+  const other=await executionFixture();
+  await expect(reads.read(other.s.customer.id,f.wr.data.id)).rejects.toThrow("WITHDRAWAL_REQUEST_NOT_FOUND");
+ });
+ it("preserves unknown amounts through approval, uncertainty and omitted target completion",async()=>{
+  const f=await executionFixture(),reads=new CustomerWithdrawalResultService(pool);
+  expect(await reads.read(f.s.customer.id,f.wr.data.id)).toMatchObject({state:"approved",provider_completed:false,amounts:{net_amount:null,deducted_amount:null,basis:"not_reported"}});
+  f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+  expect(await reads.read(f.s.customer.id,f.wr.data.id)).toMatchObject({state:"uncertain",recovery_required:true});
+  f.setFound(f.sendId);f.provider.transfer=async()=>({...f.observed,targetAmount:null});
+  await f.execution.reconcile(f.user,f.wr.data.id);
+  expect(await reads.read(f.s.customer.id,f.wr.data.id)).toMatchObject({state:"provider_completed",provider_completed:true,recovery_required:false,amounts:{net_amount:null,deducted_amount:null,basis:"not_reported"}});
+  expect(f.sends()).toBe(1);
+ });
  it("sends only the approved conversion amount once and does not claim real delivery",async()=>{
   const f=await executionFixture(),r=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
   expect(r.data).toMatchObject({state:"provider_completed",environment:"test",real_money:false,source:{amount:"200.000000"},provider_target_amount:"199.500000",provider_completed:true,onchain_delivery_verified:false,mainnet_execution:false,job_enqueued:false});
