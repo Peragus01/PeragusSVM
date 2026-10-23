@@ -1,3 +1,4 @@
+import {CustomerOperationHistoryService,parseHistoryQuery} from "../src/purchases/customer-operation-history.js";
 import {CustomerWithdrawalResultService} from "../src/withdrawals/customer-withdrawal-results.js";
 import {randomUUID} from "node:crypto";
 import {Keypair} from "@solana/web3.js";
@@ -115,6 +116,68 @@ async function executionFixture(){
  return{...f,provider,repo,execution,observed,sendId,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;}};
 }
 describe("approved sandbox withdrawal execution",()=>{
+ it("lists only owned operations with write gates off and no provider refresh",async()=>{
+  const f=await executionFixture(),other=await executionFixture();
+  const history=new CustomerOperationHistoryService(pool),stats=f.stats(),reads=f.identityReads();
+  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{
+   if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");
+   return{id:f.s.owner,email:"synthetic@example.test"};
+  }},customerOperationHistoryService:history});apps.push(app);
+  const response=await app.inject({method:"GET",url:"/v1/me/operations",headers:{authorization:"Bearer valid"}});
+  expect(response.statusCode).toBe(200);expect(response.headers["cache-control"]).toBe("no-store");
+  const body=response.json();expect(body.data).toHaveLength(1);
+  expect(body.data[0]).toMatchObject({id:f.p.data.id,stage:"withdrawal",source:{currency:"BRL",amount:"1000.00"},converted_target:{currency:"USDT",amount:"200.000000"},withdrawal:{id:f.wr.data.id,state:"approved",provider_completed:false},real_money:false,onchain_delivery_verified:false});
+  expect(body.meta).toEqual({has_more:false,next_cursor:null});
+  for(const secret of [other.p.data.id,f.user.id,f.s.provider,"PRIVATE_SYNTHETIC","travel_rule",'"request_id"',"provider_customer_id"])expect(response.body).not.toContain(secret);
+  expect(f.stats()).toEqual(stats);expect(f.identityReads()).toBe(reads);expect(f.sends()).toBe(0);
+  expect((await app.inject({method:"GET",url:"/v1/me/operations"})).statusCode).toBe(401);
+  for(const query of ["limit=0","limit=51","limit=1&limit=2","customer_id="+other.s.customer.id,"cursor=%%%","cursor="+Buffer.from("{}").toString("base64url")]){
+   const r=await app.inject({method:"GET",url:"/v1/me/operations?"+query,headers:{authorization:"Bearer valid"}});
+   expect(r.statusCode).toBe(400);
+  }
+  expect((await app.inject({method:"POST",url:"/v1/me/withdrawal-requests",headers:{authorization:"Bearer valid"},payload:{}})).statusCode).toBe(503);
+ });
+ it("paginates microsecond timestamps and UUID ties without leaking across customers",async()=>{
+  const s=await setup(),history=new CustomerOperationHistoryService(pool);
+  const ids:string[]=[];
+  ids.push((await service.record(s.customer.id,randomUUID(),s.quoteId)).data.id);
+  for(let i=0;i<2;i++)ids.push((await service.record(s.customer.id,randomUUID(),await s.makeQuote())).data.id);
+  await db.query("update peragus_customer_purchase_intents set created_at='2026-10-20T12:00:00.123456Z' where customer_id=$1",[s.customer.id]);
+  const expected=[...ids].sort().reverse();
+  const first=await history.list(s.customer.id,parseHistoryQuery({limit:"1"}));
+  expect(first.data.map(r=>r.id)).toEqual(expected.slice(0,1));
+  expect(first.data[0]).toMatchObject({stage:"purchase_recorded",pix:null,withdrawal:null,converted_target:null});
+  expect(first.data[0]!.created_at).toBe("2026-10-20T12:00:00.123456Z");
+  const inserted=(await service.record(s.customer.id,randomUUID(),await s.makeQuote())).data.id;
+  await db.query("update peragus_customer_purchase_intents set created_at='2026-10-20T12:00:00.123457Z' where id=$1",[inserted]);
+  const second=await history.list(s.customer.id,parseHistoryQuery({limit:"1",cursor:first.meta.next_cursor!}));
+  const third=await history.list(s.customer.id,parseHistoryQuery({limit:"1",cursor:second.meta.next_cursor!}));
+  expect([...first.data,...second.data,...third.data].map(r=>r.id)).toEqual(expected);
+  expect(third.meta).toEqual({has_more:false,next_cursor:null});
+  const foreign=await setup();
+  expect(await history.list(foreign.customer.id,parseHistoryQuery({cursor:first.meta.next_cursor!}))).toEqual({data:[],meta:{has_more:false,next_cursor:null}});
+ });
+ it("keeps uncertain and completed custody states distinct from real delivery",async()=>{
+  const f=await executionFixture(),history=new CustomerOperationHistoryService(pool);
+  f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+  const uncertain=await history.list(f.s.customer.id,parseHistoryQuery({}));
+  expect(uncertain.data[0]!.withdrawal).toMatchObject({state:"uncertain",recovery_required:true,provider_completed:false});
+  f.setFound(f.sendId);f.provider.transfer=async()=>({...f.observed,targetAmount:null});
+  await f.execution.reconcile(f.user,f.wr.data.id);
+  const completed=await history.list(f.s.customer.id,parseHistoryQuery({}));
+  expect(completed.data[0]).toMatchObject({withdrawal:{state:"provider_completed",provider_completed:true,recovery_required:false,result_path:`/v1/me/withdrawal-requests/${f.wr.data.id}/result`},onchain_delivery_verified:false,mainnet_execution:false});
+  expect(f.sends()).toBe(1);
+ });
+ it("hides partial conversion amounts and database error details",async()=>{
+  const f=await completedFixture(),history=new CustomerOperationHistoryService(pool);
+  await db.query("update peragus_customer_sandbox_pix set observation=jsonb_set(observation,'{destinationLegStatus}','\"pending\"') where id=$1",[f.pixId]);
+  expect((await history.list(f.s.customer.id,parseHistoryQuery({}))).data[0]).toMatchObject({stage:"pix",converted_target:null,pix:{conversion_completed:false}});
+  const broken=new CustomerOperationHistoryService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any);
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner})},customerOperationHistoryService:broken});apps.push(app);
+  const response=await app.inject({method:"GET",url:"/v1/me/operations",headers:{authorization:"Bearer valid"}});
+  expect(response.statusCode).toBe(503);expect(response.headers["cache-control"]).toBe("no-store");
+  expect(response.body).not.toContain("PRIVATE_DATABASE_PASSWORD");
+ });
  it("serves owned stored results while all write services are disabled",async()=>{
   const f=await executionFixture();await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
   const reads=new CustomerWithdrawalResultService(pool);
