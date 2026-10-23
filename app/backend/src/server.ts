@@ -1,3 +1,4 @@
+import {OperatorWithdrawalQueueService} from "./withdrawals/operator-withdrawal-queue.js";
 import {CustomerOperationHistoryService} from "./purchases/customer-operation-history.js";
 import {CustomerWithdrawalResultService} from "./withdrawals/customer-withdrawal-results.js";
 import {SandboxWithdrawalExecutionService} from "./withdrawals/sandbox-execution.js";
@@ -404,6 +405,7 @@ const customerTermsService = env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSI
   new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }), draftService!,
 ) : undefined;
 const app = await buildApp({
+  ...(pool ? {operatorWithdrawalQueueService:new OperatorWithdrawalQueueService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS))} : {}),
   ...(pool ? {customerOperationHistoryService:new CustomerOperationHistoryService(pool)} : {}),
   ...(pool ? {customerWithdrawalResultService:new CustomerWithdrawalResultService(pool)} : {}),
   ...(env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED ? {sandboxWithdrawalExecutionService: new SandboxWithdrawalExecutionService(new PostgresSandboxExecutionRepository(pool!), new OzavSandboxWithdrawalProvider(env.OZAV_API_KEY!), new WithdrawalOperatorApprovalService(new PostgresWithdrawalOperatorApprovalRepository(pool!), new Set(env.WITHDRAWAL_OPERATOR_USER_IDS)))} : {}),
