@@ -3,6 +3,10 @@ import type {AuthenticatedUser} from "../auth/customer-access.js";
 export class OperatorApprovalError extends Error {
  constructor(public readonly code:string){super(code);}
 }
+export function authorizeWithdrawalOperator(user:AuthenticatedUser,operators:ReadonlySet<string>){
+ if(!operators.has(user.id.toLowerCase()))throw new OperatorApprovalError("WITHDRAWAL_OPERATOR_REQUIRED");
+ if(user.assuranceLevel!=="aal2")throw new OperatorApprovalError("WITHDRAWAL_OPERATOR_MFA_REQUIRED");
+}
 export function parseWithdrawalOperators(input:string):string[]{
  return z.array(z.string().uuid()).max(5).parse(input.split(",").map(v=>v.trim().toLowerCase()).filter(Boolean));
 }
@@ -23,8 +27,7 @@ export class WithdrawalOperatorApprovalService {
  constructor(private readonly repository:OperatorApprovalRepository,private readonly operators:ReadonlySet<string>){}
  isAllowed(id:string){return this.operators.has(id.toLowerCase());}
  authorize(user:AuthenticatedUser){
-  if(!this.isAllowed(user.id))throw new OperatorApprovalError("WITHDRAWAL_OPERATOR_REQUIRED");
-  if(user.assuranceLevel!=="aal2")throw new OperatorApprovalError("WITHDRAWAL_OPERATOR_MFA_REQUIRED");
+  authorizeWithdrawalOperator(user,this.operators);
  }
  async read(user:AuthenticatedUser,withdrawalId:string){this.authorize(user);const row=await this.repository.read(withdrawalId);if(!row)throw new OperatorApprovalError("WITHDRAWAL_APPROVAL_NOT_FOUND");return view(row);}
  async approve(user:AuthenticatedUser,withdrawalId:string,requestId:string,reason:string){
