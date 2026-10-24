@@ -128,7 +128,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <CustomerSessionProvider>
         {customerPage ? (
-          <WalletProvider><Outlet /></WalletProvider>
+          <WalletProvider showHeaderAction={false}><Outlet /></WalletProvider>
         ) : authPage ? (
           <Outlet />
         ) : (
