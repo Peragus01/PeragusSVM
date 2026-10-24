@@ -21,7 +21,7 @@ function CustomerOperationDetail() {
       // A bounded scan avoids issuing unbounded requests if an old ID is not in recent history.
       let cursor: string | undefined;
       for (let i=0;i<10;i++) {
-        const page = await getCustomerOperations(accessToken,{limit:50,cursor,signal:controller.signal});
+        const page = await getCustomerOperations(accessToken,{limit:50,...(cursor ? { cursor } : {}),signal:controller.signal});
         const found = page.data.find(item=>item.id.toLowerCase()===id.toLowerCase());
         if (found) {
           if (found.withdrawal?.id) {
