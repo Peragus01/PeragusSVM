@@ -64,6 +64,9 @@ function Index() {
             Verify every step.
           </p>
           <div className="hero-actions">
+            <Button variant="outline" size="lg" asChild>
+              <Link to="/login">Acessar minha conta <ArrowUpRight /></Link>
+            </Button>
             <Button size="lg" asChild>
               <Link to="/settlements">
                 Open settlement control room
