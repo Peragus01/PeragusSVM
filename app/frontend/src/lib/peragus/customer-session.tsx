@@ -164,7 +164,9 @@ export function useCustomerSession() {
   return value;
 }
 export async function requestPasswordRecovery(email: string) {
-  await supabaseAuth("recover", { email });
+  if (typeof window === "undefined") throw new CustomerSessionError("BROWSER_REQUIRED", "Recuperação disponível apenas no navegador.");
+  const redirect = new URL("/recuperar-senha", window.location.origin).toString();
+  await supabaseAuth("recover?redirect_to=" + encodeURIComponent(redirect), { email });
 }
 export async function completePasswordRecovery(accessToken: string, password: string) {
   await supabaseAuth("user", { password }, "PUT", accessToken);
