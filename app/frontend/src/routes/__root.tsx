@@ -9,6 +9,9 @@ import {
   type ErrorComponentProps,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { useLocation } from "@tanstack/react-router";
+import { CustomerSessionProvider } from "@/lib/peragus/customer-session";
+import { WalletProvider } from "@/components/peragus/Wallet";
 
 import appCss from "../styles.css?url";
 import { AppShell } from "@/components/peragus/Shell";
@@ -104,7 +107,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="pt-BR">
       <head>
         <HeadContent />
       </head>
@@ -118,13 +121,20 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
-
+  const pathname = useLocation({ select: location => location.pathname });
+  const customerPage = pathname === "/app" || pathname.startsWith("/app/");
+  const authPage = pathname === "/login" || pathname === "/cadastro" || pathname === "/recuperar-senha";
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <AppShell>
-        <Outlet />
-      </AppShell>
+      <CustomerSessionProvider>
+        {customerPage ? (
+          <WalletProvider><Outlet /></WalletProvider>
+        ) : authPage ? (
+          <Outlet />
+        ) : (
+          <AppShell><Outlet /></AppShell>
+        )}
+      </CustomerSessionProvider>
     </QueryClientProvider>
   );
 }
