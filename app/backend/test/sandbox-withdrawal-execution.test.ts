@@ -1,3 +1,4 @@
+import {SandboxWithdrawalRecoveryService,createSandboxRecoveryReader} from "../src/withdrawals/sandbox-recovery.js";
 import {OperatorWithdrawalAuditService} from "../src/withdrawals/operator-withdrawal-audit.js";
 import {OperatorWithdrawalQueueService} from "../src/withdrawals/operator-withdrawal-queue.js";
 import {CustomerOperationHistoryService,parseHistoryQuery} from "../src/purchases/customer-operation-history.js";
@@ -118,6 +119,50 @@ async function executionFixture(){
  return{...f,provider,repo,execution,observed,sendId,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;}};
 }
 describe("approved sandbox withdrawal execution",()=>{
+ it("recovers through GET-only provider capability while execution remains disabled",async()=>{
+  const f=await executionFixture();f.setMode("timeout");
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+  f.setFound(f.sendId);f.provider.transfer=async()=>({...f.observed,targetAmount:null});
+  const recovery=new SandboxWithdrawalRecoveryService(f.repo,{find:f.provider.find,transfer:f.provider.transfer},new Set([f.user.id]));
+  expect(recovery).not.toHaveProperty("execute");
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalRecoveryService:recovery});apps.push(app);
+  const path=`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers={authorization:"Bearer valid"};
+  const before=await app.inject({method:"GET",url:path,headers});
+  expect(before.statusCode).toBe(200);expect(before.json().data.recovery_required).toBe(true);
+  const recovered=await app.inject({method:"POST",url:path+"/reconcile",headers});
+  expect(recovered.statusCode).toBe(200);expect(recovered.headers["cache-control"]).toBe("no-store");
+  expect(recovered.json().data).toMatchObject({provider_completed:true,recovery_required:false,provider_target_amount:null,pilot_slot_held:true,onchain_delivery_verified:false});
+  const blocked=await app.inject({method:"POST",url:path,headers,payload:{request_id:randomUUID(),confirmation:"SANDBOX_ONLY"}});
+  expect(blocked.statusCode).toBe(503);expect(blocked.json().error.code).toBe("SANDBOX_WITHDRAWAL_EXECUTION_DISABLED");
+  expect(f.sends()).toBe(1);
+ });
+ it("never creates an execution during recovery and skips providers for an unattempted reservation",async()=>{
+  const f=await executionFixture();let reads=0;
+  const recovery=new SandboxWithdrawalRecoveryService(f.repo,{find:async()=>{reads++;return null;},transfer:async()=>{reads++;return f.observed as any;}},new Set([f.user.id]));
+  await expect(recovery.reconcile(f.user,f.wr.data.id)).rejects.toThrow("WITHDRAWAL_EXECUTION_NOT_FOUND");
+  const context=(await f.repo.context(f.wr.data.id))!;await f.repo.reserve(f.user.id,f.executionRequestId,context);
+  expect(await recovery.reconcile(f.user,f.wr.data.id)).toMatchObject({state:"reserved",execution_requested:false,recovery_required:false});
+  expect(reads).toBe(0);expect(f.sends()).toBe(0);
+ });
+ it("retains unknown outcomes and rejects mismatched evidence or unauthorized recovery",async()=>{
+  const f=await executionFixture();f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+  const recovery=new SandboxWithdrawalRecoveryService(f.repo,{find:f.provider.find,transfer:f.provider.transfer},new Set([f.user.id]));
+  expect(await recovery.reconcile(f.user,f.wr.data.id)).toMatchObject({state:"uncertain",recovery_required:true});
+  f.setFound(f.sendId);f.observed.destinationAddress=Keypair.generate().publicKey.toBase58();
+  await expect(recovery.reconcile(f.user,f.wr.data.id)).rejects.toThrow("WITHDRAWAL_PROVIDER_CONTEXT_MISMATCH");
+  expect(await recovery.read(f.user,f.wr.data.id)).toMatchObject({state:"uncertain",recovery_required:true});
+  await expect(recovery.read({id:f.user.id},f.wr.data.id)).rejects.toThrow("WITHDRAWAL_OPERATOR_MFA_REQUIRED");
+  await expect(recovery.read({id:randomUUID(),assuranceLevel:"aal2"},f.wr.data.id)).rejects.toThrow("WITHDRAWAL_OPERATOR_REQUIRED");
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner,assuranceLevel:"aal2"})},sandboxWithdrawalRecoveryService:recovery});apps.push(app);
+  const denied=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution/reconcile`,headers:{authorization:"Bearer valid"}});
+  expect(denied.statusCode).toBe(403);expect(denied.json().error.code).toBe("OPERATOR_ACCOUNT_SEPARATION_REQUIRED");
+  expect(f.sends()).toBe(1);
+ });
+ it("exposes only read methods from the sandbox recovery provider",()=>{
+  expect(()=>createSandboxRecoveryReader("ozav_sk_live_example")).toThrow("Sandbox key required");
+  const reader=createSandboxRecoveryReader("ozav_sk_test_example");
+  expect(Object.keys(reader).sort()).toEqual(["find","transfer"]);expect(Object.isFrozen(reader)).toBe(true);
+ });
  it("reads stored audit before approval and after completion with writes disabled",async()=>{
   const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]));
   const before=await audit.read(f.user,f.wr.data.id);
