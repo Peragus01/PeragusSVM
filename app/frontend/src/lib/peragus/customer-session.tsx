@@ -61,6 +61,7 @@ async function supabaseAuth(path: string, body: object, method: "POST" | "PUT" =
         ? "Não foi possível autenticar. Verifique suas credenciais e o e-mail confirmado."
         : "Autenticação indisponível. Tente novamente mais tarde.");
   }
+  if (response.status === 204) return {};
   return (await response.json()) as Record<string, unknown>;
 }
 function parseTokens(value: Record<string, unknown>): AuthTokens {
@@ -105,10 +106,13 @@ export function CustomerSessionProvider({ children }: {children: ReactNode}) {
   const generation = useRef(0);
   const pending = useRef<AbortController | null>(null);
   const logout = useCallback(() => {
+    const prior = tokensRef.current;
     generation.current++;
     pending.current?.abort();
     tokensRef.current = null;
     setTokens(null); setIdentity(null); setStatus("unauthenticated");
+    // Clear local state first. Best-effort remote refresh-token revocation; never block logout.
+    if (prior) void supabaseAuth("logout?scope=local", {}, "POST", prior.access_token).catch(() => {});
   }, []);
   const login = useCallback(async (email: string, password: string) => {
     const turn = ++generation.current;
