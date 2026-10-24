@@ -66,12 +66,12 @@ async function supabaseAuth(path: string, body: object, method: "POST" | "PUT" =
   return (await response.json()) as Record<string, unknown>;
 }
 function parseTokens(value: Record<string, unknown>): AuthTokens {
-  if (typeof value.access_token !== "string" || typeof value.refresh_token !== "string" ||
-      typeof value.expires_in !== "number" || value.expires_in <= 0) {
+  if (typeof value["access_token"] !== "string" || typeof value["refresh_token"] !== "string" ||
+      typeof value["expires_in"] !== "number" || value["expires_in"] <= 0) {
     throw new CustomerSessionError("INVALID_AUTH_RESPONSE", "Sessão de autenticação inválida.");
   }
-  return { access_token: value.access_token, refresh_token: value.refresh_token,
-    expires_at: Date.now() + value.expires_in * 1000 };
+  return { access_token: value["access_token"], refresh_token: value["refresh_token"],
+    expires_at: Date.now() + value["expires_in"] * 1000 };
 }
 async function fetchIdentity(token: string, signal?: AbortSignal): Promise<CustomerIdentity> {
   let response: Response;
