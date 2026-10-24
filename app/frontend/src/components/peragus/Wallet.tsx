@@ -22,7 +22,7 @@ import { WalletContext } from "./wallet-context";
 
 const DEVNET = "solana:devnet";
 
-export function WalletProvider({ children }: { children: ReactNode }) {
+export function WalletProvider({ children, showHeaderAction = true }: { children: ReactNode; showHeaderAction?: boolean }) {
   const [visible, setVisible] = useState(false);
   const [wallets, setWallets] = useState<readonly Wallet[]>([]);
   const [wallet, setWallet] = useState<Wallet | null>(null);
@@ -178,7 +178,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }}
     >
       {children}
-      <div className="wallet-header-action">
+      {showHeaderAction && <div className="wallet-header-action">
         {address ? (
           <div className="flex items-center gap-1">
             <Button variant="outline" size="sm" asChild>
@@ -204,7 +204,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             Connect Wallet
           </Button>
         )}
-      </div>
+      </div>}
       {visible &&
         createPortal(
           <div className="wallet-overlay" data-testid="wallet-overlay" onClick={close}>
