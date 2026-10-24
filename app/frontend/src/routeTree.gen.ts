@@ -48,9 +48,9 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/cadastro': typeof CadastroRoute
   '/recuperar-senha': typeof RecuperarSenhaRoute
-  '/app': typeof AppRoute
+  '/app': typeof AppRouteWithChildren
   '/app/': typeof AppIndexRoute
-  '/app/operacoes': typeof AppOperacoesRoute
+  '/app/operacoes': typeof AppOperacoesRouteWithChildren
   '/app/operacoes/': typeof AppOperacoesIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
   '/app/comprar-usdt': typeof AppComprarRoute
@@ -66,8 +66,8 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/cadastro': typeof CadastroRoute
   '/recuperar-senha': typeof RecuperarSenhaRoute
-  '/app': typeof AppRoute
-  '/app/operacoes': typeof AppOperacoesRoute
+  '/app': typeof AppIndexRoute
+  '/app/operacoes': typeof AppOperacoesIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
   '/app/comprar-usdt': typeof AppComprarRoute
   '/app/carteira': typeof AppCarteiraRoute
@@ -83,9 +83,9 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/cadastro': typeof CadastroRoute
   '/recuperar-senha': typeof RecuperarSenhaRoute
-  '/app': typeof AppRoute
+  '/app': typeof AppRouteWithChildren
   '/app/': typeof AppIndexRoute
-  '/app/operacoes': typeof AppOperacoesRoute
+  '/app/operacoes': typeof AppOperacoesRouteWithChildren
   '/app/operacoes/': typeof AppOperacoesIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
   '/app/comprar-usdt': typeof AppComprarRoute
@@ -122,14 +122,14 @@ declare module '@tanstack/react-router' {
     '/cadastro': { id: '/cadastro'; path: '/cadastro'; fullPath: '/cadastro'; preLoaderRoute: typeof CadastroRouteImport; parentRoute: typeof rootRouteImport }
     '/recuperar-senha': { id: '/recuperar-senha'; path: '/recuperar-senha'; fullPath: '/recuperar-senha'; preLoaderRoute: typeof RecuperarSenhaRouteImport; parentRoute: typeof rootRouteImport }
     '/app': { id: '/app'; path: '/app'; fullPath: '/app'; preLoaderRoute: typeof AppRouteImport; parentRoute: typeof rootRouteImport }
-    '/app/': { id: '/'; path: '/'; fullPath: '/app/'; preLoaderRoute: typeof AppIndexRouteImport; parentRoute: typeof AppRouteImport }
-    '/app/operacoes': { id: '/operacoes'; path: '/operacoes'; fullPath: '/app/operacoes'; preLoaderRoute: typeof AppOperacoesRouteImport; parentRoute: typeof AppRouteImport }
-    '/app/operacoes/': { id: '/'; path: '/'; fullPath: '/app/operacoes/'; preLoaderRoute: typeof AppOperacoesIndexRouteImport; parentRoute: typeof AppOperacoesRouteImport }
-    '/app/operacoes/$id': { id: '/$id'; path: '/$id'; fullPath: '/app/operacoes/$id'; preLoaderRoute: typeof AppOperacoesIdRouteImport; parentRoute: typeof AppOperacoesRouteImport }
-    '/app/comprar-usdt': { id: '/comprar-usdt'; path: '/comprar-usdt'; fullPath: '/app/comprar-usdt'; preLoaderRoute: typeof AppComprarRouteImport; parentRoute: typeof AppRouteImport }
-    '/app/carteira': { id: '/carteira'; path: '/carteira'; fullPath: '/app/carteira'; preLoaderRoute: typeof AppCarteiraRouteImport; parentRoute: typeof AppRouteImport }
-    '/app/minha-conta': { id: '/minha-conta'; path: '/minha-conta'; fullPath: '/app/minha-conta'; preLoaderRoute: typeof AppMinhaContaRouteImport; parentRoute: typeof AppRouteImport }
-    '/app/auditoria': { id: '/auditoria'; path: '/auditoria'; fullPath: '/app/auditoria'; preLoaderRoute: typeof AppAuditoriaRouteImport; parentRoute: typeof AppRouteImport }
+    '/app/': { id: '/app/'; path: '/'; fullPath: '/app/'; preLoaderRoute: typeof AppIndexRouteImport; parentRoute: typeof AppRoute }
+    '/app/operacoes': { id: '/app/operacoes'; path: '/operacoes'; fullPath: '/app/operacoes'; preLoaderRoute: typeof AppOperacoesRouteImport; parentRoute: typeof AppRoute }
+    '/app/operacoes/': { id: '/app/operacoes/'; path: '/'; fullPath: '/app/operacoes/'; preLoaderRoute: typeof AppOperacoesIndexRouteImport; parentRoute: typeof AppOperacoesRoute }
+    '/app/operacoes/$id': { id: '/app/operacoes/$id'; path: '/$id'; fullPath: '/app/operacoes/$id'; preLoaderRoute: typeof AppOperacoesIdRouteImport; parentRoute: typeof AppOperacoesRoute }
+    '/app/comprar-usdt': { id: '/app/comprar-usdt'; path: '/comprar-usdt'; fullPath: '/app/comprar-usdt'; preLoaderRoute: typeof AppComprarRouteImport; parentRoute: typeof AppRoute }
+    '/app/carteira': { id: '/app/carteira'; path: '/carteira'; fullPath: '/app/carteira'; preLoaderRoute: typeof AppCarteiraRouteImport; parentRoute: typeof AppRoute }
+    '/app/minha-conta': { id: '/app/minha-conta'; path: '/minha-conta'; fullPath: '/app/minha-conta'; preLoaderRoute: typeof AppMinhaContaRouteImport; parentRoute: typeof AppRoute }
+    '/app/auditoria': { id: '/app/auditoria'; path: '/auditoria'; fullPath: '/app/auditoria'; preLoaderRoute: typeof AppAuditoriaRouteImport; parentRoute: typeof AppRoute }
   }
 }
 const rootRouteChildren: RootRouteChildren = {
