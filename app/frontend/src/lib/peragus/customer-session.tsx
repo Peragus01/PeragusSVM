@@ -28,8 +28,9 @@ type SessionContextValue = {
   reloadIdentity: (signal?: AbortSignal) => Promise<void>;
 };
 const Context = createContext<SessionContextValue | null>(null);
-const rawUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
-const anonKey = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined) ?? "";
+const env = import.meta.env as Record<string, string | undefined>;
+const rawUrl = env["VITE_SUPABASE_URL"] ?? "";
+const anonKey = env["VITE_SUPABASE_PUBLISHABLE_KEY"] ?? "";
 const origin = (() => {
   try {
     const url = new URL(rawUrl);
