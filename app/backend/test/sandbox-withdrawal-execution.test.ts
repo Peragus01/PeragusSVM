@@ -1,3 +1,4 @@
+import {OperatorWithdrawalAuditService} from "../src/withdrawals/operator-withdrawal-audit.js";
 import {OperatorWithdrawalQueueService} from "../src/withdrawals/operator-withdrawal-queue.js";
 import {CustomerOperationHistoryService,parseHistoryQuery} from "../src/purchases/customer-operation-history.js";
 import {CustomerWithdrawalResultService} from "../src/withdrawals/customer-withdrawal-results.js";
@@ -117,6 +118,60 @@ async function executionFixture(){
  return{...f,provider,repo,execution,observed,sendId,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;}};
 }
 describe("approved sandbox withdrawal execution",()=>{
+ it("reads stored audit before approval and after completion with writes disabled",async()=>{
+  const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]));
+  const before=await audit.read(f.user,f.wr.data.id);
+  expect(before).toMatchObject({withdrawal_request_id:f.wr.data.id,approval:null,execution:null,pix:{conversion_completed:true},integrity:{purchase_matches:true,pix_matches:true,converted_amount_matches:true,approval_matches:null,execution_matches:null}});
+  await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
+  const approved=await audit.read(f.user,f.wr.data.id);
+  expect(approved.approval).toMatchObject({operator_user_id:f.user.id,reason:f.reason,assurance_level:"aal2"});
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:audit});apps.push(app);
+  const response=await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`,headers:{authorization:"Bearer valid"}});
+  expect(response.statusCode).toBe(200);expect(response.headers["cache-control"]).toBe("no-store");
+  expect(response.json().data.execution_authorized).toBe(false);
+  for(const secret of [f.s.provider,"proof_signature","encrypted","provider_customer_id",'"request_id"',"travel_rule"])expect(response.body).not.toContain(secret);
+  expect((await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"},payload:{request_id:randomUUID(),confirmation:"SANDBOX_ONLY"}})).statusCode).toBe(503);
+ });
+ it("audits uncertain recovery and retains unknown net amounts without repeating sends",async()=>{
+  const f=await executionFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]));
+  f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+  const uncertain=await audit.read(f.user,f.wr.data.id);
+  expect(uncertain.execution).toMatchObject({state:"uncertain",withdrawal_started:true,recovery_required:true,provider_target_amount:null,pilot_slot_held:true});
+  f.setFound(f.sendId);f.provider.transfer=async()=>({...f.observed,targetAmount:null});
+  await f.execution.reconcile(f.user,f.wr.data.id);
+  const complete=await audit.read(f.user,f.wr.data.id);
+  expect(complete).toMatchObject({execution:{state:"provider_completed",provider_completed:true,provider_target_amount:null,recovery_required:false,pilot_slot_held:true},integrity:{purchase_matches:true,pix_matches:true,converted_amount_matches:true,approval_matches:true,execution_matches:true},onchain_delivery_verified:false,mainnet_execution:false,fee_breakdown:null});
+  expect(f.sends()).toBe(1);
+  expect(JSON.stringify(complete)).not.toContain("PRIVATE_SYNTHETIC");
+ });
+ it("blocks audit without MFA or role and rejects customer-role overlap",async()=>{
+  const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id,f.s.owner]));
+  for(const [identity,code] of [[{id:f.user.id},"WITHDRAWAL_OPERATOR_MFA_REQUIRED"],[{id:randomUUID(),assuranceLevel:"aal2"},"WITHDRAWAL_OPERATOR_REQUIRED"],[{id:f.s.owner,assuranceLevel:"aal2"},"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"]] as const){
+   const app=await buildApp({customerAccess:{customers,authenticate:async()=>identity},operatorWithdrawalAuditService:audit});apps.push(app);
+   const response=await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`,headers:{authorization:"Bearer valid"}});
+   expect(response.statusCode).toBe(403);expect(response.json().error.code).toBe(code);
+  }
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>{throw new AuthenticationError("INVALID_TOKEN");}},operatorWithdrawalAuditService:audit});apps.push(app);
+  expect((await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`})).statusCode).toBe(401);
+ });
+ it("reports historical binding mismatch and rejects unknown IDs, selectors and private DB errors",async()=>{
+  const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]));
+  await db.query("update peragus_customer_purchase_intents set wallet_address=$1 where id=$2",[Keypair.generate().publicKey.toBase58(),f.p.data.id]);
+  await db.query("update peragus_customers set suspended=true where id=$1",[f.s.customer.id]);
+  expect((await audit.read(f.user,f.wr.data.id)).integrity.purchase_matches).toBe(false);
+  await db.query("update peragus_customer_withdrawal_requests set amount_usdt='99999999999999.000001' where id=$1",[f.wr.data.id]);
+  await db.query("update peragus_customer_sandbox_pix set observation=jsonb_set(observation,'{amounts,target,amount}','\"99999999999999.000002\"') where id=$1",[f.pixId]);
+  expect((await audit.read(f.user,f.wr.data.id)).integrity.converted_amount_matches).toBe(false);
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:audit});apps.push(app);
+  for(const [url,code] of [[`/v1/admin/withdrawal-requests/${randomUUID()}/audit`,404],["/v1/admin/withdrawal-requests/invalid/audit",400],[`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit?refresh=true`,400]] as const){
+   const response=await app.inject({method:"GET",url,headers:{authorization:"Bearer valid"}});
+   expect(response.statusCode).toBe(code);expect(response.headers["cache-control"]).toBe("no-store");
+  }
+  const broken=new OperatorWithdrawalAuditService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,new Set([f.user.id]));
+  const brokenApp=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:broken});apps.push(brokenApp);
+  const response=await brokenApp.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`,headers:{authorization:"Bearer valid"}});
+  expect(response.statusCode).toBe(503);expect(response.body).not.toContain("PRIVATE_DATABASE_PASSWORD");
+ });
  it("lists pending operator withdrawals with MFA while approval and sends stay disabled",async()=>{
   const f=await approvalFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id]));
   const stats=f.stats(),app=await buildApp({customerAccess:{customers,authenticate:async token=>{
