@@ -36,10 +36,8 @@ export function formatAmount(amount: string | null | undefined, currency: "BRL" 
   if (amount == null || amount.trim() === "") return "Não informado";
   const number = Number(amount);
   if (!Number.isFinite(number)) return "Não informado";
-  return new Intl.NumberFormat("pt-BR", {
-    style:"currency", currency:currency === "BRL" ? "BRL" : "USD",
-    minimumFractionDigits:2, maximumFractionDigits:currency === "BRL" ? 2 : 6,
-  }).format(number).replace(currency === "USDT" ? "US$" : "\u0000",currency === "USDT" ? "USDT " : "\u0000");
+  if (currency === "BRL") return new Intl.NumberFormat("pt-BR", {style:"currency",currency:"BRL"}).format(number);
+  return number.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:6}) + " USDT";
 }
 export function operationLabel(operation: CustomerOperation) {
   if (operation.onchain_delivery_verified && operation.mainnet_execution) return "Entrega verificada";
