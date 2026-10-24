@@ -14,7 +14,7 @@ export function useOperations(limit = 20) {
     if (!accessToken) { setData(null); setState("error"); setError("Sessão indisponível."); return; }
     const controller = new AbortController();
     setState("loading"); setError("");
-    getCustomerOperations(accessToken,{limit,cursor,signal:controller.signal})
+    getCustomerOperations(accessToken,{limit,...(cursor ? { cursor } : {}),signal:controller.signal})
       .then(page => {
         if (controller.signal.aborted) return;
         setData(current => cursor && current ? {data:[...current.data,...page.data],meta:page.meta} : page);
