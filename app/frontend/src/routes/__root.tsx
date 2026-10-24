@@ -121,18 +121,23 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
-  const pathname = useLocation({ select: location => location.pathname });
+  const pathname = useLocation({ select: (location) => location.pathname });
   const customerPage = pathname === "/app" || pathname.startsWith("/app/");
-  const authPage = pathname === "/login" || pathname === "/cadastro" || pathname === "/recuperar-senha";
+  const authPage =
+    pathname === "/login" || pathname === "/cadastro" || pathname === "/recuperar-senha";
   return (
     <QueryClientProvider client={queryClient}>
       <CustomerSessionProvider>
         {customerPage ? (
-          <WalletProvider showHeaderAction={false}><Outlet /></WalletProvider>
+          <WalletProvider showHeaderAction={false}>
+            <Outlet />
+          </WalletProvider>
         ) : authPage ? (
           <Outlet />
         ) : (
-          <AppShell><Outlet /></AppShell>
+          <AppShell>
+            <Outlet />
+          </AppShell>
         )}
       </CustomerSessionProvider>
     </QueryClientProvider>

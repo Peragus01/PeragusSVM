@@ -22,7 +22,13 @@ import { WalletContext } from "./wallet-context";
 
 const DEVNET = "solana:devnet";
 
-export function WalletProvider({ children, showHeaderAction = true }: { children: ReactNode; showHeaderAction?: boolean }) {
+export function WalletProvider({
+  children,
+  showHeaderAction = true,
+}: {
+  children: ReactNode;
+  showHeaderAction?: boolean;
+}) {
   const [visible, setVisible] = useState(false);
   const [wallets, setWallets] = useState<readonly Wallet[]>([]);
   const [wallet, setWallet] = useState<Wallet | null>(null);
@@ -178,33 +184,35 @@ export function WalletProvider({ children, showHeaderAction = true }: { children
       }}
     >
       {children}
-      {showHeaderAction && <div className="wallet-header-action">
-        {address ? (
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="sm" asChild>
-              <a href={explorerAddress(address)} target="_blank" rel="noreferrer">
-                <WalletIcon />
-                <span data-testid="wallet-address">{short(address, 4)}</span>
-                <ExternalLink />
-              </a>
+      {showHeaderAction && (
+        <div className="wallet-header-action">
+          {address ? (
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" asChild>
+                <a href={explorerAddress(address)} target="_blank" rel="noreferrer">
+                  <WalletIcon />
+                  <span data-testid="wallet-address">{short(address, 4)}</span>
+                  <ExternalLink />
+                </a>
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Disconnect wallet"
+                title="Disconnect wallet"
+                onClick={disconnect}
+              >
+                <LogOut />
+              </Button>
+            </div>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => setVisible(true)}>
+              <WalletIcon />
+              Connect Wallet
             </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Disconnect wallet"
-              title="Disconnect wallet"
-              onClick={disconnect}
-            >
-              <LogOut />
-            </Button>
-          </div>
-        ) : (
-          <Button variant="outline" size="sm" onClick={() => setVisible(true)}>
-            <WalletIcon />
-            Connect Wallet
-          </Button>
-        )}
-      </div>}
+          )}
+        </div>
+      )}
       {visible &&
         createPortal(
           <div className="wallet-overlay" data-testid="wallet-overlay" onClick={close}>
