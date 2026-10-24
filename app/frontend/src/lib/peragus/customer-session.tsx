@@ -77,7 +77,7 @@ async function fetchIdentity(token: string, signal?: AbortSignal): Promise<Custo
   let response: Response;
   try {
     response = await fetch("/api/v1/me", { method: "GET", headers: { Accept: "application/json", Authorization: "Bearer " + token },
-      cache: "no-store", credentials: "omit", redirect: "error", signal });
+      cache: "no-store", credentials: "omit", redirect: "error", ...(signal ? { signal } : {}) });
   } catch {
     if (signal?.aborted) throw new CustomerSessionError("ABORTED", "Consulta cancelada.");
     throw new CustomerSessionError("BACKEND_UNAVAILABLE", "Não foi possível consultar sua conta.");
