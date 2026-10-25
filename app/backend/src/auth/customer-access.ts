@@ -40,7 +40,7 @@ const serialize = (c: Customer) => ({
 });
 const isVersioned = (path: string) => path === "/v1" || path.startsWith("/v1/");
 
-export function registerCustomerAccess(app: FastifyInstance, access: CustomerAccess): void {
+export function registerCustomerAccess(app: FastifyInstance, access: CustomerAccess, requirePilotInvite=false): void {
   app.decorateRequest("authenticatedUser", null);
   app.decorateRequest("authenticatedCustomer", null);
   app.addHook("preHandler", async (request, reply) => {
@@ -61,10 +61,10 @@ export function registerCustomerAccess(app: FastifyInstance, access: CustomerAcc
       if (status === 401) reply.header("WWW-Authenticate", "Bearer");
       return reply.code(status).send({ error: { code: error.code, message: "Authentication could not be completed" } });
     }
-    if (path === "/v1/me" || path === "/v1/me/customer") return;
+    if (path === "/v1/me" || path === "/v1/me/customer" || path === "/v1/me/pilot-invite/redeem") return;
     // Exact operator resource: authentication still runs above. Its own handler
     // requires the server allowlist and verified MFA; a customer profile is not a role.
-    if (["/v1/admin/customer-reconciliation", "/v1/admin/refund-requests", "/v1/admin/refund-requests/:id", "/v1/admin/refund-requests/:id/decision", "/v1/admin/refund-requests/:id/completion", "/v1/admin/withdrawal-requests/:id/audit", "/v1/admin/withdrawal-requests", "/v1/admin/withdrawal-requests/:id/approval", "/v1/admin/withdrawal-requests/:id/execution", "/v1/admin/withdrawal-requests/:id/execution/reconcile"].includes(path)) {
+    if (["/v1/admin/pilot-invites", "/v1/admin/pilot-invites/:id", "/v1/admin/pilot-invites/:id/revoke", "/v1/admin/customer-reconciliation", "/v1/admin/refund-requests", "/v1/admin/refund-requests/:id", "/v1/admin/refund-requests/:id/decision", "/v1/admin/refund-requests/:id/completion", "/v1/admin/withdrawal-requests/:id/audit", "/v1/admin/withdrawal-requests", "/v1/admin/withdrawal-requests/:id/approval", "/v1/admin/withdrawal-requests/:id/execution", "/v1/admin/withdrawal-requests/:id/execution/reconcile"].includes(path)) {
       if (await access.customers.findByOwner(request.authenticatedUser.id)) {
         return reply.code(403).send({error:{code:"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"}});
       }
@@ -101,6 +101,8 @@ export function registerCustomerAccess(app: FastifyInstance, access: CustomerAcc
   app.post("/v1/me/customer", async (request, reply) => {
     const parsed = profileSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "VALIDATION_ERROR", message: "Expected type and display_name only" } });
+    if(requirePilotInvite && !await access.customers.findByOwner(request.authenticatedUser!.id))
+      return reply.code(403).send({error:{code:"PILOT_INVITE_REQUIRED"}});
     const { customer, created } = await access.customers.createOrGet({
       ownerUserId: request.authenticatedUser!.id,
       type: parsed.data.type, displayName: parsed.data.display_name,
