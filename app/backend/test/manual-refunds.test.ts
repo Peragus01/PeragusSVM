@@ -52,6 +52,9 @@ describe("manual refund case tracking",()=>{
   expect((await app.inject({method:"GET",url:path,headers})).json().data).toEqual(item);
   const history=await new CustomerOperationHistoryService(pool).list(f.customer.id,parseHistoryQuery({}));
   expect(history.data[0]!.refund_request).toMatchObject({id:item.id,state:"pending_review"});
+  const detail=await new CustomerOperationHistoryService(pool).get(f.customer.id,f.purchase);
+  expect(detail).toEqual(history.data[0]);
+  expect(JSON.stringify(detail)).not.toContain("PRIVATE_PROVIDER_DETAILS");
   expect((await db.query("select count(*) as n from settlements")).rows[0]).toEqual({n:0});
   expect((await db.query("select observation->>'status' as state from peragus_customer_sandbox_pix where id=$1",[f.pix])).rows[0]).toEqual({state:"completed"});
  });

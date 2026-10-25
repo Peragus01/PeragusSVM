@@ -43,10 +43,18 @@ function positiveAmount(value:string|null){
 export class CustomerOperationHistoryService {
   constructor(private readonly pool:Pick<Pool,"query">){}
   async list(customerId:string,options:HistoryOptions){
+    return this.read(customerId,options);
+  }
+  async get(customerId:string,operationId:string){
+    const page=await this.read(customerId,{limit:1,cursor:null},operationId);
+    return page.data[0]??null;
+  }
+  private async read(customerId:string,options:HistoryOptions,operationId?:string){
     const {limit,cursor}=options;
     const result=await this.pool.query<Row>(`with page as (
       select p.* from peragus_customer_purchase_intents p
       where p.customer_id=$1 and p.environment='test'
+        and ($5::uuid is null or p.id=$5::uuid)
         and ($2::timestamptz is null or (p.created_at,p.id)<($2::timestamptz,$3::uuid))
       order by p.created_at desc,p.id desc limit $4
     ) select p.id,p.quote_id,
@@ -70,7 +78,7 @@ export class CustomerOperationHistoryService {
       left join peragus_customer_refund_requests rf on rf.purchase_intent_id=p.id and rf.customer_id=p.customer_id and rf.environment='test'
       left join peragus_manual_refund_decisions rd on rd.refund_request_id=rf.id and rd.customer_id=p.customer_id
       left join peragus_manual_refund_completions rc on rc.refund_request_id=rf.id and rc.customer_id=p.customer_id
-      order by p.created_at desc,p.id desc`,[customerId,cursor?.created_at??null,cursor?.id??null,limit+1]);
+      order by p.created_at desc,p.id desc`,[customerId,cursor?.created_at??null,cursor?.id??null,limit+1,operationId??null]);
     const hasMore=result.rows.length>limit;
     const rows=result.rows.slice(0,limit);
     const last=rows.at(-1);
