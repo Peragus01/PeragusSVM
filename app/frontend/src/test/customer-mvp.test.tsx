@@ -24,6 +24,7 @@ describe("customer frontend route structure", () => {
     "/app/carteira",
     "/app/minha-conta",
     "/app/auditoria",
+    "/operador/estornos",
   ];
   for (const path of paths) {
     it("recognizes " + path, () => {

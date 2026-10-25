@@ -132,7 +132,7 @@ function RootComponent() {
           <WalletProvider showHeaderAction={false}>
             <Outlet />
           </WalletProvider>
-        ) : authPage ? (
+        ) : authPage || pathname.startsWith("/operador/") ? (
           <Outlet />
         ) : (
           <AppShell>

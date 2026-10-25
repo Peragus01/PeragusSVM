@@ -74,6 +74,9 @@ function LoginPage() {
             Tenho um convite
           </Link>
         </div>
+        <Link className="customer-link" to="/operador/estornos">
+          Área do operador
+        </Link>
         <p className="customer-muted" style={{ marginTop: 14 }}>
           Por segurança, a sessão é mantida somente na memória. Recarregar a página exige novo
           login.
