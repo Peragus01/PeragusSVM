@@ -1,5 +1,6 @@
 import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 import {
   ArrowRight,
   ClipboardList,
@@ -85,7 +86,13 @@ export function CustomerEmpty({ title, description }: { title: string; descripti
   );
 }
 
-const NAV_GROUPS = [
+type CustomerNavItem = {
+  path: "/" | "/app" | "/app/operacoes" | "/app/comprar-usdt" | "/app/carteira" | "/app/minha-conta" | "/app/auditoria";
+  label: string;
+  icon: LucideIcon;
+  highlight?: boolean;
+};
+const NAV_GROUPS: { title: string; items: CustomerNavItem[] }[] = [
   {
     title: "PRINCIPAL",
     items: [
@@ -202,8 +209,7 @@ export function CustomerLayout() {
           <div key={group.title}>
             <div className="customer-nav-caption">{group.title}</div>
             <nav className="customer-nav" aria-label={group.title}>
-              {group.items.map(({ path, label, icon: Icon, ...rest }) => {
-                const highlight = "highlight" in rest && Boolean(rest.highlight);
+              {group.items.map(({ path, label, icon: Icon, highlight }) => {
                 return (
                   <Link
                     key={path}
