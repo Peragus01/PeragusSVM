@@ -23,14 +23,19 @@ export class SandboxWithdrawalRecoveryService {
   return executionView(row);
  }
  async reconcile(user:AuthenticatedUser,id:string){
-  this.authorize(user);const row=await this.repository.read(id);
-  if(!row)throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_NOT_FOUND");
-  if(!row.attempted)return executionView(row);
-  const found=row.sendTransferId??await this.provider.find(row.providerCustomerId,row.id);
-  if(!found)return executionView(row);
-  const observation=await this.provider.transfer(found);
-  validateWithdrawal(row,observation);
-  await this.repository.bind(row,found);row.sendTransferId=found;
-  return executionView(await this.repository.save(row,observation));
+  this.authorize(user);return recoverSandboxWithdrawal(this.repository,this.provider,id);
  }
+}
+
+/** Background callers must pass the checkpoint customer; HTTP callers authorize above. */
+export async function recoverSandboxWithdrawal(repository:RecoveryRepository,provider:RecoveryReader,id:string,customerId?:string){
+ const row=await repository.read(id);
+ if(!row || (customerId!==undefined && row.customerId!==customerId))throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_NOT_FOUND");
+ if(!row.attempted)return executionView(row);
+ const found=row.sendTransferId??await provider.find(row.providerCustomerId,row.id);
+ if(!found)return executionView(row);
+ const observation=await provider.transfer(found);
+ validateWithdrawal(row,observation);
+ await repository.bind(row,found);row.sendTransferId=found;
+ return executionView(await repository.save(row,observation));
 }
