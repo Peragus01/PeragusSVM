@@ -426,3 +426,52 @@ describe("approved sandbox withdrawal execution",()=>{
   const disabled=await buildApp({customerAccess:access});apps.push(disabled);expect((await disabled.inject({method:"GET",url,headers})).statusCode).toBe(503);
  });
 });
+
+
+describe("owned operation detail",()=>{
+ it("reads an old operation directly with write services absent and preserves the history projection",async()=>{
+  const f=await completedFixture(),history=new CustomerOperationHistoryService(pool);
+  await db.query("update peragus_customer_purchase_intents set created_at=now()-interval '4 years' where id=$1",[f.p.data.id]);
+  await service.record(f.s.customer.id,randomUUID(),await f.s.makeQuote());
+  const recent=await history.list(f.s.customer.id,parseHistoryQuery({limit:"1"}));
+  expect(recent.data.map(row=>row.id)).not.toContain(f.p.data.id);
+  const stats=f.stats();
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner})},customerOperationHistoryService:history});apps.push(app);
+  const response=await app.inject({method:"GET",url:`/v1/me/operations/${f.p.data.id}`,headers});
+  expect(response.statusCode).toBe(200);expect(response.headers["cache-control"]).toBe("no-store");
+  const listed=(await history.list(f.s.customer.id,parseHistoryQuery({}))).data.find(row=>row.id===f.p.data.id);
+  expect(response.json()).toEqual({data:listed});
+  expect(response.json().data).toMatchObject({source:{currency:"BRL",amount:"1000.00"},converted_target:{currency:"USDT",amount:"200.000000"},environment:"test",real_money:false,onchain_delivery_verified:false,mainnet_execution:false});
+  for(const secret of [f.s.provider,"private proof message","private proof signature","private_data","encrypted_payload"])
+   expect(response.body).not.toContain(secret);
+  expect(f.stats()).toEqual(stats);
+ });
+ it("uses identical 404s for foreign and missing records and rejects selectors and invalid IDs",async()=>{
+  const f=await completedFixture(),other=await setup(),history=new CustomerOperationHistoryService(pool);
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:other.owner})},customerOperationHistoryService:history});apps.push(app);
+  const foreign=await app.inject({method:"GET",url:`/v1/me/operations/${f.p.data.id}`,headers});
+  const missing=await app.inject({method:"GET",url:`/v1/me/operations/${randomUUID()}`,headers});
+  expect(foreign.statusCode).toBe(404);expect(foreign.json()).toEqual({error:{code:"OPERATION_NOT_FOUND"}});
+  expect(missing.statusCode).toBe(404);expect(missing.json()).toEqual(foreign.json());
+  expect(foreign.headers["cache-control"]).toBe("no-store");
+  for(const suffix of ["?customer_id="+f.s.customer.id,"?limit=1","?cursor=anything","?state=all"]){
+   const invalid=await app.inject({method:"GET",url:`/v1/me/operations/${f.p.data.id}${suffix}`,headers});
+   expect(invalid.statusCode).toBe(400);expect(invalid.json().error.code).toBe("VALIDATION_ERROR");
+  }
+  expect((await app.inject({method:"GET",url:"/v1/me/operations/not-a-uuid",headers})).statusCode).toBe(400);
+  expect((await app.inject({method:"GET",url:`/v1/me/operations/${f.p.data.id}`})).statusCode).toBe(401);
+ });
+ it("rejects PJ and suspended profiles and hides private repository errors",async()=>{
+  const pj=await setup("pj"),f=await completedFixture(),history=new CustomerOperationHistoryService(pool);
+  const appFor=async(owner:string,reader=history)=>{
+   const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:owner})},customerOperationHistoryService:reader});apps.push(app);return app;
+  };
+  const url=`/v1/me/operations/${f.p.data.id}`;
+  expect((await (await appFor(pj.owner)).inject({method:"GET",url,headers})).statusCode).toBe(403);
+  const broken=new CustomerOperationHistoryService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any);
+  const error=await (await appFor(f.s.owner,broken)).inject({method:"GET",url,headers});
+  expect(error.statusCode).toBe(503);expect(error.json().error.code).toBe("OPERATION_HISTORY_UNAVAILABLE");expect(error.body).not.toContain("PRIVATE_DATABASE_PASSWORD");
+  await db.query("update peragus_customers set suspended=true where id=$1",[f.s.customer.id]);
+  expect((await (await appFor(f.s.owner)).inject({method:"GET",url,headers})).statusCode).toBe(403);
+ });
+});
