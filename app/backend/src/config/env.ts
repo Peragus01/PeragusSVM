@@ -4,6 +4,7 @@ import "dotenv/config";
 import { z } from "zod";
 
 const envSchema = z.object({
+  MANUAL_REFUNDS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   SANDBOX_WITHDRAWAL_RECOVERY_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   SANDBOX_WITHDRAWAL_EXECUTION_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   WITHDRAWAL_OPERATOR_APPROVALS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),

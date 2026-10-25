@@ -12,6 +12,7 @@ export function parseOperatorQueueQuery(query:unknown){
  return {...parseHistoryQuery(pagination),state};
 }
 interface Row {
+ refund_id:string|null;refund_state:string|null;
  id:string;customer_id:string;purchase_intent_id:string;pix_id:string;created_at:string;
  amount_usdt:string;wallet_address:string;approved:boolean;approved_at:Date|string|null;
  attempted:boolean;provider_completed:boolean;queue_state:string;
@@ -23,7 +24,7 @@ export class OperatorWithdrawalQueueService {
   authorizeWithdrawalOperator(user,this.operators);
   const {limit,cursor,state}=parseOperatorQueueQuery(query);
   const result=await this.pool.query<Row>(`with queue as (
-   select r.id,r.customer_id,r.purchase_intent_id,r.pix_id,r.created_at,r.amount_usdt,r.wallet_address,
+   select rf.id as refund_id,case when rc.id is not null then 'refund_recorded' else coalesce(rd.decision,'pending_review') end as refund_state,r.id,r.customer_id,r.purchase_intent_id,r.pix_id,r.created_at,r.amount_usdt,r.wallet_address,
     (a.id is not null) as approved,a.created_at as approved_at,
     coalesce(e.create_attempted,false) as attempted,
     coalesce(e.observation->>'status'='completed' and e.observation->>'sourceLegStatus'='completed'
@@ -42,8 +43,11 @@ export class OperatorWithdrawalQueueService {
     on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.environment='test'
    left join peragus_sandbox_withdrawal_executions e
     on e.withdrawal_request_id=r.id and e.customer_id=r.customer_id and e.environment='test'
+   left join peragus_customer_refund_requests rf on rf.purchase_intent_id=r.purchase_intent_id and rf.customer_id=r.customer_id and rf.environment='test'
+   left join peragus_manual_refund_decisions rd on rd.refund_request_id=rf.id and rd.customer_id=r.customer_id
+   left join peragus_manual_refund_completions rc on rc.refund_request_id=rf.id and rc.customer_id=r.customer_id
    where r.environment='test'
-  ) select id,customer_id,purchase_intent_id,pix_id,amount_usdt,wallet_address,approved,approved_at,attempted,provider_completed,queue_state,
+  ) select refund_id,refund_state,id,customer_id,purchase_intent_id,pix_id,amount_usdt,wallet_address,approved,approved_at,attempted,provider_completed,queue_state,
    to_char(created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
    from queue where ($1='all' or queue_state=$1)
     and ($2::timestamptz is null or (created_at,id)<($2::timestamptz,$3::uuid))
@@ -52,6 +56,7 @@ export class OperatorWithdrawalQueueService {
   return {data:rows.map(row=>({
    id:row.id,customer_id:row.customer_id,purchase_intent_id:row.purchase_intent_id,pix_id:row.pix_id,
    created_at:row.created_at,state:row.queue_state,environment:"test",real_money:false,
+   refund_request:row.refund_id?{id:row.refund_id,state:row.refund_state}:null,
    source:{currency:"USDT",amount:row.amount_usdt},
    destination:{wallet_address:row.wallet_address,network:"solana",proof_network:"solana:devnet"},
    approved:row.approved,approval_recorded_at:row.approved_at?new Date(row.approved_at).toISOString():null,

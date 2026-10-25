@@ -1,3 +1,5 @@
+import {registerManualRefundRoutes} from "./routes/manual-refunds.js";
+import type {ManualRefundService} from "./refunds/manual-refunds.js";
 import type {SandboxWithdrawalRecoveryService} from "./withdrawals/sandbox-recovery.js";
 import {registerOperatorWithdrawalAuditRoutes} from "./routes/operator-withdrawal-audit.js";
 import type {OperatorWithdrawalAuditService} from "./withdrawals/operator-withdrawal-audit.js";
@@ -66,6 +68,7 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  manualRefundService?: ManualRefundService;
   sandboxWithdrawalRecoveryService?: SandboxWithdrawalRecoveryService;
   operatorWithdrawalAuditService?: OperatorWithdrawalAuditService;
   operatorWithdrawalQueueService?: OperatorWithdrawalQueueService;
@@ -134,6 +137,7 @@ export async function buildApp(
 
   await registerSandboxWithdrawalExecutionRoutes(app, options.customerAccess ? options.sandboxWithdrawalExecutionService : undefined, options.customerAccess ? options.sandboxWithdrawalRecoveryService : undefined);
   await registerWithdrawalOperatorApprovalRoutes(app, options.customerAccess ? options.withdrawalOperatorApprovalService : undefined);
+  await registerManualRefundRoutes(app, options.customerAccess ? options.manualRefundService : undefined);
   await registerOperatorWithdrawalAuditRoutes(app, options.customerAccess ? options.operatorWithdrawalAuditService : undefined);
   await registerOperatorWithdrawalQueueRoutes(app, options.customerAccess ? options.operatorWithdrawalQueueService : undefined);
   await registerCustomerOperationHistoryRoutes(app, options.customerAccess ? options.customerOperationHistoryService : undefined);

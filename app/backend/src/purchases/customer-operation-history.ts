@@ -21,6 +21,7 @@ export function parseHistoryQuery(query:unknown){
 }
 type HistoryOptions=ReturnType<typeof parseHistoryQuery>;
 interface Row {
+  refund_id:string|null;refund_state:string|null;
   id:string; quote_id:string; created_at:string; source_amount_brl:string;
   estimated_target_amount_usdt:string; wallet_address:string;
   pix_id:string|null; pix_attempted:boolean|null; pix_status:string|null;
@@ -51,6 +52,7 @@ export class CustomerOperationHistoryService {
     ) select p.id,p.quote_id,
       to_char(p.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
       p.source_amount_brl,p.estimated_target_amount_usdt,p.wallet_address,
+      rf.id as refund_id,case when rc.id is not null then 'refund_recorded' else coalesce(rd.decision,'pending_review') end as refund_state,
       x.id as pix_id,x.create_attempted as pix_attempted,x.observation->>'status' as pix_status,
       x.observation->>'sourceLegStatus' as pix_source_status,
       x.observation->>'destinationLegStatus' as pix_destination_status,
@@ -65,6 +67,9 @@ export class CustomerOperationHistoryService {
       left join peragus_customer_withdrawal_requests r on r.purchase_intent_id=p.id and r.customer_id=p.customer_id and r.environment='test'
       left join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id and a.customer_id=p.customer_id and a.environment='test'
       left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=r.id and e.customer_id=p.customer_id and e.environment='test'
+      left join peragus_customer_refund_requests rf on rf.purchase_intent_id=p.id and rf.customer_id=p.customer_id and rf.environment='test'
+      left join peragus_manual_refund_decisions rd on rd.refund_request_id=rf.id and rd.customer_id=p.customer_id
+      left join peragus_manual_refund_completions rc on rc.refund_request_id=rf.id and rc.customer_id=p.customer_id
       order by p.created_at desc,p.id desc`,[customerId,cursor?.created_at??null,cursor?.id??null,limit+1]);
     const hasMore=result.rows.length>limit;
     const rows=result.rows.slice(0,limit);
@@ -74,6 +79,7 @@ export class CustomerOperationHistoryService {
       const converted=pixStatus==="completed" && row.pix_source_status==="completed" && row.pix_destination_status==="completed";
       return {
         id:row.id,quote_id:row.quote_id,created_at:row.created_at,environment:"test",real_money:false,
+        refund_request:row.refund_id?{id:row.refund_id,state:row.refund_state,request_path:`/v1/me/operations/${row.id}/refund-request`}:null,
         stage:row.withdrawal_id?"withdrawal":row.pix_id?"pix":"purchase_recorded",
         source:{currency:"BRL",amount:row.source_amount_brl},
         estimated_target:{currency:"USDT",amount:row.estimated_target_amount_usdt,indicative:true},
