@@ -1,16 +1,12 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { ArrowRight, CheckCircle2, Clock3, ShieldCheck } from "lucide-react";
 import { CustomerNotice, CustomerPanel, SectionTitle } from "@/components/peragus/customer-ui";
-import { useCustomerSession, type CustomerProfile } from "@/lib/peragus/customer-session";
+import { useCustomerSession } from "@/lib/peragus/customer-session";
+import { verificationCopy } from "@/lib/peragus/customer-ux";
+
 export const Route = createFileRoute("/app/minha-conta")({ component: AccountPage });
-const KYC_LABEL: Record<CustomerProfile["verification_status"], string> = {
-  draft: "Rascunho",
-  submitted: "Enviado",
-  in_review: "Em análise",
-  action_required: "Ação necessária",
-  approved: "Aprovado",
-  rejected: "Rejeitado",
-};
+
 function AccountPage() {
   const session = useCustomerSession();
   const [error, setError] = useState("");
@@ -18,30 +14,35 @@ function AccountPage() {
   useEffect(() => {
     const controller = new AbortController();
     void session.reloadIdentity(controller.signal).catch(() => {
-      if (!controller.signal.aborted) setError("Não foi possível atualizar o estado da conta.");
+      if (!controller.signal.aborted) setError("Não foi possível atualizar a situação da conta.");
     });
     return () => controller.abort();
-    // Reload only once when opening the page or switching authenticated identities.
+    // We intentionally refresh once on opening and changing the signed-in account.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.identity?.user.id]);
+
   async function refresh() {
     setBusy(true);
     setError("");
     try {
       await session.reloadIdentity();
     } catch {
-      setError("Não foi possível atualizar os dados. Tente novamente.");
+      setError("Não foi possível atualizar seus dados. Tente novamente.");
     } finally {
       setBusy(false);
     }
   }
-  const profile = session.identity?.customer;
+
+  const profile = session.identity?.customer ?? null;
+  const verification = verificationCopy(profile);
+  const paymentsAvailable = Boolean(profile?.operations_enabled && !profile.suspended);
+
   return (
     <>
       <SectionTitle
-        eyebrow="PERFIL / COMPLIANCE"
+        eyebrow="SUA CONTA / IDENTIDADE"
         title="Minha conta"
-        description="Gerencie sua identidade e acompanhe a análise de verificação."
+        description="Veja seus dados e entenda o andamento da verificação de identidade."
         action={
           <button
             type="button"
@@ -49,21 +50,38 @@ function AccountPage() {
             disabled={busy}
             onClick={() => void refresh()}
           >
-            {busy ? "Atualizando…" : "Atualizar status"}
+            {busy ? "Atualizando…" : "Atualizar situação"}
           </button>
         }
       />
       {error && <CustomerNotice kind="danger">{error}</CustomerNotice>}
+
+      <section
+        className={"customer-verification-hero tone-" + verification.tone}
+        aria-labelledby="customer-verification-title"
+      >
+        <div className="customer-verification-icon" aria-hidden="true">
+          {verification.approved ? <CheckCircle2 size={24} /> : <Clock3 size={24} />}
+        </div>
+        <div>
+          <span className="customer-eyebrow">SITUAÇÃO DA VERIFICAÇÃO</span>
+          <h2 id="customer-verification-title">{verification.title}</h2>
+          <p>{verification.detail}</p>
+          <p className="customer-verification-guidance">{verification.guidance}</p>
+          <span className="customer-verification-chip">{verification.label}</span>
+        </div>
+      </section>
+
       <div className="customer-grid-two">
-        <CustomerPanel title="Dados da conta">
+        <CustomerPanel title="Informações da sua conta">
           <div className="customer-row">
-            <span>E-mail</span>
-            <b>{session.identity?.user.email ?? "—"}</b>
+            <span>E-mail de acesso</span>
+            <b>{session.identity?.user.email ?? "Não informado"}</b>
           </div>
           <div className="customer-row">
-            <span>Tipo de perfil</span>
+            <span>Tipo de conta</span>
             <b>
-              {profile ? (profile.type === "pf" ? "Pessoa física" : "Pessoa jurídica") : "Pendente"}
+              {profile ? (profile.type === "pf" ? "Pessoa física" : "Pessoa jurídica") : "Ainda não cadastrada"}
             </b>
           </div>
           <div className="customer-row">
@@ -71,88 +89,48 @@ function AccountPage() {
             <b>{profile?.display_name ?? "Não disponível"}</b>
           </div>
           <div className="customer-row">
-            <span>Conta suspensa</span>
-            <b>{profile?.suspended ? "Sim" : "Não"}</b>
+            <span>Acesso à conta</span>
+            <b>{profile?.suspended ? "Restrito" : "Ativo para consulta"}</b>
           </div>
           <div className="customer-row">
-            <span>Operações habilitadas</span>
-            <b>{profile?.operations_enabled ? "Informado pela API" : "Não"}</b>
+            <span>Pagamentos</span>
+            <b>{paymentsAvailable ? "Sujeitos à integração de pagamentos" : "Ainda não habilitados"}</b>
           </div>
           {!profile && (
             <CustomerNotice kind="warning">
-              O perfil mínimo ainda não existe. A API possui um contrato de criação de perfil, mas o
-              proxy atual não disponibiliza essa operação com segurança. Não enviaremos dados por
-              uma rota não liberada.
+              O cadastro de perfil ainda não pode ser concluído nesta interface. Nenhuma informação
+              será enviada por um formulário sem integração segura.
             </CustomerNotice>
           )}
         </CustomerPanel>
-        <CustomerPanel title="Privacidade e segurança">
+        <CustomerPanel title="Como funciona a verificação">
+          <ol className="customer-verification-steps">
+            <li>
+              <span className="customer-step-count">1</span>
+              <div><strong>Informações cadastrais</strong><p>Seus dados são associados à conta autenticada.</p></div>
+            </li>
+            <li>
+              <span className="customer-step-count">2</span>
+              <div><strong>Verificação segura</strong><p>Quando estiver disponível, o envio de documentos acontecerá em um fluxo protegido.</p></div>
+            </li>
+            <li>
+              <span className="customer-step-count">3</span>
+              <div><strong>Acompanhamento</strong><p>O resultado é confirmado pelo servidor, nunca por um botão no navegador.</p></div>
+            </li>
+          </ol>
+          <div className="customer-inline-note">
+            <ShieldCheck size={18} aria-hidden="true" />
+            <span>A Peragus não solicita senhas, frases-semente ou documentos por esta tela.</span>
+          </div>
           <p className="customer-muted">
-            Sua sessão é validada pelo backend utilizando Supabase Auth. Não exibimos documentos,
-            CPF ou biometria e não armazenamos documentos neste navegador.
+            Iniciar ou retomar uma verificação dependerá da integração segura do parceiro. A etapa
+            ainda não está disponível no piloto.
           </p>
-          <div className="customer-row">
-            <span>Autenticação</span>
-            <b>Supabase Auth</b>
-          </div>
-          <div className="customer-row">
-            <span>Dados de KYC</span>
-            <b>Somente metadados de status</b>
-          </div>
-          <div className="customer-row">
-            <span>Consentimento</span>
-            <b>Não solicitado neste módulo</b>
-          </div>
-          <p className="customer-muted">
-            Os fluxos futuros de consentimento e captura documental exigirão integração segura com o
-            serviço responsável.
-          </p>
+          <Link to="/app/carteira" className="customer-link">
+            Ver minha carteira de testes <ArrowRight size={15} aria-hidden="true" />
+          </Link>
         </CustomerPanel>
       </div>
-      <CustomerPanel title="Verificação de identidade (KYC)">
-        <CustomerNotice kind={profile?.verification_status === "approved" ? "info" : "warning"}>
-          {profile
-            ? "Status retornado pela API: " + KYC_LABEL[profile.verification_status] + "."
-            : "Nenhuma verificação foi confirmada: é necessário um perfil cadastral."}{" "}
-          O resultado não é controlado pelo frontend e não significa liberação automática de
-          operações.
-        </CustomerNotice>
-        <div className="customer-steps">
-          {[
-            ["1", "Dados cadastrais", "Identificação PF/PJ registrada na conta, quando existente."],
-            [
-              "2",
-              "Documento de identidade",
-              "Envio somente em sessão segura hospedada por provedor autorizado.",
-            ],
-            [
-              "3",
-              "Análise de conformidade",
-              "Status de verificação obtido do backend; sem aprovação local.",
-            ],
-            [
-              "4",
-              "Resultado da verificação",
-              "Aprovação, rejeição ou solicitação adicional conforme estado real da API.",
-            ],
-          ].map(([n, t, d]) => (
-            <div className="customer-step" key={n}>
-              <span className="customer-step-count">{n}</span>
-              <div>
-                <h3>{t}</h3>
-                <p>{d}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-        <button disabled className="customer-button" type="button">
-          Iniciar verificação — integração pendente
-        </button>
-        <p className="customer-muted" style={{ marginTop: 14 }}>
-          Não há contrato frontend disponível para abrir sessão de KYC do provedor neste momento.
-          Nenhuma documentação é solicitada por esta página.
-        </p>
-      </CustomerPanel>
     </>
   );
 }
