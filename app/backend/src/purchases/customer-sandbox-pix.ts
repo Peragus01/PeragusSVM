@@ -144,16 +144,25 @@ export class CustomerSandboxPixService {
     return {data: pixView(await this.repo.save(row, after)), replayed: false};
   }
   async reconcile(customerId: string, id: string) {
-    const row = await this.repo.read(customerId, id);
-    if (!row) throw new CustomerPixError("PIX_NOT_FOUND");
-    if (!row.attempted) return pixView(row);
-    const transferId = row.transferId ?? await this.provider.findCustomerPixTransfer(row.providerCustomerId, row.id);
-    // An empty listing does not prove that no transfer exists. Never clear claim.
-    if (!transferId) return pixView(row);
-    const t = await this.provider.getTransfer(transferId);
-    validatePixTransfer(row, t);
-    await this.repo.bind(row, transferId);
-    row.transferId = transferId;
-    return pixView(await this.repo.save(row, t));
+    return reconcileCustomerPix(this.repo,this.provider,customerId,id);
   }
+}
+
+/** GET-only recovery; cannot reserve, claim, create or simulate a Pix. */
+export async function reconcileCustomerPix(
+  repo: Pick<CustomerPixRepository,"read"|"bind"|"save">,
+  provider: Pick<Provider,"findCustomerPixTransfer"|"getTransfer">,
+  customerId: string, id: string,
+) {
+  const row = await repo.read(customerId, id);
+  if (!row) throw new CustomerPixError("PIX_NOT_FOUND");
+  if (!row.attempted) return pixView(row);
+  const transferId = row.transferId ?? await provider.findCustomerPixTransfer(row.providerCustomerId, row.id);
+  // An empty listing does not prove that no transfer exists. Never clear claim.
+  if (!transferId) return pixView(row);
+  const t = await provider.getTransfer(transferId);
+  validatePixTransfer(row, t);
+  await repo.bind(row, transferId);
+  row.transferId = transferId;
+  return pixView(await repo.save(row, t));
 }

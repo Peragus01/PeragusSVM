@@ -1,3 +1,5 @@
+import {CustomerReconciliationService,registerCustomerReconciliationWorker,assertCustomerReconciliationSafety,CUSTOMER_RECONCILIATION_QUEUE} from "./jobs/customer-reconciliation.js";
+import {createCustomerReconciliationReader} from "./purchases/customer-reconciliation-reader.js";
 import { assertSmokeTestSafety, registerWorkerSmokeTest } from "./jobs/worker-smoke-test.js";
 import {
   Connection,
@@ -77,6 +79,8 @@ if (
 if (env.WORKER_SMOKE_TEST_ENABLED) {
   assertSmokeTestSafety(env);
 }
+
+if(env.CUSTOMER_RECONCILIATION_ENABLED)assertCustomerReconciliationSafety(env);
 
 const pool = createDatabasePool(
   env.DATABASE_URL,
@@ -279,6 +283,12 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 try {
   await boss.start();
   await ensureSettlementQueues(boss);
+  if(env.CUSTOMER_RECONCILIATION_ENABLED){
+    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!)));
+    console.info(JSON.stringify({event:"customer_reconciliation_configured",enabled:true,providerReadsOnly:true}));
+  }else{
+    await boss.unschedule(CUSTOMER_RECONCILIATION_QUEUE);
+  }
 
   if (env.WORKER_SMOKE_TEST_ENABLED) {
     await registerWorkerSmokeTest(boss);
@@ -420,6 +430,7 @@ try {
   console.info(
     JSON.stringify({
       event: "worker_started",
+      customerReconciliationEnabled:env.CUSTOMER_RECONCILIATION_ENABLED,
       queue: SETTLEMENT_ORCHESTRATION_QUEUE,
       concurrency: env.JOB_CONCURRENCY,
       ozavEnvironment: "test",

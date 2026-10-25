@@ -1,3 +1,4 @@
+import {CustomerReconciliationStatusService} from "./jobs/customer-reconciliation.js";
 import {ManualRefundService} from "./refunds/manual-refunds.js";
 import {SandboxWithdrawalRecoveryService,createSandboxRecoveryReader} from "./withdrawals/sandbox-recovery.js";
 import {OperatorWithdrawalAuditService} from "./withdrawals/operator-withdrawal-audit.js";
@@ -408,6 +409,7 @@ const customerTermsService = env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSI
   new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }), draftService!,
 ) : undefined;
 const app = await buildApp({
+  ...(pool ? {customerReconciliationStatusService:new CustomerReconciliationStatusService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS))} : {}),
   ...(pool ? {manualRefundService:new ManualRefundService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),env.MANUAL_REFUNDS_ENABLED)} : {}),
   ...(env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED ? {sandboxWithdrawalRecoveryService:new SandboxWithdrawalRecoveryService(new PostgresSandboxExecutionRepository(pool!),createSandboxRecoveryReader(env.OZAV_API_KEY!),new Set(env.WITHDRAWAL_OPERATOR_USER_IDS))} : {}),
   ...(pool ? {operatorWithdrawalAuditService:new OperatorWithdrawalAuditService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS))} : {}),
