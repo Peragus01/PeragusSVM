@@ -21,7 +21,7 @@ function CustomerOperations() {
       <SectionTitle
         eyebrow="TRANSPARÊNCIA / HISTÓRICO"
         title="Operações"
-        description="Histórico exclusivo da sua conta, consultado pelo servidor com autenticação."
+        description="Consulte seus registros de compra, andamento e pedidos de estorno."
       />
       <CustomerNotice>
         Os registros exibidos pertencem ao ambiente de testes. Conclusão do provedor não significa
@@ -48,7 +48,8 @@ function CustomerOperations() {
           />
         )}
         {data && data.data.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
+          <>
+          <div className="customer-operations-desktop">
             <table className="customer-table">
               <thead>
                 <tr>
@@ -92,6 +93,42 @@ function CustomerOperations() {
               </tbody>
             </table>
           </div>
+          <div className="customer-operations-mobile" aria-label="Histórico de operações">
+            {data.data.map((op) => (
+              <article className="customer-operation-card" key={op.id}>
+                <div className="customer-operation-card-head">
+                  <span className="customer-eyebrow">REGISTRO DE TESTE</span>
+                  <time className="customer-muted" dateTime={op.created_at}>
+                    {displayDate(op.created_at)}
+                  </time>
+                </div>
+                <strong>{formatAmount(op.source.amount, "BRL")}</strong>
+                <p className="customer-muted">
+                  Estimativa: {formatAmount(op.estimated_target.amount, "USDT")} · Indicativa
+                </p>
+                <div className="customer-operation-card-bottom">
+                  <div>
+                    <span className={"customer-chip " + statusStyle(op)}>
+                      {operationLabel(op)}
+                    </span>
+                    {op.refund_request && (
+                      <p className="customer-muted">
+                        Estorno: {refundLabels[op.refund_request.state]}
+                      </p>
+                    )}
+                  </div>
+                  <Link
+                    className="customer-link"
+                    to="/app/operacoes/$id"
+                    params={{ id: op.id }}
+                  >
+                    Ver detalhes
+                  </Link>
+                </div>
+              </article>
+            ))}
+          </div>
+          </>
         )}
         {state === "loading" && data && (
           <p className="customer-muted" role="status">
