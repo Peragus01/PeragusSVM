@@ -33,6 +33,7 @@ type SessionContextValue = {
   accessToken: string | null;
   configured: boolean;
   login: (email: string, password: string) => Promise<void>;
+  verifyOperatorMfa: (code: string) => Promise<void>;
   logout: () => void;
   reloadIdentity: (signal?: AbortSignal) => Promise<void>;
 };
@@ -69,7 +70,7 @@ export class CustomerSessionError extends Error {
 async function supabaseAuth(
   path: string,
   body: object,
-  method: "POST" | "PUT" = "POST",
+  method: "POST" | "PUT" | "GET" = "POST",
   token?: string,
 ) {
   if (!origin || !configured)
@@ -84,12 +85,13 @@ async function supabaseAuth(
       cache: "no-store",
       credentials: "omit",
       redirect: "error",
+      signal: AbortSignal.timeout(15000),
       headers: {
         "Content-Type": "application/json",
         apikey: anonKey,
         ...(token ? { Authorization: "Bearer " + token } : {}),
       },
-      body: JSON.stringify(body),
+      ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
     });
   } catch {
     throw new CustomerSessionError(
@@ -224,6 +226,54 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
     const who = await fetchIdentity(current.access_token, signal);
     if (tokensRef.current === current && !signal?.aborted) setIdentity(who);
   }, []);
+  const verifyOperatorMfa = useCallback(async (code: string) => {
+    const current = tokensRef.current;
+    const turn = generation.current;
+    if (!current || !/^[0-9]{6}$/.test(code))
+      throw new CustomerSessionError("MFA_REQUIRED", "Informe os seis dígitos do autenticador.");
+    const user = await supabaseAuth("user", {}, "GET", current.access_token);
+    const factors = user["factors"];
+    const factor = Array.isArray(factors)
+      ? factors.find(
+          (item) =>
+            item &&
+            item.factor_type === "totp" &&
+            item.status === "verified" &&
+            typeof item.id === "string",
+        )
+      : null;
+    if (!factor || !/^[a-zA-Z0-9-]+$/.test(factor.id))
+      throw new CustomerSessionError(
+        "MFA_REQUIRED",
+        "Configure um autenticador para esta conta de operador antes de continuar.",
+      );
+    const challenge = await supabaseAuth(
+      `factors/${factor.id}/challenge`,
+      {},
+      "POST",
+      current.access_token,
+    );
+    if (typeof challenge["id"] !== "string")
+      throw new CustomerSessionError(
+        "MFA_INVALID_RESPONSE",
+        "Não foi possível iniciar a verificação.",
+      );
+    const next = parseTokens(
+      await supabaseAuth(
+        `factors/${factor.id}/verify`,
+        {
+          challenge_id: challenge["id"],
+          code,
+        },
+        "POST",
+        current.access_token,
+      ),
+    );
+    if (turn !== generation.current || tokensRef.current !== current)
+      throw new CustomerSessionError("SESSION_CHANGED", "A sessão mudou. Entre novamente.");
+    tokensRef.current = next;
+    setTokens(next);
+  }, []);
   // Refresh in memory only. Reloading the page requires login again; no bearer or
   // refresh tokens are written to browser storage.
   useEffect(() => {
@@ -267,6 +317,7 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
         configured,
         login,
         logout,
+        verifyOperatorMfa,
         reloadIdentity,
       }}
     >

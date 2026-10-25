@@ -1,3 +1,4 @@
+import { forwardRefund, refundMethods } from "@/lib/peragus/refund-proxy.server";
 import { forwardCustomerRead, isCustomerReadPath } from "@/lib/peragus/customer-proxy.server";
 import { createFileRoute } from "@tanstack/react-router";
 
@@ -28,6 +29,7 @@ function targetUrl(request: Request, splat: string) {
 
 function isAllowedPath(splat: string) {
   return (
+    refundMethods(splat).length > 0 ||
     isCustomerReadPath(splat) ||
     splat === "health" ||
     splat === "v1/settlements" ||
@@ -46,6 +48,8 @@ async function forward({ request, params }: ProxyContext) {
   }
 
   try {
+    if (refundMethods(params._splat).length)
+      return await forwardRefund(request, targetUrl(request, params._splat), params._splat);
     if (isCustomerReadPath(params._splat))
       return await forwardCustomerRead(request, targetUrl(request, params._splat));
     const headers = new Headers({ Accept: "application/json" });

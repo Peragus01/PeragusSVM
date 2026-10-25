@@ -1,3 +1,4 @@
+import { refundLabels } from "@/lib/peragus/refunds";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   CustomerEmpty,
@@ -71,6 +72,11 @@ function CustomerOperations() {
                       <span className={"customer-chip " + statusStyle(op)}>
                         {operationLabel(op)}
                       </span>
+                      {op.refund_request && (
+                        <p className="customer-muted">
+                          Estorno: {refundLabels[op.refund_request.state]}
+                        </p>
+                      )}
                     </td>
                     <td>
                       <Link

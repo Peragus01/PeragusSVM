@@ -20,6 +20,11 @@ export interface CustomerOperation {
     recovery_required: boolean;
     result_path: string;
   } | null;
+  refund_request?: {
+    id: string;
+    state: import("./refunds").RefundState;
+    request_path: string;
+  } | null;
   observation_freshness: "not_evaluated";
   onchain_delivery_verified: false;
   mainnet_execution: false;

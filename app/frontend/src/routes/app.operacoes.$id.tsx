@@ -1,3 +1,4 @@
+import { CustomerRefund } from "@/components/peragus/customer-refund";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
@@ -21,6 +22,11 @@ import {
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 export const Route = createFileRoute("/app/operacoes/$id")({ component: CustomerOperationDetail });
 function CustomerOperationDetail() {
+  const { id } = Route.useParams();
+  const { identity } = useCustomerSession();
+  return <OperationDetail key={`${identity?.user.id}:${id}`} />;
+}
+function OperationDetail() {
   const { id } = Route.useParams();
   const { accessToken, identity } = useCustomerSession();
   const [operation, setOperation] = useState<CustomerOperation | null>(null);
@@ -113,7 +119,7 @@ function CustomerOperationDetail() {
           />
         </CustomerPanel>
       )}
-      {operation && (
+      {operation && status === "ready" && (
         <div className="customer-grid-two">
           <CustomerPanel title="Resumo">
             <div className="customer-row">
@@ -195,6 +201,14 @@ function CustomerOperationDetail() {
             {error && <CustomerNotice kind="warning">{error}</CustomerNotice>}
           </CustomerPanel>
         </div>
+      )}
+      {operation && status === "ready" && accessToken && (
+        <CustomerRefund
+          key={`${identity?.user.id}:${operation.id}`}
+          accessToken={accessToken}
+          purchaseId={operation.id}
+          hasPix={!!operation.pix}
+        />
       )}
     </>
   );
