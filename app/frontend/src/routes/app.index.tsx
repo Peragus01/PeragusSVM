@@ -28,7 +28,9 @@ function CustomerDashboard() {
       <SectionTitle
         eyebrow="SUA CONTA PERAGUS"
         title="Seu próximo passo, em um só lugar."
-        description={"Olá, " + name + ". Prepare sua conta e acompanhe seus registros com tranquilidade."}
+        description={
+          "Olá, " + name + ". Prepare sua conta e acompanhe seus registros com tranquilidade."
+        }
         action={
           <Link to="/app/comprar-usdt" className="customer-button-secondary">
             Conhecer a compra de USDT <ArrowUpRight size={16} aria-hidden="true" />
@@ -43,7 +45,9 @@ function CustomerDashboard() {
 
       <div className="customer-quick-grid" aria-label="Acessos rápidos">
         <Link to="/app/carteira" className="customer-quick-card">
-          <span className="customer-quick-icon"><Wallet size={20} aria-hidden="true" /></span>
+          <span className="customer-quick-icon">
+            <Wallet size={20} aria-hidden="true" />
+          </span>
           <span>
             <strong>Minha carteira</strong>
             <small>Ver a conexão Solana Devnet</small>
@@ -51,7 +55,9 @@ function CustomerDashboard() {
           <ArrowRight size={18} className="customer-quick-arrow" aria-hidden="true" />
         </Link>
         <Link to="/app/operacoes" className="customer-quick-card">
-          <span className="customer-quick-icon"><History size={20} aria-hidden="true" /></span>
+          <span className="customer-quick-icon">
+            <History size={20} aria-hidden="true" />
+          </span>
           <span>
             <strong>Minhas operações</strong>
             <small>Consultar histórico e estornos</small>
@@ -69,7 +75,9 @@ function CustomerDashboard() {
         }
       >
         {state === "loading" ? (
-          <p role="status" className="customer-muted">Carregando seus registros…</p>
+          <p role="status" className="customer-muted">
+            Carregando seus registros…
+          </p>
         ) : state === "error" ? (
           <>
             <CustomerNotice kind="danger">{error}</CustomerNotice>
@@ -88,7 +96,9 @@ function CustomerDashboard() {
               <div className="customer-recent-row" key={op.id}>
                 <div className="customer-recent-main">
                   <b>{formatAmount(op.source.amount, "BRL")}</b>
-                  <span className="customer-muted">{displayDate(op.created_at)} · Ambiente de testes</span>
+                  <span className="customer-muted">
+                    {displayDate(op.created_at)} · Ambiente de testes
+                  </span>
                 </div>
                 <div className="customer-recent-end">
                   <span className={"customer-chip " + statusStyle(op)}>{operationLabel(op)}</span>

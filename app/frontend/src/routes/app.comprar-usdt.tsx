@@ -46,8 +46,8 @@ function PurchasePage() {
       />
 
       <CustomerNotice>
-        <strong>Esta é uma prévia, não uma compra.</strong> Nenhuma cobrança será criada. Cotação, taxa,
-        instruções Pix e entrega de USDT só poderão aparecer depois da integração autorizada.
+        <strong>Esta é uma prévia, não uma compra.</strong> Nenhuma cobrança será criada. Cotação,
+        taxa, instruções Pix e entrega de USDT só poderão aparecer depois da integração autorizada.
       </CustomerNotice>
 
       <ol className="customer-purchase-steps" aria-label="Etapas da compra">
@@ -72,7 +72,10 @@ function PurchasePage() {
           {stage === 1 && (
             <CustomerPanel title="Quanto você deseja comprar?">
               <form onSubmit={next}>
-                <label className="customer-field customer-purchase-amount" htmlFor="customer-purchase-value">
+                <label
+                  className="customer-field customer-purchase-amount"
+                  htmlFor="customer-purchase-value"
+                >
                   Valor em reais (BRL)
                   <div className="customer-amount-input">
                     <span aria-hidden="true">R$</span>
@@ -106,7 +109,8 @@ function PurchasePage() {
                 </div>
                 {amount.length > 0 && value === null && (
                   <p className="customer-field-error" role="status">
-                    Informe um valor positivo, sem separadores de milhar e com até duas casas decimais.
+                    Informe um valor positivo, sem separadores de milhar e com até duas casas
+                    decimais.
                   </p>
                 )}
                 <div className="customer-purchase-footer">
@@ -125,17 +129,33 @@ function PurchasePage() {
                 <strong>{formatPreviewBrl(value)}</strong>
                 <small>BRL → USDT na rede Solana · somente prévia</small>
               </div>
-              <div className="customer-row"><span>Taxa de câmbio</span><b>Aguardando integração</b></div>
-              <div className="customer-row"><span>Taxas da operação</span><b>Não informadas</b></div>
-              <div className="customer-row"><span>USDT a receber</span><b>Não calculado</b></div>
-              <div className="customer-row"><span>Carteira destino</span><b>{wallet.address ? "Carteira Devnet conectada (teste)" : "Não selecionada"}</b></div>
+              <div className="customer-row">
+                <span>Taxa de câmbio</span>
+                <b>Aguardando integração</b>
+              </div>
+              <div className="customer-row">
+                <span>Taxas da operação</span>
+                <b>Não informadas</b>
+              </div>
+              <div className="customer-row">
+                <span>USDT a receber</span>
+                <b>Não calculado</b>
+              </div>
+              <div className="customer-row">
+                <span>Carteira destino</span>
+                <b>{wallet.address ? "Carteira Devnet conectada (teste)" : "Não selecionada"}</b>
+              </div>
 
               <CustomerNotice kind="warning">
                 Estes números não são uma cotação. Sem taxa de câmbio e tarifas confirmadas, a
                 Peragus não pode informar quanto USDT você receberia.
               </CustomerNotice>
               <div className="customer-purchase-footer">
-                <button type="button" className="customer-button-secondary" onClick={() => setStage(1)}>
+                <button
+                  type="button"
+                  className="customer-button-secondary"
+                  onClick={() => setStage(1)}
+                >
                   <ArrowLeft size={16} aria-hidden="true" /> Alterar valor
                 </button>
                 <button type="button" className="customer-button" onClick={() => setStage(3)}>
@@ -148,21 +168,36 @@ function PurchasePage() {
           {stage === 3 && value !== null && (
             <CustomerPanel title="Pagamento Pix ainda não disponível">
               <div className="customer-payment-locked">
-                <span className="customer-payment-lock-icon"><LockKeyhole size={27} aria-hidden="true" /></span>
+                <span className="customer-payment-lock-icon">
+                  <LockKeyhole size={27} aria-hidden="true" />
+                </span>
                 <h2>A compra não foi iniciada</h2>
                 <p>
-                  A prévia de {formatPreviewBrl(value)} terminou. Nenhum Pix foi emitido,
-                  nenhum valor foi debitado e nenhuma transação de USDT foi criada.
+                  A prévia de {formatPreviewBrl(value)} terminou. Nenhum Pix foi emitido, nenhum
+                  valor foi debitado e nenhuma transação de USDT foi criada.
                 </p>
               </div>
-              <div className="customer-row"><span>Valor informado</span><b>{formatPreviewBrl(value)}</b></div>
-              <div className="customer-row"><span>Status do Pix</span><b>Não emitido</b></div>
-              <div className="customer-row"><span>Status da compra</span><b>Não iniciada</b></div>
+              <div className="customer-row">
+                <span>Valor informado</span>
+                <b>{formatPreviewBrl(value)}</b>
+              </div>
+              <div className="customer-row">
+                <span>Status do Pix</span>
+                <b>Não emitido</b>
+              </div>
+              <div className="customer-row">
+                <span>Status da compra</span>
+                <b>Não iniciada</b>
+              </div>
               <button className="customer-button customer-purchase-disabled" type="button" disabled>
                 <LockKeyhole size={16} aria-hidden="true" /> Gerar Pix — indisponível
               </button>
               <div className="customer-purchase-footer">
-                <button type="button" className="customer-button-secondary" onClick={() => setStage(2)}>
+                <button
+                  type="button"
+                  className="customer-button-secondary"
+                  onClick={() => setStage(2)}
+                >
                   <ArrowLeft size={16} aria-hidden="true" /> Voltar à revisão
                 </button>
                 <Link to="/app/minha-conta" className="customer-link">
@@ -177,17 +212,27 @@ function PurchasePage() {
           <CustomerPanel title="Antes de comprar">
             <div className="customer-checkline">
               <ShieldCheck size={17} aria-hidden="true" />
-              <div><strong>Conta autenticada</strong><p>{identity?.user.email ?? "Identidade não disponível"}</p></div>
+              <div>
+                <strong>Conta autenticada</strong>
+                <p>{identity?.user.email ?? "Identidade não disponível"}</p>
+              </div>
             </div>
             <div className="customer-checkline">
               <ShieldCheck size={17} aria-hidden="true" />
-              <div><strong>Identidade: {verification.label}</strong><p>{verification.guidance}</p></div>
+              <div>
+                <strong>Identidade: {verification.label}</strong>
+                <p>{verification.guidance}</p>
+              </div>
             </div>
             <div className="customer-checkline">
               <ShieldCheck size={17} aria-hidden="true" />
               <div>
                 <strong>Carteira Solana</strong>
-                <p>{wallet.address ? "Devnet conectada; titularidade não verificada." : "Nenhuma carteira conectada."}</p>
+                <p>
+                  {wallet.address
+                    ? "Devnet conectada; titularidade não verificada."
+                    : "Nenhuma carteira conectada."}
+                </p>
               </div>
             </div>
             {!wallet.address && (

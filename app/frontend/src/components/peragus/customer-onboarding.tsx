@@ -7,7 +7,11 @@ import { onboardingState, verificationCopy } from "@/lib/peragus/customer-ux";
 export function CustomerOnboarding() {
   const { identity, status } = useCustomerSession();
   const wallet = usePeragusWallet();
-  const flow = onboardingState(status === "authenticated", identity?.customer ?? null, wallet.address);
+  const flow = onboardingState(
+    status === "authenticated",
+    identity?.customer ?? null,
+    wallet.address,
+  );
   const next = flow.next;
   const label = verificationCopy(identity?.customer ?? null);
   const progress = Math.round((flow.completed / flow.total) * 100);
@@ -20,7 +24,9 @@ export function CustomerOnboarding() {
           <h2 id="customer-onboarding-title">Prepare sua conta</h2>
           <p>Três passos para conhecer o piloto. Pagamentos ainda não estão disponíveis.</p>
         </div>
-        <span className="customer-onboarding-count">{flow.completed} de {flow.total} etapas</span>
+        <span className="customer-onboarding-count">
+          {flow.completed} de {flow.total} etapas
+        </span>
       </div>
       <div
         className="customer-progress"
@@ -38,7 +44,13 @@ export function CustomerOnboarding() {
           return (
             <li key={step.key} className={"customer-onboarding-step" + (isNext ? " is-next" : "")}>
               <span aria-hidden="true" className="customer-onboarding-symbol">
-                {step.complete ? <CheckCircle2 size={20} /> : isNext ? <Clock3 size={20} /> : <Circle size={20} />}
+                {step.complete ? (
+                  <CheckCircle2 size={20} />
+                ) : isNext ? (
+                  <Clock3 size={20} />
+                ) : (
+                  <Circle size={20} />
+                )}
               </span>
               <div className="customer-onboarding-step-copy">
                 <strong>{step.title}</strong>
@@ -63,7 +75,9 @@ export function CustomerOnboarding() {
           </Link>
         )}
         <span className="customer-muted">
-          {label.approved ? "Identidade aprovada não libera operações automaticamente." : "Sua verificação depende do status da API."}
+          {label.approved
+            ? "Identidade aprovada não libera operações automaticamente."
+            : "Sua verificação depende do status da API."}
         </span>
       </div>
       <div className="customer-onboarding-note">

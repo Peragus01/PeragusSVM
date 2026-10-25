@@ -81,7 +81,11 @@ function AccountPage() {
           <div className="customer-row">
             <span>Tipo de conta</span>
             <b>
-              {profile ? (profile.type === "pf" ? "Pessoa física" : "Pessoa jurídica") : "Ainda não cadastrada"}
+              {profile
+                ? profile.type === "pf"
+                  ? "Pessoa física"
+                  : "Pessoa jurídica"
+                : "Ainda não cadastrada"}
             </b>
           </div>
           <div className="customer-row">
@@ -94,7 +98,9 @@ function AccountPage() {
           </div>
           <div className="customer-row">
             <span>Pagamentos</span>
-            <b>{paymentsAvailable ? "Sujeitos à integração de pagamentos" : "Ainda não habilitados"}</b>
+            <b>
+              {paymentsAvailable ? "Sujeitos à integração de pagamentos" : "Ainda não habilitados"}
+            </b>
           </div>
           {!profile && (
             <CustomerNotice kind="warning">
@@ -107,15 +113,26 @@ function AccountPage() {
           <ol className="customer-verification-steps">
             <li>
               <span className="customer-step-count">1</span>
-              <div><strong>Informações cadastrais</strong><p>Seus dados são associados à conta autenticada.</p></div>
+              <div>
+                <strong>Informações cadastrais</strong>
+                <p>Seus dados são associados à conta autenticada.</p>
+              </div>
             </li>
             <li>
               <span className="customer-step-count">2</span>
-              <div><strong>Verificação segura</strong><p>Quando estiver disponível, o envio de documentos acontecerá em um fluxo protegido.</p></div>
+              <div>
+                <strong>Verificação segura</strong>
+                <p>
+                  Quando estiver disponível, o envio de documentos acontecerá em um fluxo protegido.
+                </p>
+              </div>
             </li>
             <li>
               <span className="customer-step-count">3</span>
-              <div><strong>Acompanhamento</strong><p>O resultado é confirmado pelo servidor, nunca por um botão no navegador.</p></div>
+              <div>
+                <strong>Acompanhamento</strong>
+                <p>O resultado é confirmado pelo servidor, nunca por um botão no navegador.</p>
+              </div>
             </li>
           </ol>
           <div className="customer-inline-note">

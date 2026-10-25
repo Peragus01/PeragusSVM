@@ -87,7 +87,14 @@ export function CustomerEmpty({ title, description }: { title: string; descripti
 }
 
 type CustomerNavItem = {
-  path: "/" | "/app" | "/app/operacoes" | "/app/comprar-usdt" | "/app/carteira" | "/app/minha-conta" | "/app/auditoria";
+  path:
+    | "/"
+    | "/app"
+    | "/app/operacoes"
+    | "/app/comprar-usdt"
+    | "/app/carteira"
+    | "/app/minha-conta"
+    | "/app/auditoria";
   label: string;
   icon: LucideIcon;
   highlight?: boolean;
@@ -99,7 +106,12 @@ const NAV_GROUPS: { title: string; items: CustomerNavItem[] }[] = [
       { path: "/" as const, label: "Institucional", icon: Home },
       { path: "/app" as const, label: "Visão geral", icon: LayoutDashboard },
       { path: "/app/operacoes" as const, label: "Operações", icon: ClipboardList },
-      { path: "/app/comprar-usdt" as const, label: "Comprar USDT", icon: ShoppingBag, highlight: true },
+      {
+        path: "/app/comprar-usdt" as const,
+        label: "Comprar USDT",
+        icon: ShoppingBag,
+        highlight: true,
+      },
     ],
   },
   {
@@ -139,7 +151,7 @@ export function CustomerLayout() {
       if (event.key === "Tab") {
         const panel = document.getElementById("customer-navigation");
         const elements = Array.from(
-          panel?.querySelectorAll<HTMLElement>('a[href],button:not(:disabled)') ?? [],
+          panel?.querySelectorAll<HTMLElement>("a[href],button:not(:disabled)") ?? [],
         );
         const first = elements[0];
         const last = elements.at(-1);
@@ -164,7 +176,9 @@ export function CustomerLayout() {
   if (session.status !== "authenticated" || !session.identity) {
     return (
       <div className="customer-fullscreen">
-        <div className="customer-loading" role="status">Verificando acesso à conta…</div>
+        <div className="customer-loading" role="status">
+          Verificando acesso à conta…
+        </div>
       </div>
     );
   }
@@ -175,7 +189,9 @@ export function CustomerLayout() {
 
   return (
     <div className="customer-app">
-      <a className="customer-skip" href="#customer-main-content">Ir para o conteúdo principal</a>
+      <a className="customer-skip" href="#customer-main-content">
+        Ir para o conteúdo principal
+      </a>
       {open && (
         <button
           type="button"
@@ -248,7 +264,9 @@ export function CustomerLayout() {
           </button>
           <span className="customer-breadcrumb">PERAGUS / {currentName}</span>
           <div className="customer-top-actions">
-            <span className="customer-environment">SANDBOX <span className="customer-env-long">· SEM TRANSAÇÕES REAIS</span></span>
+            <span className="customer-environment">
+              SANDBOX <span className="customer-env-long">· SEM TRANSAÇÕES REAIS</span>
+            </span>
             <span className="customer-avatar" aria-label="Sessão autenticada">
               {session.identity.user.email.slice(0, 1).toUpperCase()}
             </span>

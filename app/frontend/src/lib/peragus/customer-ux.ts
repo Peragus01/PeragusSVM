@@ -16,7 +16,8 @@ const STATUS: Record<CustomerProfile["verification_status"], VerificationCopy> =
     label: "Não iniciada",
     title: "Sua verificação ainda não começou",
     detail: "Seu perfil existe, mas a verificação de identidade ainda não foi enviada.",
-    guidance: "O envio seguro de documentos será disponibilizado quando a integração estiver pronta.",
+    guidance:
+      "O envio seguro de documentos será disponibilizado quando a integração estiver pronta.",
     tone: "warning",
     approved: false,
   },
@@ -40,7 +41,8 @@ const STATUS: Record<CustomerProfile["verification_status"], VerificationCopy> =
     label: "Ação necessária",
     title: "Precisamos de uma atualização",
     detail: "O servidor indica uma pendência de verificação de identidade.",
-    guidance: "O canal seguro para fornecer os dados solicitados ainda não está disponível nesta interface.",
+    guidance:
+      "O canal seguro para fornecer os dados solicitados ainda não está disponível nesta interface.",
     tone: "warning",
     approved: false,
   },
@@ -56,7 +58,8 @@ const STATUS: Record<CustomerProfile["verification_status"], VerificationCopy> =
     label: "Não aprovada",
     title: "Sua verificação não foi aprovada",
     detail: "O status retornado pela Peragus indica que a verificação foi rejeitada.",
-    guidance: "Uma nova análise dependerá de orientação e de um fluxo seguro disponibilizado pela Peragus.",
+    guidance:
+      "Uma nova análise dependerá de orientação e de um fluxo seguro disponibilizado pela Peragus.",
     tone: "danger",
     approved: false,
   },
@@ -68,7 +71,8 @@ export function verificationCopy(profile: CustomerProfile | null): VerificationC
       label: "Perfil pendente",
       title: "Precisamos concluir seu cadastro",
       detail: "Sua conta está autenticada, mas ainda não há um perfil de cliente disponível.",
-      guidance: "A criação do perfil será liberada quando a integração de cadastro estiver disponível.",
+      guidance:
+        "A criação do perfil será liberada quando a integração de cadastro estiver disponível.",
       tone: "warning",
       approved: false,
     };
@@ -122,7 +126,9 @@ export function onboardingState(
     {
       key: "identity",
       title: "Verificação de identidade",
-      detail: status.approved ? "Identidade aprovada no servidor." : status.label + " · " + status.guidance,
+      detail: status.approved
+        ? "Identidade aprovada no servidor."
+        : status.label + " · " + status.guidance,
       complete: status.approved,
       href: "/app/minha-conta",
       action: "Consultar minha verificação",

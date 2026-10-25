@@ -49,27 +49,65 @@ function CustomerOperations() {
         )}
         {data && data.data.length > 0 && (
           <>
-          <div className="customer-operations-desktop">
-            <table className="customer-table">
-              <thead>
-                <tr>
-                  <th>Data</th>
-                  <th>Compra</th>
-                  <th>Estimativa USDT</th>
-                  <th>Status</th>
-                  <th>Detalhes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.data.map((op) => (
-                  <tr key={op.id}>
-                    <td>{displayDate(op.created_at)}</td>
-                    <td>{formatAmount(op.source.amount, "BRL")}</td>
-                    <td>
-                      {formatAmount(op.estimated_target.amount, "USDT")}{" "}
-                      <span className="customer-muted">indicativo</span>
-                    </td>
-                    <td>
+            <div className="customer-operations-desktop">
+              <table className="customer-table">
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Compra</th>
+                    <th>Estimativa USDT</th>
+                    <th>Status</th>
+                    <th>Detalhes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.data.map((op) => (
+                    <tr key={op.id}>
+                      <td>{displayDate(op.created_at)}</td>
+                      <td>{formatAmount(op.source.amount, "BRL")}</td>
+                      <td>
+                        {formatAmount(op.estimated_target.amount, "USDT")}{" "}
+                        <span className="customer-muted">indicativo</span>
+                      </td>
+                      <td>
+                        <span className={"customer-chip " + statusStyle(op)}>
+                          {operationLabel(op)}
+                        </span>
+                        {op.refund_request && (
+                          <p className="customer-muted">
+                            Estorno: {refundLabels[op.refund_request.state]}
+                          </p>
+                        )}
+                      </td>
+                      <td>
+                        <Link
+                          className="customer-link"
+                          to="/app/operacoes/$id"
+                          params={{ id: op.id }}
+                        >
+                          Abrir
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="customer-operations-mobile" aria-label="Histórico de operações">
+              {data.data.map((op) => (
+                <article className="customer-operation-card" key={op.id}>
+                  <div className="customer-operation-card-head">
+                    <span className="customer-eyebrow">REGISTRO DE TESTE</span>
+                    <time className="customer-muted" dateTime={op.created_at}>
+                      {displayDate(op.created_at)}
+                    </time>
+                  </div>
+                  <strong>{formatAmount(op.source.amount, "BRL")}</strong>
+                  <p className="customer-muted">
+                    Estimativa: {formatAmount(op.estimated_target.amount, "USDT")} · Indicativa
+                  </p>
+                  <div className="customer-operation-card-bottom">
+                    <div>
                       <span className={"customer-chip " + statusStyle(op)}>
                         {operationLabel(op)}
                       </span>
@@ -78,56 +116,14 @@ function CustomerOperations() {
                           Estorno: {refundLabels[op.refund_request.state]}
                         </p>
                       )}
-                    </td>
-                    <td>
-                      <Link
-                        className="customer-link"
-                        to="/app/operacoes/$id"
-                        params={{ id: op.id }}
-                      >
-                        Abrir
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="customer-operations-mobile" aria-label="Histórico de operações">
-            {data.data.map((op) => (
-              <article className="customer-operation-card" key={op.id}>
-                <div className="customer-operation-card-head">
-                  <span className="customer-eyebrow">REGISTRO DE TESTE</span>
-                  <time className="customer-muted" dateTime={op.created_at}>
-                    {displayDate(op.created_at)}
-                  </time>
-                </div>
-                <strong>{formatAmount(op.source.amount, "BRL")}</strong>
-                <p className="customer-muted">
-                  Estimativa: {formatAmount(op.estimated_target.amount, "USDT")} · Indicativa
-                </p>
-                <div className="customer-operation-card-bottom">
-                  <div>
-                    <span className={"customer-chip " + statusStyle(op)}>
-                      {operationLabel(op)}
-                    </span>
-                    {op.refund_request && (
-                      <p className="customer-muted">
-                        Estorno: {refundLabels[op.refund_request.state]}
-                      </p>
-                    )}
+                    </div>
+                    <Link className="customer-link" to="/app/operacoes/$id" params={{ id: op.id }}>
+                      Ver detalhes
+                    </Link>
                   </div>
-                  <Link
-                    className="customer-link"
-                    to="/app/operacoes/$id"
-                    params={{ id: op.id }}
-                  >
-                    Ver detalhes
-                  </Link>
-                </div>
-              </article>
-            ))}
-          </div>
+                </article>
+              ))}
+            </div>
           </>
         )}
         {state === "loading" && data && (
