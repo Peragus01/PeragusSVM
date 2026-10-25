@@ -4,6 +4,7 @@ import {authorizeWithdrawalOperator} from "./operator-approvals.js";
 
 export class OperatorAuditNotFound extends Error {}
 interface AuditRow {
+ refund_id:string|null;refund_state:string|null;
  id:string;customer_id:string;created_at:Date|string;amount_usdt:string;wallet_address:string;wallet_verified_at:Date|string;
  purchase_id:string|null;purchase_created_at:Date|string|null;source_amount_brl:string|null;estimated_target_amount_usdt:string|null;
  pix_id:string|null;pix_created_at:Date|string|null;pix_updated_at:Date|string|null;pix_attempted:boolean|null;
@@ -29,7 +30,8 @@ export class OperatorWithdrawalAuditService {
  authorize(user:AuthenticatedUser){authorizeWithdrawalOperator(user,this.operators);}
  async read(user:AuthenticatedUser,id:string){
   this.authorize(user);
-  const result=await this.pool.query<AuditRow>(`select r.id,r.customer_id,r.created_at,r.amount_usdt,r.wallet_address,r.wallet_verified_at,
+  const result=await this.pool.query<AuditRow>(`select rf.id as refund_id,
+   case when rc.id is not null then 'refund_recorded' else coalesce(rd.decision,'pending_review') end as refund_state,r.id,r.customer_id,r.created_at,r.amount_usdt,r.wallet_address,r.wallet_verified_at,
    p.id as purchase_id,p.created_at as purchase_created_at,p.source_amount_brl,p.estimated_target_amount_usdt,
    x.id as pix_id,x.created_at as pix_created_at,x.updated_at as pix_updated_at,x.create_attempted as pix_attempted,
    x.observation->>'status' as pix_status,x.observation->>'sourceLegStatus' as pix_source_status,
@@ -53,7 +55,10 @@ export class OperatorWithdrawalAuditService {
    left join peragus_customer_sandbox_pix x on x.id=r.pix_id and x.customer_id=r.customer_id and x.environment='test'
    left join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.environment='test'
    left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=r.id and e.customer_id=r.customer_id and e.environment='test'
-   where r.id=$1 and r.environment='test'`,[id]);
+   left join peragus_customer_refund_requests rf on rf.purchase_intent_id=r.purchase_intent_id and rf.customer_id=r.customer_id and rf.environment='test'
+   left join peragus_manual_refund_decisions rd on rd.refund_request_id=rf.id and rd.customer_id=r.customer_id
+   left join peragus_manual_refund_completions rc on rc.refund_request_id=rf.id and rc.customer_id=r.customer_id
+   where r.id=$1 and r.environment='test' `,[id]);
   const r=result.rows[0];if(!r)throw new OperatorAuditNotFound();
   const conversionCompleted=completed(r.pix_status,r.pix_source_status,r.pix_destination_status);
   const convertedAmount=conversionCompleted?positive(r.pix_converted_amount):null;
@@ -61,6 +66,7 @@ export class OperatorWithdrawalAuditService {
   const convertedMatches=convertedAmount!==null && units(convertedAmount)===units(r.amount_usdt);
   return {
    withdrawal_request_id:r.id,customer_id:r.customer_id,recorded_at:iso(r.created_at),environment:"test",real_money:false,
+   refund_request:r.refund_id?{id:r.refund_id,state:r.refund_state}:null,
    source:{currency:"USDT",gross_amount:r.amount_usdt},
    destination:{wallet_address:r.wallet_address,network:"solana",proof_network:"solana:devnet",verified_at:iso(r.wallet_verified_at)},
    purchase:r.purchase_id?{id:r.purchase_id,recorded_at:iso(r.purchase_created_at),source:{currency:"BRL",amount:r.source_amount_brl},estimated_target:{currency:"USDT",amount:r.estimated_target_amount_usdt,indicative:true}}:null,
