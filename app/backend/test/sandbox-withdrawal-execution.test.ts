@@ -105,7 +105,7 @@ async function approvalApp(f:Awaited<ReturnType<typeof approvalFixture>>,identit
 
 import {PostgresSandboxExecutionRepository} from "../src/repositories/postgres-sandbox-withdrawal-execution.js";
 import {SandboxWithdrawalExecutionService} from "../src/withdrawals/sandbox-execution.js";
-beforeEach(async()=>{await db.query("delete from peragus_sandbox_withdrawal_executions");});
+beforeEach(async()=>{await db.query("truncate peragus_sandbox_withdrawal_executions cascade");});
 async function executionFixture(){
  const f=await approvalFixture();await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
  let sends=0,identityReads=0,mode="normal",found:string|null=null;
@@ -568,5 +568,114 @@ describe("stored operational alerts",()=>{
   expect((await app.inject({url:url+'?customer_id='+f.s.customer.id,headers})).statusCode).toBe(400);
   const broken=await alertApp(f,f.user,new OperatorAlertService({query:async()=>{throw Error('PRIVATE_DATABASE_PASSWORD');}} as any,new Set([f.user.id])));
   const failed=await broken.inject({url,headers});expect(failed.statusCode).toBe(503);expect(failed.body).not.toContain('PRIVATE_DATABASE_PASSWORD');
+ });
+});
+
+import {SandboxClosureService} from "../src/withdrawals/sandbox-closure.js";
+describe('audited sandbox withdrawal closure',()=>{
+ const reason='Encerramento de piloto sandbox concluido, sem comprovar entrega real.';
+ async function ready(){
+  const f=await executionFixture();await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  let reads=0;
+  const closure=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>{reads++;return f.observed;}});
+  return {...f,closure,reads:()=>reads,closureKey:randomUUID()};
+ }
+ async function closureApp(f:Awaited<ReturnType<typeof ready>>,identity:any=f.user,service=f.closure){
+  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=='valid')throw new AuthenticationError('INVALID_TOKEN');return identity;}},sandboxClosureService:service});apps.push(app);return app;
+ }
+ const closurePath=(id:string)=>`/v1/admin/withdrawal-requests/${id}/execution/closure`;
+ const payload=(f:Awaited<ReturnType<typeof ready>>)=>({request_id:f.closureKey,reason,confirmation:'CLOSE_COMPLETED_SANDBOX_PILOT'});
+ it('archives completion with a fresh GET, atomic audit and preserved one-shot execution',async()=>{
+  const f=await ready(),app=await closureApp(f),url=closurePath(f.wr.data.id);
+  const response=await app.inject({method:'POST',url,headers,payload:payload(f)});
+  expect(response.statusCode).toBe(201);expect(response.headers['cache-control']).toBe('no-store');
+  expect(response.json().data).toMatchObject({pilot_slot_released:true,provider_completion_rechecked:true,execution_authorized:false,real_money:false,onchain_delivery_verified:false});
+  expect(f.reads()).toBe(1);expect(f.sends()).toBe(1);
+  const audit=(await db.query<any>('select * from peragus_sandbox_withdrawal_closures')).rows;
+  expect(audit).toHaveLength(1);expect(audit[0].stored_observation).toEqual(f.observed);expect(audit[0].fresh_observation).toEqual(f.observed);
+  expect(await f.execution.read(f.user,f.wr.data.id)).toMatchObject({pilot_slot_held:false,provider_completed:true});
+  const replay=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  expect(replay.replayed).toBe(true);expect(f.sends()).toBe(1);
+  await expect(f.execution.execute(f.user,f.wr.data.id,randomUUID())).rejects.toThrow('WITHDRAWAL_EXECUTION_ALREADY_REQUESTED');
+  const again=await app.inject({method:'POST',url,headers,payload:payload(f)});
+  expect(again.statusCode).toBe(200);expect(again.json().meta.idempotent_replay).toBe(true);expect(f.reads()).toBe(1);
+  const off=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),false);
+  expect(await off.read(f.user,f.wr.data.id)).toMatchObject({id:response.json().data.id});
+  expect(response.body).not.toMatch(/ozav_|destinationAddress|sourceWalletId|private/);
+ });
+ it('releases capacity for a different approved operation without reopening the first',async()=>{
+  const first=await ready();await first.closure.close(first.user,first.wr.data.id,first.closureKey,reason);
+  const second=await executionFixture();await second.execution.execute(second.user,second.wr.data.id,second.executionRequestId);
+  expect(first.sends()).toBe(1);expect(second.sends()).toBe(1);
+  expect((await db.query('select id from peragus_sandbox_withdrawal_executions where closed_at is null')).rows).toHaveLength(1);
+  expect((await db.query('select id from peragus_sandbox_withdrawal_executions')).rows).toHaveLength(2);
+ });
+ it('serializes concurrent closes and rejects changed requests',async()=>{
+  const f=await ready();
+  const results=await Promise.all([f.closure.close(f.user,f.wr.data.id,f.closureKey,reason),f.closure.close(f.user,f.wr.data.id,f.closureKey,reason)]);
+  expect(results.filter(r=>!r.replayed)).toHaveLength(1);
+  expect((await db.query('select * from peragus_sandbox_withdrawal_closures')).rows).toHaveLength(1);
+  await expect(f.closure.close(f.user,f.wr.data.id,f.closureKey,reason+' changed')).rejects.toThrow('WITHDRAWAL_CLOSURE_IDEMPOTENCY_CONFLICT');
+  await expect(f.closure.close(f.user,f.wr.data.id,randomUUID(),reason)).rejects.toThrow('WITHDRAWAL_CLOSURE_ALREADY_RECORDED');
+  expect(f.sends()).toBe(1);
+ });
+ it('keeps uncertain and unattempted executions locked without a provider call',async()=>{
+  const f=await executionFixture(),context=(await f.repo.context(f.wr.data.id))!;
+  await f.repo.reserve(f.user.id,f.executionRequestId,context);
+  let reads=0;const closure=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>{reads++;return f.observed;}});
+  await expect(closure.close(f.user,f.wr.data.id,randomUUID(),reason)).rejects.toThrow('WITHDRAWAL_CLOSURE_NOT_READY');
+  f.setMode('timeout');await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+  await expect(closure.close(f.user,f.wr.data.id,randomUUID(),reason)).rejects.toThrow('WITHDRAWAL_CLOSURE_NOT_READY');
+  expect(reads).toBe(0);expect((await f.execution.read(f.user,f.wr.data.id)).pilot_slot_held).toBe(true);
+ });
+ it('retains the slot when fresh evidence is partial, mismatched or unavailable',async()=>{
+  const f=await ready();
+  for(const observation of [{...f.observed,status:'failed'},{...f.observed,destinationLegStatus:'pending'},{...f.observed,sourceAmount:'1.00'},{...f.observed,destinationAddress:Keypair.generate().publicKey.toBase58()}]){
+   const service=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>observation});
+   await expect(service.close(f.user,f.wr.data.id,randomUUID(),reason)).rejects.toThrow();
+  }
+  const unavailable=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>{throw Error('private provider timeout');}});
+  const app=await closureApp(f,f.user,unavailable);
+  const response=await app.inject({method:'POST',url:closurePath(f.wr.data.id),headers,payload:payload(f)});
+  expect(response.statusCode).toBe(503);expect(response.body).not.toContain('private provider');
+  expect((await db.query('select * from peragus_sandbox_withdrawal_closures')).rows).toHaveLength(0);
+  expect((await f.execution.read(f.user,f.wr.data.id)).pilot_slot_held).toBe(true);
+ });
+ it('rejects changed local evidence between GET and commit without partial closure',async()=>{
+  const f=await ready();
+  const service=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>{
+   await db.query('update peragus_sandbox_withdrawal_executions set observation=$1 where withdrawal_request_id=$2',[{...f.observed,status:'needs_review'},f.wr.data.id]);return f.observed;
+  }});
+  await expect(service.close(f.user,f.wr.data.id,randomUUID(),reason)).rejects.toThrow('WITHDRAWAL_CLOSURE_CONTEXT_CHANGED');
+  expect((await db.query('select * from peragus_sandbox_withdrawal_closures')).rows).toHaveLength(0);
+  expect((await f.execution.read(f.user,f.wr.data.id)).pilot_slot_held).toBe(true);
+ });
+ it('requires MFA, account separation, explicit confirmation and feature enablement',async()=>{
+  const f=await ready(),url=closurePath(f.wr.data.id),app=await closureApp(f);
+  expect((await app.inject({method:'POST',url,payload:payload(f)})).statusCode).toBe(401);
+  const noMfa=await closureApp(f,{id:f.user.id});
+  expect((await noMfa.inject({method:'POST',url,headers,payload:payload(f)})).json().error.code).toBe('WITHDRAWAL_OPERATOR_MFA_REQUIRED');
+  const customer=await closureApp(f,{id:f.s.owner,assuranceLevel:'aal2'});
+  expect((await customer.inject({method:'POST',url,headers,payload:payload(f)})).json().error.code).toBe('OPERATOR_ACCOUNT_SEPARATION_REQUIRED');
+  const {confirmation,...without}=payload(f);
+  expect((await app.inject({method:'POST',url,headers,payload:without})).statusCode).toBe(400);
+  expect((await app.inject({method:'POST',url:url+'?customer_id='+f.s.customer.id,headers,payload:payload(f)})).statusCode).toBe(400);
+  const off=await closureApp(f,f.user,new SandboxClosureService(pool,f.repo,new Set([f.user.id]),false));
+  expect((await off.inject({method:'POST',url,headers,payload:payload(f)})).json().error.code).toBe('SANDBOX_WITHDRAWAL_CLOSURE_DISABLED');
+  expect(f.reads()).toBe(0);
+ });
+ it('prevents unaudited closing, reopening or mutation and skips recovery writes after closure',async()=>{
+  const f=await ready();
+  await expect(db.query('update peragus_sandbox_withdrawal_executions set closed_at=now() where withdrawal_request_id=$1',[f.wr.data.id])).rejects.toThrow('requires matching audit');
+  expect((await f.execution.read(f.user,f.wr.data.id)).pilot_slot_held).toBe(true);
+  await f.closure.close(f.user,f.wr.data.id,f.closureKey,reason);
+  await expect(db.query('update peragus_sandbox_withdrawal_executions set closed_at=null')).rejects.toThrow('immutable');
+  await expect(db.query('delete from peragus_sandbox_withdrawal_executions')).rejects.toThrow('immutable');
+  await expect(db.query('delete from peragus_sandbox_withdrawal_closures')).rejects.toThrow('append only');
+  let reads=0;
+  const recovery=new SandboxWithdrawalRecoveryService(f.repo,{find:async()=>{reads++;return null;},transfer:async()=>{reads++;return f.observed;}},new Set([f.user.id]));
+  expect(await recovery.reconcile(f.user,f.wr.data.id)).toMatchObject({pilot_slot_held:false,provider_completed:true});
+  expect(reads).toBe(0);
+  for(const role of ['anon','authenticated'])expect((await db.query<any>("select has_table_privilege($1,'peragus_sandbox_withdrawal_closures','select') as allowed",[role])).rows[0].allowed).toBe(false);
  });
 });

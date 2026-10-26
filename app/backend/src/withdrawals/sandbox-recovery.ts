@@ -31,7 +31,7 @@ export class SandboxWithdrawalRecoveryService {
 export async function recoverSandboxWithdrawal(repository:RecoveryRepository,provider:RecoveryReader,id:string,customerId?:string){
  const row=await repository.read(id);
  if(!row || (customerId!==undefined && row.customerId!==customerId))throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_NOT_FOUND");
- if(!row.attempted)return executionView(row);
+ if(!row.attempted || row.closedAt)return executionView(row);
  const found=row.sendTransferId??await provider.find(row.providerCustomerId,row.id);
  if(!found)return executionView(row);
  const observation=await provider.transfer(found);

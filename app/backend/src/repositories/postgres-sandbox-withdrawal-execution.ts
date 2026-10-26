@@ -55,11 +55,11 @@ const eligible=`select r.id as withdrawal_request_id,r.customer_id,a.id as appro
 `;
 interface ContextRow {withdrawal_request_id:string;customer_id:string;approval_id:string;approver_id:string;pix_id:string;
  provider_customer_id:string;provider_wallet_id:string;provider_quote_id:string;funding_transfer_id:string;amount_brl:string;amount_usdt:string;wallet_address:string;verified_at:Date|string;}
-interface Row extends ContextRow {id:string;operator_id:string;request_id:string;create_attempted:boolean;provider_send_id:string|null;observation:WithdrawalObservation|null;}
+interface Row extends ContextRow {id:string;operator_id:string;request_id:string;create_attempted:boolean;provider_send_id:string|null;observation:WithdrawalObservation|null;closed_at:Date|string|null;}
 const contextMap=(r:ContextRow):ExecutionContext=>({withdrawalId:r.withdrawal_request_id,customerId:r.customer_id,approvalId:r.approval_id,approverId:r.approver_id,pixId:r.pix_id,
  providerCustomerId:r.provider_customer_id,providerWalletId:r.provider_wallet_id,providerQuoteId:r.provider_quote_id,transferId:r.funding_transfer_id,
  amountBrl:r.amount_brl,amountUsdt:r.amount_usdt,walletAddress:r.wallet_address,verifiedAt:new Date(r.verified_at).toISOString()});
-const map=(r:Row):SandboxExecution=>({...contextMap(r),id:r.id,operatorId:r.operator_id,requestId:r.request_id,attempted:r.create_attempted,sendTransferId:r.provider_send_id,observation:r.observation});
+const map=(r:Row):SandboxExecution=>({...contextMap(r),id:r.id,operatorId:r.operator_id,requestId:r.request_id,attempted:r.create_attempted,sendTransferId:r.provider_send_id,observation:r.observation,closedAt:r.closed_at?new Date(r.closed_at).toISOString():null});
 export class PostgresSandboxExecutionRepository implements SandboxExecutionRepository {
  constructor(private readonly pool:Pool){}
  async context(id:string){const r=await this.pool.query<ContextRow>(eligible,[id]);return r.rows[0]?contextMap(r.rows[0]):null;}

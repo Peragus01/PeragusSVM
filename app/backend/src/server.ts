@@ -1,3 +1,4 @@
+import {SandboxClosureService} from "./withdrawals/sandbox-closure.js";
 import {OperatorAlertService} from "./operations/operator-alerts.js";
 import {PostgresApiRateLimiter} from "./auth/api-rate-limits.js";
 import {PilotInviteService} from "./invites/pilot-invites.js";
@@ -123,13 +124,13 @@ if (env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED
   || env.PERAGUS_SANDBOX_DEMO_ENABLED) {
   throw new Error("Authenticated customer onboarding requires financial and demo flags disabled until per-customer routing is implemented");
 }
-if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_ONBOARDING_STATUS_ENABLED || env.CUSTOMER_WALLET_LINKING_ENABLED || env.CUSTOMER_QUOTES_ENABLED || env.CUSTOMER_PURCHASE_INTENTS_ENABLED || env.CUSTOMER_SANDBOX_PIX_ENABLED || env.CUSTOMER_WITHDRAWAL_REQUESTS_ENABLED || env.WITHDRAWAL_OPERATOR_APPROVALS_ENABLED || env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED || env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED || env.MANUAL_REFUNDS_ENABLED || env.PILOT_INVITES_ENABLED) {
+if (env.SETTLEMENT_DRAFTS_ENABLED || env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_ONBOARDING_STATUS_ENABLED || env.CUSTOMER_WALLET_LINKING_ENABLED || env.CUSTOMER_QUOTES_ENABLED || env.CUSTOMER_PURCHASE_INTENTS_ENABLED || env.CUSTOMER_SANDBOX_PIX_ENABLED || env.CUSTOMER_WITHDRAWAL_REQUESTS_ENABLED || env.WITHDRAWAL_OPERATOR_APPROVALS_ENABLED || env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED || env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED || env.MANUAL_REFUNDS_ENABLED || env.PILOT_INVITES_ENABLED || env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED) {
   assertSmokeTestSafety(env);
   if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co") {
     throw new Error("Settlement drafts require the pinned staging Auth project");
   }
 }
-if ((env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_QUOTES_ENABLED || env.CUSTOMER_SANDBOX_PIX_ENABLED || env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED || env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED) && !env.OZAV_API_KEY) {
+if ((env.OZAV_SANDBOX_CUSTOMERS_ENABLED || env.CUSTOMER_WEBHOOKS_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED || env.CUSTOMER_VERIFICATIONS_ENABLED || env.CUSTOMER_SCREENINGS_ENABLED || env.CUSTOMER_QUOTES_ENABLED || env.CUSTOMER_SANDBOX_PIX_ENABLED || env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED || env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED || env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED) && !env.OZAV_API_KEY) {
   throw new Error("OZAV_API_KEY sandbox key is required for customer fixture onboarding");
 }
 if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
@@ -141,7 +142,7 @@ if (env.CUSTOMER_VERIFICATION_SIMULATION_ENABLED && !env.CUSTOMER_VERIFICATIONS_
 if (env.CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED && !env.CUSTOMER_SANDBOX_PIX_ENABLED) {
   throw new Error("Customer Pix simulation requires the customer sandbox Pix feature");
 }
-if ((env.WITHDRAWAL_OPERATOR_APPROVALS_ENABLED || env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED || env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED || env.MANUAL_REFUNDS_ENABLED || env.PILOT_INVITES_ENABLED) && env.WITHDRAWAL_OPERATOR_USER_IDS.length === 0) {
+if ((env.WITHDRAWAL_OPERATOR_APPROVALS_ENABLED || env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED || env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED || env.MANUAL_REFUNDS_ENABLED || env.PILOT_INVITES_ENABLED || env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED) && env.WITHDRAWAL_OPERATOR_USER_IDS.length === 0) {
   throw new Error("Withdrawal approvals require an explicit operator allowlist");
 }
 const individualDraftCipher = (env.CUSTOMER_ONBOARDING_ENABLED || env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED)
@@ -412,6 +413,8 @@ const customerTermsService = env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSI
   new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }), draftService!,
 ) : undefined;
 const app = await buildApp({
+  ...(pool ? {sandboxClosureService:new SandboxClosureService(pool,new PostgresSandboxExecutionRepository(pool),new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED,
+    env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED?createSandboxRecoveryReader(env.OZAV_API_KEY!):undefined)} : {}),
   ...(pool ? {operatorAlertService:new OperatorAlertService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS))} : {}),
   ...(env.API_RATE_LIMITS_ENABLED ? {apiRateLimiter:new PostgresApiRateLimiter(pool!)} : {}),
   ...(pool ? {pilotInviteService:new PilotInviteService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),env.PILOT_INVITES_ENABLED)} : {}),
@@ -535,6 +538,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  app.log.info({event:"sandbox_withdrawal_closure_configured",enabled:env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED});
   app.log.info({event:"api_rate_limits_configured",enabled:env.API_RATE_LIMITS_ENABLED,readsPerMinute:60,writesPerMinute:10});
   app.log.info({event:"pilot_invites_configured",enabled:env.PILOT_INVITES_ENABLED,newProfilesRequireInvite:Boolean(pool)});
   app.log.info({ event: "manual_refunds_configured", enabled: env.MANUAL_REFUNDS_ENABLED, recordOnly:true });
