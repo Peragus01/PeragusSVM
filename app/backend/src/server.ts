@@ -1,3 +1,4 @@
+import {PostgresApiRateLimiter} from "./auth/api-rate-limits.js";
 import {PilotInviteService} from "./invites/pilot-invites.js";
 import {CustomerReconciliationStatusService} from "./jobs/customer-reconciliation.js";
 import {ManualRefundService} from "./refunds/manual-refunds.js";
@@ -410,6 +411,7 @@ const customerTermsService = env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSI
   new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }), draftService!,
 ) : undefined;
 const app = await buildApp({
+  ...(env.API_RATE_LIMITS_ENABLED ? {apiRateLimiter:new PostgresApiRateLimiter(pool!)} : {}),
   ...(pool ? {pilotInviteService:new PilotInviteService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),env.PILOT_INVITES_ENABLED)} : {}),
   ...(pool ? {customerReconciliationStatusService:new CustomerReconciliationStatusService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS))} : {}),
   ...(pool ? {manualRefundService:new ManualRefundService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),env.MANUAL_REFUNDS_ENABLED)} : {}),
@@ -531,6 +533,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  app.log.info({event:"api_rate_limits_configured",enabled:env.API_RATE_LIMITS_ENABLED,readsPerMinute:60,writesPerMinute:10});
   app.log.info({event:"pilot_invites_configured",enabled:env.PILOT_INVITES_ENABLED,newProfilesRequireInvite:Boolean(pool)});
   app.log.info({ event: "manual_refunds_configured", enabled: env.MANUAL_REFUNDS_ENABLED, recordOnly:true });
   app.log.info({ event: "sandbox_withdrawal_recovery_configured", enabled: env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED });

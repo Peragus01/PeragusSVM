@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import type { ApiRateLimiter } from "./api-rate-limits.js";
 
 export interface AuthenticatedUser { id: string; email: string; assuranceLevel?: "aal2"; }
 export interface Customer {
@@ -40,7 +41,7 @@ const serialize = (c: Customer) => ({
 });
 const isVersioned = (path: string) => path === "/v1" || path.startsWith("/v1/");
 
-export function registerCustomerAccess(app: FastifyInstance, access: CustomerAccess, requirePilotInvite=false): void {
+export function registerCustomerAccess(app: FastifyInstance, access: CustomerAccess, requirePilotInvite=false, rateLimiter?: ApiRateLimiter): void {
   app.decorateRequest("authenticatedUser", null);
   app.decorateRequest("authenticatedCustomer", null);
   app.addHook("preHandler", async (request, reply) => {
@@ -60,6 +61,18 @@ export function registerCustomerAccess(app: FastifyInstance, access: CustomerAcc
       const status = error.code === "AUTH_UNAVAILABLE" ? 503 : error.code === "EMAIL_NOT_CONFIRMED" ? 403 : 401;
       if (status === 401) reply.header("WWW-Authenticate", "Bearer");
       return reply.code(status).send({ error: { code: error.code, message: "Authentication could not be completed" } });
+    }
+    if (rateLimiter) {
+      try {
+        const quota = await rateLimiter.consume(request.authenticatedUser.id, request.method);
+        reply.header("RateLimit-Limit", quota.limit);
+        reply.header("RateLimit-Remaining", quota.remaining);
+        if (!quota.allowed) return reply.header("Retry-After", quota.retryAfterSeconds)
+          .code(429).send({error:{code:"API_RATE_LIMIT_EXCEEDED"}});
+      } catch {
+        request.log.warn({event:"api_rate_limit_store_unavailable"});
+        return reply.header("Retry-After", "1").code(503).send({error:{code:"API_RATE_LIMIT_UNAVAILABLE"}});
+      }
     }
     if (path === "/v1/me" || path === "/v1/me/customer" || path === "/v1/me/pilot-invite/redeem") return;
     // Exact operator resource: authentication still runs above. Its own handler
