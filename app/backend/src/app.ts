@@ -47,6 +47,8 @@ import { registerCustomerAccess, type CustomerAccess } from "./auth/customer-acc
 import type { ApiRateLimiter } from "./auth/api-rate-limits.js";
 import type { OperatorAlertService } from "./operations/operator-alerts.js";
 import { registerOperatorAlertRoutes } from "./routes/operator-alerts.js";
+import type { SandboxClosureService } from "./withdrawals/sandbox-closure.js";
+import { registerSandboxClosureRoutes } from "./routes/sandbox-withdrawal-closure.js";
 import sensible from "@fastify/sensible";
 import Fastify, {
   type FastifyInstance,
@@ -101,6 +103,7 @@ export interface BuildAppOptions {
   customerAccess?: CustomerAccess;
   apiRateLimiter?: ApiRateLimiter;
   operatorAlertService?: OperatorAlertService;
+  sandboxClosureService?: SandboxClosureService;
   pilotInviteService?: PilotInviteService;
   ozavSandboxCustomerService?: OzavSandboxCustomerService;
   customerDraftRepository?: (customerId: string) => SettlementRepository;
@@ -147,6 +150,7 @@ export async function buildApp(
   if (options.apiRateLimiter && !options.customerAccess) throw new Error("API rate limits require verified authentication");
   if (options.customerAccess) registerCustomerAccess(app, options.customerAccess,Boolean(options.pilotInviteService),options.apiRateLimiter);
 
+  await registerSandboxClosureRoutes(app,options.customerAccess?options.sandboxClosureService:undefined);
   await registerOperatorAlertRoutes(app,options.customerAccess?options.operatorAlertService:undefined);
   await registerPilotInviteRoutes(app,options.customerAccess?options.pilotInviteService:undefined);
   await registerSandboxWithdrawalExecutionRoutes(app, options.customerAccess ? options.sandboxWithdrawalExecutionService : undefined, options.customerAccess ? options.sandboxWithdrawalRecoveryService : undefined);

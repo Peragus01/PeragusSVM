@@ -77,7 +77,7 @@ export function registerCustomerAccess(app: FastifyInstance, access: CustomerAcc
     if (path === "/v1/me" || path === "/v1/me/customer" || path === "/v1/me/pilot-invite/redeem") return;
     // Exact operator resource: authentication still runs above. Its own handler
     // requires the server allowlist and verified MFA; a customer profile is not a role.
-    if (["/v1/admin/operational-alerts", "/v1/admin/pilot-invites", "/v1/admin/pilot-invites/:id", "/v1/admin/pilot-invites/:id/revoke", "/v1/admin/customer-reconciliation", "/v1/admin/refund-requests", "/v1/admin/refund-requests/:id", "/v1/admin/refund-requests/:id/decision", "/v1/admin/refund-requests/:id/completion", "/v1/admin/withdrawal-requests/:id/audit", "/v1/admin/withdrawal-requests", "/v1/admin/withdrawal-requests/:id/approval", "/v1/admin/withdrawal-requests/:id/execution", "/v1/admin/withdrawal-requests/:id/execution/reconcile"].includes(path)) {
+    if (["/v1/admin/withdrawal-requests/:id/execution/closure", "/v1/admin/operational-alerts", "/v1/admin/pilot-invites", "/v1/admin/pilot-invites/:id", "/v1/admin/pilot-invites/:id/revoke", "/v1/admin/customer-reconciliation", "/v1/admin/refund-requests", "/v1/admin/refund-requests/:id", "/v1/admin/refund-requests/:id/decision", "/v1/admin/refund-requests/:id/completion", "/v1/admin/withdrawal-requests/:id/audit", "/v1/admin/withdrawal-requests", "/v1/admin/withdrawal-requests/:id/approval", "/v1/admin/withdrawal-requests/:id/execution", "/v1/admin/withdrawal-requests/:id/execution/reconcile"].includes(path)) {
       if (await access.customers.findByOwner(request.authenticatedUser.id)) {
         return reply.code(403).send({error:{code:"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"}});
       }

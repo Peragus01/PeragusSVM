@@ -12,6 +12,7 @@ export interface ExecutionContext {
 }
 export interface SandboxExecution extends ExecutionContext {
  id:string;operatorId:string;requestId:string;attempted:boolean;sendTransferId:string|null;observation:WithdrawalObservation|null;
+ closedAt?:string|null;
 }
 export interface SandboxExecutionRepository {
  context(withdrawalId:string):Promise<ExecutionContext|null>;
@@ -32,7 +33,7 @@ export function executionView(r:SandboxExecution){return{id:r.id,withdrawal_requ
  provider_target_amount:r.observation?.targetAmount??null,provider_transaction_reference:r.observation?.transactionReference??null,
  provider_completed:r.observation?.status==="completed" && r.observation.sourceLegStatus==="completed" && r.observation.destinationLegStatus==="completed",
  execution_requested:r.attempted,recovery_required:r.attempted && !r.observation,manual_review_required:r.observation!=null && ["needs_review","failed","cancelled","expired"].includes(r.observation.status),
- onchain_delivery_verified:false,mainnet_execution:false,delivery_costs_preflight_evaluated:false,pilot_slot_held:true,job_enqueued:false,automatic_retry:false};}
+ onchain_delivery_verified:false,mainnet_execution:false,delivery_costs_preflight_evaluated:false,pilot_slot_held:!r.closedAt,pilot_closed_at:r.closedAt??null,job_enqueued:false,automatic_retry:false};}
 export class SandboxWithdrawalExecutionService {
  constructor(private readonly repository:SandboxExecutionRepository,private readonly provider:OzavSandboxWithdrawalProvider,private readonly guard:WithdrawalOperatorApprovalService){}
  authorize(user:AuthenticatedUser){this.guard.authorize(user);}
@@ -65,7 +66,7 @@ export class SandboxWithdrawalExecutionService {
  }
  async reconcile(user:AuthenticatedUser,id:string){
   this.authorize(user);const row=await this.repository.read(id);if(!row)throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_NOT_FOUND");
-  if(!row.attempted)return executionView(row);
+  if(!row.attempted || row.closedAt)return executionView(row);
   const found=row.sendTransferId??await this.provider.find(row.providerCustomerId,row.id);if(!found)return executionView(row);
   const observed=await this.provider.transfer(found);validateWithdrawal(row,observed);
   await this.repository.bind(row,found);row.sendTransferId=found;
