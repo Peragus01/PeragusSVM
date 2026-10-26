@@ -475,3 +475,98 @@ describe("owned operation detail",()=>{
   expect((await (await appFor(f.s.owner)).inject({method:"GET",url,headers})).statusCode).toBe(403);
  });
 });
+
+import {OperatorAlertService} from "../src/operations/operator-alerts.js";
+import {ManualRefundService} from "../src/refunds/manual-refunds.js";
+describe("stored operational alerts",()=>{
+ beforeEach(async()=>{await db.exec("truncate peragus_customer_reconciliation,peragus_customer_refund_requests cascade");});
+ async function alertApp(f:Awaited<ReturnType<typeof approvalFixture>>,identity:any=f.user,reader=new OperatorAlertService(pool,new Set([f.user.id]))){
+  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},operatorAlertService:reader});apps.push(app);return app;
+ }
+ it("keeps pending and approved refunds actionable without recording a return",async()=>{
+  const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true);
+  const requested=await refunds.request(f.s.customer.id,f.p.data.id,randomUUID(),"Synthetic refund for manual review only.");
+  const app=await alertApp(f),url="/v1/admin/operational-alerts";
+  const pending=await app.inject({url,headers});expect(pending.statusCode).toBe(200);
+  expect(pending.json().data).toEqual([expect.objectContaining({kind:"refund_pending_review",refund_request_id:requested.data.id,severity:"medium"})]);
+  await refunds.decide(f.user,requested.data.id,randomUUID(),"approved","Synthetic manual review, no external return.");
+  const before=await db.query("select * from peragus_customer_refund_requests where id=$1",[requested.data.id]);
+  const result=await app.inject({url,headers});expect(result.headers["cache-control"]).toBe("no-store");
+  expect(result.json().data).toEqual([expect.objectContaining({kind:"refund_approved",execution_authorized:false,detail_path:`/v1/admin/refund-requests/${requested.data.id}`})]);
+  expect(result.json().meta).toMatchObject({provider_refreshed:false,notifications_sent:false});
+  expect(result.body).not.toMatch(/Synthetic|private|ozav_|wallet_address|operator_user_id|cpf/);
+  expect((await db.query("select * from peragus_customer_refund_requests where id=$1",[requested.data.id])).rows).toEqual(before.rows);
+  expect((await db.query("select * from peragus_manual_refund_completions")).rows).toHaveLength(0);
+ });
+ it("does not list rejected or externally recorded refund cases",async()=>{
+  const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true);
+  const r=await refunds.request(f.s.customer.id,f.p.data.id,randomUUID(),"Synthetic request with rejected decision.");
+  await refunds.decide(f.user,r.data.id,randomUUID(),"rejected","Synthetic rejected manual review reason.");
+  expect((await new OperatorAlertService(pool,new Set([f.user.id])).list(f.user,{})).data).toHaveLength(0);
+  // Positive completion belongs only to this isolated database, not staging.
+  const other=await approvalFixture(),service=new ManualRefundService(pool,new Set([other.user.id]),true);
+  const next=await service.request(other.s.customer.id,other.p.data.id,randomUUID(),"Synthetic request with isolated completion.");
+  await service.decide(other.user,next.data.id,randomUUID(),"approved","Synthetic isolated manual review approval.");
+  await service.complete(other.user,next.data.id,randomUUID(),"1000.00","synthetic-external-reference");
+  expect((await new OperatorAlertService(pool,new Set([other.user.id])).list(other.user,{})).data).toHaveLength(0);
+ });
+ it("surfaces uncertain withdrawals and clears them after GET-only recovery without another send",async()=>{
+  const f=await executionFixture();f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+  const alerts=new OperatorAlertService(pool,new Set([f.user.id]));
+  expect((await alerts.list(f.user,{})).data).toEqual([expect.objectContaining({kind:"withdrawal_uncertain",severity:"high"})]);
+  const sends=f.sends();f.setFound(f.sendId);
+  await new SandboxWithdrawalRecoveryService(f.repo,{find:f.provider.find,transfer:f.provider.transfer},new Set([f.user.id])).reconcile(f.user,f.wr.data.id);
+  expect((await alerts.list(f.user,{})).data).toHaveLength(0);expect(f.sends()).toBe(sends);
+  expect((await db.query("select closed_at from peragus_sandbox_withdrawal_executions")).rows[0]).toEqual({closed_at:null});
+ });
+ it("flags failed and partially completed withdrawal evidence for manual review",async()=>{
+  const f=await executionFixture();await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  const alerts=new OperatorAlertService(pool,new Set([f.user.id]));
+  for(const observation of [{...f.observed,status:'failed'},{...f.observed,destinationLegStatus:'pending'}]){
+   await db.query('update peragus_sandbox_withdrawal_executions set observation=$1 where withdrawal_request_id=$2',[observation,f.wr.data.id]);
+   expect((await alerts.list(f.user,{})).data).toEqual([expect.objectContaining({kind:'withdrawal_review',severity:'high'})]);
+  }
+  expect(f.sends()).toBe(1);
+ });
+ it("surfaces review and stalled checkpoints but excludes healthy terminal records and active leases",async()=>{
+  const f=await approvalFixture(),id=randomUUID();
+  await db.query(`insert into peragus_customer_reconciliation(id,customer_id,purchase_intent_id,pix_id,state,manual_review_required)
+   values($1,$2,$3,$4,'needs_review',true)`,[id,f.s.customer.id,f.p.data.id,f.pixId]);
+  const alerts=new OperatorAlertService(pool,new Set([f.user.id]));
+  expect((await alerts.list(f.user,{})).data[0]).toMatchObject({kind:"reconciliation_review"});
+  await db.query("update peragus_customer_reconciliation set state='pending',manual_review_required=false,next_check_at=now()-interval '16 minutes' where id=$1",[id]);
+  expect((await alerts.list(f.user,{})).data[0]).toMatchObject({kind:"reconciliation_stalled"});
+  await db.query("update peragus_customer_reconciliation set lease_token=$2,lease_until=now()+interval '1 minute' where id=$1",[id,randomUUID()]);
+  expect((await alerts.list(f.user,{})).data).toHaveLength(0);
+  await db.query("update peragus_customer_reconciliation set state='provider_terminal',lease_token=null,lease_until=null where id=$1",[id]);
+  expect((await alerts.list(f.user,{})).data).toHaveLength(0);
+ });
+ it("paginates tied alerts without duplicates and applies severity/kind filters",async()=>{
+  const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true);
+  await refunds.request(f.s.customer.id,f.p.data.id,randomUUID(),"Synthetic refund for pagination checking.");
+  await db.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,pix_id,state,manual_review_required,created_at)
+    values($1,$2,$3,'needs_review',true,'2026-01-01T00:00:00.123456Z')`,[f.s.customer.id,f.p.data.id,f.pixId]);
+  await db.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,withdrawal_request_id,state,manual_review_required,created_at)
+    values($1,$2,$3,'needs_review',true,'2026-01-01T00:00:00.123456Z')`,[f.s.customer.id,f.p.data.id,f.wr.data.id]);
+  const alerts=new OperatorAlertService(pool,new Set([f.user.id]));let cursor:string|undefined;const ids:string[]=[];
+  for(let i=0;i<3;i++){
+   const page=await alerts.list(f.user,{limit:'1',...(cursor?{cursor}:{})});ids.push(page.data[0]!.id);cursor=page.meta.next_cursor??undefined;
+  }
+  expect(new Set(ids).size).toBe(3);expect(cursor).toBeUndefined();
+  expect((await alerts.list(f.user,{severity:'high'})).data).toHaveLength(2);
+  expect((await alerts.list(f.user,{kind:'refund_pending_review'})).data).toHaveLength(1);
+ });
+ it("requires MFA, operator role and account separation and sanitizes database failures",async()=>{
+  const f=await approvalFixture(),url='/v1/admin/operational-alerts';
+  const app=await alertApp(f);expect((await app.inject({url})).statusCode).toBe(401);
+  const noMfa=await alertApp(f,{id:f.user.id});
+  expect((await noMfa.inject({url,headers})).json().error.code).toBe('WITHDRAWAL_OPERATOR_MFA_REQUIRED');
+  const foreign=await alertApp(f,{id:randomUUID(),assuranceLevel:'aal2'});
+  expect((await foreign.inject({url,headers})).statusCode).toBe(403);
+  const customer=await alertApp(f,{id:f.s.owner,assuranceLevel:'aal2'},new OperatorAlertService(pool,new Set([f.s.owner])));
+  expect((await customer.inject({url,headers})).json().error.code).toBe('OPERATOR_ACCOUNT_SEPARATION_REQUIRED');
+  expect((await app.inject({url:url+'?customer_id='+f.s.customer.id,headers})).statusCode).toBe(400);
+  const broken=await alertApp(f,f.user,new OperatorAlertService({query:async()=>{throw Error('PRIVATE_DATABASE_PASSWORD');}} as any,new Set([f.user.id])));
+  const failed=await broken.inject({url,headers});expect(failed.statusCode).toBe(503);expect(failed.body).not.toContain('PRIVATE_DATABASE_PASSWORD');
+ });
+});

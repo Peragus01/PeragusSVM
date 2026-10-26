@@ -1,3 +1,4 @@
+import {OperatorAlertService} from "./operations/operator-alerts.js";
 import {PostgresApiRateLimiter} from "./auth/api-rate-limits.js";
 import {PilotInviteService} from "./invites/pilot-invites.js";
 import {CustomerReconciliationStatusService} from "./jobs/customer-reconciliation.js";
@@ -411,6 +412,7 @@ const customerTermsService = env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSI
   new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1, timeoutMs: 5000 }), draftService!,
 ) : undefined;
 const app = await buildApp({
+  ...(pool ? {operatorAlertService:new OperatorAlertService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS))} : {}),
   ...(env.API_RATE_LIMITS_ENABLED ? {apiRateLimiter:new PostgresApiRateLimiter(pool!)} : {}),
   ...(pool ? {pilotInviteService:new PilotInviteService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),env.PILOT_INVITES_ENABLED)} : {}),
   ...(pool ? {customerReconciliationStatusService:new CustomerReconciliationStatusService(pool,new Set(env.WITHDRAWAL_OPERATOR_USER_IDS))} : {}),
