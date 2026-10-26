@@ -4,6 +4,7 @@ import "dotenv/config";
 import { z } from "zod";
 
 const envSchema = z.object({
+  PILOT_INVITES_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   CUSTOMER_RECONCILIATION_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   MANUAL_REFUNDS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   SANDBOX_WITHDRAWAL_RECOVERY_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),

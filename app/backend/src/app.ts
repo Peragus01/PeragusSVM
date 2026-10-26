@@ -1,3 +1,5 @@
+import {registerPilotInviteRoutes} from "./routes/pilot-invites.js";
+import type {PilotInviteService} from "./invites/pilot-invites.js";
 import {registerCustomerReconciliationStatusRoutes} from "./routes/customer-reconciliation-status.js";
 import type {CustomerReconciliationStatusService} from "./jobs/customer-reconciliation.js";
 import {registerManualRefundRoutes} from "./routes/manual-refunds.js";
@@ -94,6 +96,7 @@ export interface BuildAppOptions {
   individualDraftService?: IndividualDraftService;
   customerWebhooks?: CustomerWebhookOptions;
   customerAccess?: CustomerAccess;
+  pilotInviteService?: PilotInviteService;
   ozavSandboxCustomerService?: OzavSandboxCustomerService;
   customerDraftRepository?: (customerId: string) => SettlementRepository;
   logger?: FastifyServerOptions["logger"];
@@ -136,8 +139,9 @@ export async function buildApp(
   await app.register(sensible);
   await registerCustomerWebhookRoutes(app, options.customerWebhooks);
 
-  if (options.customerAccess) registerCustomerAccess(app, options.customerAccess);
+  if (options.customerAccess) registerCustomerAccess(app, options.customerAccess,Boolean(options.pilotInviteService));
 
+  await registerPilotInviteRoutes(app,options.customerAccess?options.pilotInviteService:undefined);
   await registerSandboxWithdrawalExecutionRoutes(app, options.customerAccess ? options.sandboxWithdrawalExecutionService : undefined, options.customerAccess ? options.sandboxWithdrawalRecoveryService : undefined);
   await registerWithdrawalOperatorApprovalRoutes(app, options.customerAccess ? options.withdrawalOperatorApprovalService : undefined);
   await registerManualRefundRoutes(app, options.customerAccess ? options.manualRefundService : undefined);
