@@ -99,7 +99,7 @@ describe("customer read client", () => {
       expect.objectContaining({
         method: "GET",
         cache: "no-store",
-        credentials: "omit",
+        credentials: "same-origin",
         headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
       }),
     );

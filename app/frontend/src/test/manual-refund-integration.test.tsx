@@ -134,6 +134,7 @@ describe("refund client", () => {
   it("keeps approval distinct from an unknown return", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(json({ data: { ...data, state: "approved" } }));
     const result = await getRefund(token, purchase);
+    expect(vi.mocked(fetch).mock.calls[0]![1]?.credentials).toBe("same-origin");
     expect(result.returned_amount).toBeNull();
     expect(refundLabels[result.state]).toContain("pendente");
   });

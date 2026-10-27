@@ -83,7 +83,7 @@ async function read(path: string, token: string, signal?: AbortSignal): Promise<
     const response = await fetch(`/api${path}`, {
       method: "GET",
       headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
-      credentials: "omit",
+      credentials: "same-origin",
       cache: "no-store",
       redirect: "error",
       ...(signal ? { signal } : {}),

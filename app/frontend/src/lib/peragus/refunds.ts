@@ -127,7 +127,7 @@ async function call(
       ...(payload ? { body: JSON.stringify(payload) } : {}),
       ...(signal ? { signal } : {}),
       cache: "no-store",
-      credentials: "omit",
+      credentials: "same-origin",
       redirect: "error",
     });
     const body: unknown = await response.json();
