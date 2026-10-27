@@ -61,6 +61,9 @@ describe("operator MFA in existing memory-only session", () => {
       .mockResolvedValueOnce(json(tokens("synthetic.aal2")));
     const storage = vi.spyOn(Storage.prototype, "setItem");
     await login();
+    expect(fetcher.mock.calls[0]![1]?.credentials).toBe("omit");
+    expect(fetcher.mock.calls[1]![0]).toBe("/api/v1/me");
+    expect(fetcher.mock.calls[1]![1]?.credentials).toBe("same-origin");
     fireEvent.click(screen.getByText("MFA"));
     await screen.findByText("synthetic.aal2");
     expect(fetcher.mock.calls[2]![0]).toBe("https://syntheticproject.supabase.co/auth/v1/user");

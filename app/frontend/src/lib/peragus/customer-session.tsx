@@ -132,7 +132,7 @@ async function fetchIdentity(token: string, signal?: AbortSignal): Promise<Custo
       method: "GET",
       headers: { Accept: "application/json", Authorization: "Bearer " + token },
       cache: "no-store",
-      credentials: "omit",
+      credentials: "same-origin",
       redirect: "error",
       ...(signal ? { signal } : {}),
     });
