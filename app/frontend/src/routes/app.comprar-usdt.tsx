@@ -1,3 +1,4 @@
+import { OnboardingEvidence } from "@/components/peragus/onboarding-evidence";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { CustomerNotice, CustomerPanel, SectionTitle } from "@/components/peragus/customer-ui";
@@ -93,12 +94,7 @@ function PurchasePage() {
             <span>Perfil cadastral</span>
             <span className="customer-chip">{identity?.customer ? "Existente" : "Pendente"}</span>
           </div>
-          <div className="customer-row">
-            <span>Verificação KYC</span>
-            <span className="customer-chip customer-chip-warning">
-              {identity?.customer?.verification_status ?? "Não cadastrada"}
-            </span>
-          </div>
+          <OnboardingEvidence />
           <div className="customer-row">
             <span>Carteira Solana</span>
             <b style={{ overflowWrap: "anywhere" }}>{wallet.address ?? "Não conectada"}</b>

@@ -1,16 +1,9 @@
+import { OnboardingEvidence } from "@/components/peragus/onboarding-evidence";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { CustomerNotice, CustomerPanel, SectionTitle } from "@/components/peragus/customer-ui";
-import { useCustomerSession, type CustomerProfile } from "@/lib/peragus/customer-session";
+import { useCustomerSession } from "@/lib/peragus/customer-session";
 export const Route = createFileRoute("/app/minha-conta")({ component: AccountPage });
-const KYC_LABEL: Record<CustomerProfile["verification_status"], string> = {
-  draft: "Rascunho",
-  submitted: "Enviado",
-  in_review: "Em análise",
-  action_required: "Ação necessária",
-  approved: "Aprovado",
-  rejected: "Rejeitado",
-};
 function AccountPage() {
   const session = useCustomerSession();
   const [error, setError] = useState("");
@@ -110,13 +103,7 @@ function AccountPage() {
         </CustomerPanel>
       </div>
       <CustomerPanel title="Verificação de identidade (KYC)">
-        <CustomerNotice kind={profile?.verification_status === "approved" ? "info" : "warning"}>
-          {profile
-            ? "Status retornado pela API: " + KYC_LABEL[profile.verification_status] + "."
-            : "Nenhuma verificação foi confirmada: é necessário um perfil cadastral."}{" "}
-          O resultado não é controlado pelo frontend e não significa liberação automática de
-          operações.
-        </CustomerNotice>
+        <OnboardingEvidence />
         <div className="customer-steps">
           {[
             ["1", "Dados cadastrais", "Identificação PF/PJ registrada na conta, quando existente."],
