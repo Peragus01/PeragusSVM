@@ -1,3 +1,4 @@
+import { forwardPurchase, purchaseMethods } from "@/lib/peragus/purchase-proxy.server";
 import { forwardRefund, refundMethods } from "@/lib/peragus/refund-proxy.server";
 import { forwardCustomerRead, isCustomerReadPath } from "@/lib/peragus/customer-proxy.server";
 import { createFileRoute } from "@tanstack/react-router";
@@ -29,6 +30,7 @@ function targetUrl(request: Request, splat: string) {
 
 function isAllowedPath(splat: string) {
   return (
+    purchaseMethods(splat).length > 0 ||
     refundMethods(splat).length > 0 ||
     isCustomerReadPath(splat) ||
     splat === "health" ||
@@ -48,6 +50,8 @@ async function forward({ request, params }: ProxyContext) {
   }
 
   try {
+    if (purchaseMethods(params._splat).length)
+      return await forwardPurchase(request, targetUrl(request, params._splat), params._splat);
     if (refundMethods(params._splat).length)
       return await forwardRefund(request, targetUrl(request, params._splat), params._splat);
     if (isCustomerReadPath(params._splat))
