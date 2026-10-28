@@ -76,7 +76,7 @@ const sandbox = (value: Record<string, unknown>) =>
   value["onchain_delivery_verified"] === false &&
   value["mainnet_execution"] === false;
 
-async function read(path: string, token: string, signal?: AbortSignal): Promise<unknown> {
+export async function read(path: string, token: string, signal?: AbortSignal): Promise<unknown> {
   if (!token || token.length > 8185 || !/^[A-Za-z0-9._-]+$/.test(token))
     throw new CustomerReadError("AUTH_REQUIRED", 401);
   try {
