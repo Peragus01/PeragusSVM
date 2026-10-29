@@ -73,20 +73,19 @@ function AccountPage() {
           </div>
           {!profile && (
             <CustomerNotice kind="warning">
-              O perfil mínimo ainda não existe. A API possui um contrato de criação de perfil, mas o
-              proxy atual não disponibiliza essa operação com segurança. Não enviaremos dados por
-              uma rota não liberada.
+              Seu perfil cadastral ainda não está disponível. A criação de perfil por esta tela não
+              está habilitada neste piloto.
             </CustomerNotice>
           )}
         </CustomerPanel>
         <CustomerPanel title="Privacidade e segurança">
           <p className="customer-muted">
-            Sua sessão é validada pelo backend utilizando Supabase Auth. Não exibimos documentos,
-            CPF ou biometria e não armazenamos documentos neste navegador.
+            Seu acesso é autenticado. Esta página mostra apenas o estado das verificações, sem
+            exibir documentos, CPF ou biometria.
           </p>
           <div className="customer-row">
             <span>Autenticação</span>
-            <b>Supabase Auth</b>
+            <b>E-mail e senha</b>
           </div>
           <div className="customer-row">
             <span>Dados de KYC</span>
@@ -97,8 +96,8 @@ function AccountPage() {
             <b>Não solicitado neste módulo</b>
           </div>
           <p className="customer-muted">
-            Os fluxos futuros de consentimento e captura documental exigirão integração segura com o
-            serviço responsável.
+            Quando disponível, a verificação documental será realizada em um fluxo seguro do serviço
+            responsável.
           </p>
         </CustomerPanel>
       </div>
@@ -136,8 +135,8 @@ function AccountPage() {
           Iniciar verificação — integração pendente
         </button>
         <p className="customer-muted" style={{ marginTop: 14 }}>
-          Não há contrato frontend disponível para abrir sessão de KYC do provedor neste momento.
-          Nenhuma documentação é solicitada por esta página.
+          O envio de documentos por esta página ainda não está disponível. Você pode consultar acima
+          as verificações já registradas.
         </p>
       </CustomerPanel>
     </>

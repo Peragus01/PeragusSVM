@@ -66,7 +66,7 @@ function PasswordRecoveryPage() {
         </p>
         {!configured && (
           <CustomerNotice kind="warning">
-            Recuperação indisponível: Supabase Auth não configurado neste ambiente.
+            A recuperação de acesso está temporariamente indisponível neste ambiente.
           </CustomerNotice>
         )}
         {error && <CustomerNotice kind="danger">{error}</CustomerNotice>}

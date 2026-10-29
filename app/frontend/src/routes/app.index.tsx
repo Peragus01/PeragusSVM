@@ -1,3 +1,4 @@
+import { OnboardingEvidence } from "@/components/peragus/onboarding-evidence";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import {
@@ -24,7 +25,7 @@ function CustomerDashboard() {
       <SectionTitle
         eyebrow="SUA CENTRAL FINANCEIRA"
         title={"Olá, " + name + "."}
-        description="Acompanhe seus registros, sua identidade e o estado das integrações em um só lugar."
+        description="Sua conta e suas últimas operações, com clareza em cada etapa."
         action={
           <Link to="/app/comprar-usdt" className="customer-button">
             Comprar USDT <ArrowUpRight size={15} />
@@ -32,26 +33,26 @@ function CustomerDashboard() {
         }
       />
       <CustomerNotice kind="warning">
-        Ambiente de testes. Nenhuma operação financeira ou entrega em mainnet está habilitada nesta
-        interface. Saldos e cotações não são presumidos.
+        Você está no piloto sandbox. Os registros são de teste e não representam movimentações de
+        dinheiro real.
       </CustomerNotice>
       <div className="customer-grid">
         <div className="customer-panel customer-metric">
-          <span>Verificação de identidade</span>
+          <span>Perfil cadastral local</span>
           <strong>{identity?.customer?.verification_status ?? "Sem perfil"}</strong>
-          <small>Estado fornecido pela API de conta</small>
+          <small>Separado das verificações de identidade</small>
         </div>
         <div className="customer-panel customer-metric">
-          <span>Permissão para operar</span>
+          <span>Operações financeiras</span>
           <strong>
-            {identity?.customer?.operations_enabled ? "Consultar condições" : "Bloqueada"}
+            {identity?.customer?.operations_enabled ? "Consultar condições" : "Indisponíveis"}
           </strong>
-          <small>Jamais liberada somente pelo navegador</small>
+          <small>Disponibilidade sujeita às condições da conta</small>
         </div>
         <div className="customer-panel customer-metric">
-          <span>Registros consultados</span>
+          <span>Operações recentes</span>
           <strong>{state === "ready" ? String(data?.data.length ?? 0) : "—"}</strong>
-          <small>Página atual do histórico, não volume total</small>
+          <small>Nesta consulta · veja mais no histórico</small>
         </div>
       </div>
       <div className="customer-grid-two">
@@ -107,9 +108,9 @@ function CustomerDashboard() {
               [
                 "2",
                 "Carteira",
-                "Conecte uma carteira Solana compatível; isso não autentica sua conta.",
+                "Confira a carteira conectada e o que ela representa no ambiente de testes.",
               ],
-              ["3", "Compra", "Revise a intenção em BRL. A emissão de Pix permanece indisponível."],
+              ["3", "Compra", "Consulte uma cotação indicativa e registre sua intenção em reais."],
             ].map(([n, t, d]) => (
               <div className="customer-step" key={n}>
                 <span className="customer-step-count">{n}</span>
@@ -125,6 +126,9 @@ function CustomerDashboard() {
           </Link>
         </CustomerPanel>
       </div>
+      <CustomerPanel title="Cadastro e verificação de identidade">
+        <OnboardingEvidence />
+      </CustomerPanel>
     </>
   );
 }
