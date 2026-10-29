@@ -96,7 +96,7 @@ function OperationDetail() {
       <SectionTitle
         eyebrow="OPERAÇÕES / DETALHES"
         title="Detalhes da operação"
-        description="Informações retornadas pela API autenticada, sem presumir execução em mainnet."
+        description="Confira os valores registrados e acompanhe a situação desta operação."
         action={
           <Link className="customer-button-secondary" to="/app/operacoes">
             Voltar
@@ -120,7 +120,7 @@ function OperationDetail() {
         </CustomerPanel>
       )}
       {operation && status === "ready" && (
-        <div className="customer-grid-two">
+        <div className="customer-details-grid">
           <CustomerPanel title="Resumo">
             <div className="customer-row">
               <span>Identificador</span>

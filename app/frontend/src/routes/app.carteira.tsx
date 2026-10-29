@@ -32,8 +32,8 @@ function WalletPage() {
             <b>Não consultado</b>
           </div>
           <div className="customer-row">
-            <span>Comprovação de posse</span>
-            <b>Não implementada</b>
+            <span>Comprovação por esta tela</span>
+            <b>Indisponível neste módulo</b>
           </div>
           <button
             type="button"
@@ -57,12 +57,12 @@ function WalletPage() {
             <b>{identity?.customer?.type.toUpperCase() ?? "Não criado"}</b>
           </div>
           <div className="customer-row">
-            <span>Verificação cadastral</span>
+            <span>Perfil cadastral local</span>
             <b>{identity?.customer?.verification_status ?? "Não iniciada"}</b>
           </div>
           <div className="customer-row">
-            <span>Carteira vinculada</span>
-            <b>Não verificado</b>
+            <span>Vínculo consultado nesta tela</span>
+            <b>Não consultado</b>
           </div>
           <CustomerNotice>
             Uma carteira conectada não é prova de titularidade nem autorização para transações.

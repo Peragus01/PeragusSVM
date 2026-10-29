@@ -9,9 +9,21 @@ function RegistrationPage() {
         <h1>Cadastro por convite.</h1>
         <p>A Peragus está validando o produto com um grupo limitado de participantes.</p>
         <CustomerNotice kind="warning">
-          O contrato de validação de convites ainda não está disponível no backend. O cadastro está
-          temporariamente desabilitado: nenhum código será aceito somente pelo navegador.
+          A adesão pelo site ainda não está disponível. Se você recebeu um convite, aguarde as
+          orientações da equipe Peragus. Nenhum cadastro será enviado por esta tela.
         </CustomerNotice>
+        <ol className="customer-registration-steps">
+          <li>
+            <span>1</span>Receba um convite para participar do piloto.
+          </li>
+          <li>
+            <span>2</span>Confirme seu acesso e complete seu cadastro quando a adesão estiver
+            disponível.
+          </li>
+          <li>
+            <span>3</span>Acompanhe as verificações de identidade pela sua conta.
+          </li>
+        </ol>
         <Link className="customer-button-secondary" to="/login">
           Voltar ao login
         </Link>

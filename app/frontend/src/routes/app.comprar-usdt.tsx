@@ -1,3 +1,4 @@
+import { formatAmount } from "@/components/peragus/customer-operations";
 import { OnboardingEvidence } from "@/components/peragus/onboarding-evidence";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -25,14 +26,14 @@ function PurchasePage() {
       <SectionTitle
         eyebrow="BRL → USDT / SOLANA"
         title="Comprar USDT"
-        description="Uma experiência clara do valor em reais até o recebimento na sua carteira, quando o serviço estiver habilitado."
+        description="Consulte uma estimativa e registre sua intenção de compra no ambiente de testes."
       />
       <CustomerNotice kind="warning">
         Cotação indicativa e registro de intenção em sandbox. Esta etapa não gera Pix, não inicia
         retirada e não comprova entrega na carteira. A estimativa não garante câmbio nem valor
         líquido.
       </CustomerNotice>
-      <div className="customer-grid-two">
+      <div className="customer-purchase-grid">
         {identity?.customer && accessToken && (
           <PurchaseForm
             key={identity.customer.id}
@@ -40,44 +41,51 @@ function PurchasePage() {
             token={accessToken}
           />
         )}
-        <CustomerPanel title="Verificações antes de continuar">
-          <div className="customer-row">
-            <span>E-mail</span>
-            <b>{identity?.user.email ?? "—"}</b>
-          </div>
-          <div className="customer-row">
-            <span>Perfil cadastral</span>
-            <span className="customer-chip">{identity?.customer ? "Existente" : "Pendente"}</span>
-          </div>
-          <OnboardingEvidence />
-          <div className="customer-row">
-            <span>Carteira Solana</span>
-            <b style={{ overflowWrap: "anywhere" }}>{wallet.address ?? "Não conectada"}</b>
-          </div>
-          <div className="customer-row">
-            <span>Autorização de operações</span>
-            <span className="customer-chip customer-chip-warning">
-              {identity?.customer?.operations_enabled ? "Sujeita à API de pagamentos" : "Bloqueada"}
-            </span>
-          </div>
-          {!wallet.address && (
-            <button
-              type="button"
-              className="customer-button-secondary"
-              style={{ marginTop: 18 }}
-              onClick={wallet.open}
-            >
-              Conectar carteira Devnet
-            </button>
-          )}
-          <p className="customer-muted" style={{ marginTop: 15 }}>
-            A carteira existente no repositório utiliza Solana Devnet. Conectar não substitui
-            autenticação nem comprova titularidade para operações reais.
-          </p>
-          <Link to="/app/minha-conta" className="customer-link">
-            Ver estado do cadastro e KYC
-          </Link>
-        </CustomerPanel>
+        <div className="customer-purchase-checks">
+          <CustomerPanel title="Antes de continuar">
+            <div className="customer-row">
+              <span>E-mail</span>
+              <b>{identity?.user.email ?? "—"}</b>
+            </div>
+            <div className="customer-row">
+              <span>Perfil cadastral</span>
+              <span className="customer-chip">{identity?.customer ? "Existente" : "Pendente"}</span>
+            </div>
+            <details>
+              <summary>Ver cadastro e verificações de identidade</summary>
+              <OnboardingEvidence />
+            </details>
+            <div className="customer-row">
+              <span>Carteira neste navegador</span>
+              <b style={{ overflowWrap: "anywhere" }}>{wallet.address ?? "Não conectada"}</b>
+            </div>
+            <div className="customer-row">
+              <span>Operações financeiras reais</span>
+              <span className="customer-chip customer-chip-warning">
+                {identity?.customer?.operations_enabled
+                  ? "Sujeita à API de pagamentos"
+                  : "Indisponíveis no sandbox"}
+              </span>
+            </div>
+            {!wallet.address && (
+              <button
+                type="button"
+                className="customer-button-secondary"
+                style={{ marginTop: 18 }}
+                onClick={wallet.open}
+              >
+                Conectar carteira Devnet
+              </button>
+            )}
+            <p className="customer-muted" style={{ marginTop: 15 }}>
+              A carteira existente no repositório utiliza Solana Devnet. Conectar não substitui
+              autenticação nem comprova titularidade para operações reais.
+            </p>
+            <Link to="/app/minha-conta" className="customer-link">
+              Ver estado do cadastro e KYC
+            </Link>
+          </CustomerPanel>
+        </div>
       </div>
     </>
   );
@@ -230,8 +238,30 @@ export function PurchaseForm({ customerId, token }: { customerId: string; token:
   }
   return (
     <CustomerPanel title="Sua intenção de compra">
-      <form onSubmit={submit}>
-        <label className="customer-field">
+      <div className="customer-purchase-progress" aria-label="Etapas da intenção">
+        <span className={!quote && !purchase ? "active" : ""}>
+          <b>1</b> Valor
+        </span>
+        <i />
+        <span className={quote && !purchase ? "active" : ""}>
+          <b>2</b> Revisão
+        </span>
+        <i />
+        <span className={purchase ? "active" : ""}>
+          <b>3</b> Registro
+        </span>
+      </div>
+      <div className="customer-currency">
+        <span>
+          <span className="customer-token">R$</span>
+          <span>
+            Você informa<small>BRL · Real brasileiro</small>
+          </span>
+        </span>
+        <span>Brasil</span>
+      </div>
+      <form onSubmit={submit} aria-busy={busy}>
+        <label className="customer-field customer-purchase-amount">
           Quanto deseja utilizar (BRL)?
           <input
             inputMode="decimal"
@@ -243,12 +273,11 @@ export function PurchaseForm({ customerId, token }: { customerId: string; token:
           />
         </label>
         <p className="customer-muted" id="amount-help">
-          Mínimo atual: R$ 1.000,00. Informe até duas casas decimais. A API valida os limites e a
-          elegibilidade.
+          Mínimo atual: R$ 1.000,00. A consulta depende dos limites e das condições da sua conta.
         </p>
         <button
           type="submit"
-          className="customer-button"
+          className="customer-button customer-purchase-submit"
           disabled={
             !ready || blocked || busy || !normalizePurchaseAmount(amount) || Boolean(purchase)
           }
@@ -269,11 +298,11 @@ export function PurchaseForm({ customerId, token }: { customerId: string; token:
         <>
           <div className="customer-row">
             <span>Valor de origem</span>
-            <b>R$ {quote.source.amount}</b>
+            <b>{formatAmount(quote.source.amount, "BRL")}</b>
           </div>
           <div className="customer-row">
             <span>Estimativa indicativa</span>
-            <b>{quote.target.amount} USDT · Solana</b>
+            <b>{formatAmount(quote.target.amount, "USDT")} · Solana</b>
           </div>
           <div className="customer-row">
             <span>Validade informada</span>
@@ -302,10 +331,13 @@ export function PurchaseForm({ customerId, token }: { customerId: string; token:
         </>
       )}
       {plan && (
-        <p className="customer-muted" style={{ overflowWrap: "anywhere" }}>
-          Referência da cotação: {plan.quoteId ?? plan.quoteRequestId}. Referência da intenção:{" "}
-          {plan.purchaseId ?? plan.purchaseRequestId}.
-        </p>
+        <details className="customer-purchase-reference">
+          <summary>Referências desta intenção</summary>
+          <p className="customer-muted" style={{ overflowWrap: "anywhere" }}>
+            Referência da cotação: {plan.quoteId ?? plan.quoteRequestId}. Referência da intenção:{" "}
+            {plan.purchaseId ?? plan.purchaseRequestId}.
+          </p>
+        </details>
       )}
       {purchase && (
         <button

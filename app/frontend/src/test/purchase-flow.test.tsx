@@ -100,7 +100,7 @@ describe("sandbox purchase flow", () => {
     const button = screen.getByRole("button", { name: "Consultar cotação sandbox" });
     fireEvent.click(button);
     fireEvent.click(button);
-    await screen.findByText("184.610000 USDT · Solana");
+    await screen.findByText("184,61 USDT · Solana");
     expect(fetcher).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Registrar intenção sandbox" }));
     await screen.findByText(/Intenção registrada:/);
@@ -134,7 +134,7 @@ describe("sandbox purchase flow", () => {
     render(<PurchaseForm customerId={id} token="synthetic.token" />);
     expect(fetcher).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Consultar cotação desta intenção" }));
-    await screen.findByText("184.610000 USDT · Solana");
+    await screen.findByText("184,61 USDT · Solana");
     expect(fetcher.mock.calls[0]![1]!.method).toBe("GET");
   });
   it("discards an old token's response after the session changes", async () => {
@@ -155,13 +155,11 @@ describe("sandbox purchase flow", () => {
     expect(screen.queryByRole("button", { name: "Registrar intenção sandbox" })).toBeNull();
   });
   it("blocks expired quotes before recording and does not infer a purchase", async () => {
-    const fetcher = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async () =>
-        Response.json({
-          data: { ...quote(readPurchasePlan(id)!), expires_at: "2000-01-01T00:00:00Z" },
-        }),
-      );
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({
+        data: { ...quote(readPurchasePlan(id)!), expires_at: "2000-01-01T00:00:00Z" },
+      }),
+    );
     render(<PurchaseForm customerId={id} token="synthetic.token" />);
     fireEvent.change(screen.getByLabelText(/Quanto deseja/), { target: { value: "1000" } });
     fireEvent.click(screen.getByRole("button", { name: "Consultar cotação sandbox" }));
