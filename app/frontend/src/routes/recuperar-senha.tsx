@@ -71,7 +71,7 @@ function PasswordRecoveryPage() {
         )}
         {error && <CustomerNotice kind="danger">{error}</CustomerNotice>}
         {message && <CustomerNotice>{message}</CustomerNotice>}
-        <form onSubmit={(e) => void submit(e)}>
+        <form aria-busy={busy} onSubmit={(e) => void submit(e)}>
           {recoveryToken ? (
             <label className="customer-field">
               Nova senha
@@ -102,12 +102,20 @@ function PasswordRecoveryPage() {
             disabled={!configured || busy}
             style={{ width: "100%" }}
           >
-            {busy ? "Processando…" : recoveryToken ? "Atualizar senha" : "Enviar instruções"}
+            {busy ? (
+              <>
+                <span className="premium-spinner" aria-hidden="true" />
+                Processando…
+              </>
+            ) : recoveryToken ? (
+              "Atualizar senha"
+            ) : (
+              "Enviar instruções"
+            )}
           </button>
         </form>
         <p className="customer-muted" style={{ marginTop: 18 }}>
-          O link de recuperação deve redirecionar para /recuperar-senha, conforme as URLs
-          autorizadas na configuração do Supabase Auth.
+          Confira também a pasta de spam. A Peragus nunca pede sua senha por mensagem.
         </p>
         <Link className="customer-link" to="/login">
           Voltar ao login

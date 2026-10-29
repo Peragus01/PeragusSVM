@@ -11,20 +11,22 @@ import {
 import { PeragusBrand } from "@/components/peragus/customer-ui";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import "@/public-home.css";
+import { useReveal } from "@/components/peragus/motion";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Peragus — Uma nova conexão com o seu dinheiro" },
+      { title: "Peragus — Reais em USDT, com clareza em cada etapa" },
       {
         name: "description",
         content:
-          "Conheça a Peragus. Stablecoins e pagamentos para conectar pessoas e negócios na América Latina. Acesso ao piloto por convite.",
+          "Conheça a experiência Peragus para comprar USDT em reais e acompanhar a entrega na sua carteira Solana. Acesso atual em ambiente de testes.",
       },
     ],
   }),
   component: PublicHome,
 });
 export function PublicHome() {
+  useReveal();
   const { status } = useCustomerSession();
   return (
     <div className="peragus-home">
@@ -61,17 +63,17 @@ export function PublicHome() {
           />
           <div className="public-hero-shade" />
           <div className="public-hero-content">
-            <span className="public-eyebrow">FEITA PARA CONECTAR</span>
+            <span className="public-eyebrow">REAIS → USDT · SOLANA</span>
             <h1>
-              Seu dinheiro.
+              Seu próximo passo.
               <br />
-              Novas possibilidades.
+              Em reais.
               <br />
-              <em>Menos fronteiras.</em>
+              <em>Sem fronteiras.</em>
             </h1>
             <p>
-              Uma experiência mais simples para conectar reais, stablecoins e negócios na América
-              Latina.
+              Reais para começar. USDT para ir além. Uma experiência de compra com valores claros e
+              acompanhamento até sua carteira Solana.
             </p>
             <Link to="/login" className="public-button">
               Acessar minha conta <ArrowRight size={19} />
@@ -83,14 +85,45 @@ export function PublicHome() {
               Piloto fechado em ambiente de testes. Operações reais ainda não disponíveis.
             </span>
           </div>
+          <div className="public-conversion-visual" aria-label="Jornada de compra de USDT">
+            <div className="public-conversion-top">
+              <span>UMA CONEXÃO. MAIS POSSIBILIDADES.</span>
+              <span>↗</span>
+            </div>
+            <div className="public-asset">
+              <span className="asset-icon brl-icon">R$</span>
+              <div>
+                <small>Você paga</small>
+                <strong>Real brasileiro</strong>
+              </div>
+              <b>BRL</b>
+            </div>
+            <div className="public-conversion-arrow">↓</div>
+            <div className="public-asset">
+              <span className="asset-icon usdt-icon">₮</span>
+              <div>
+                <small>Você recebe</small>
+                <strong>Tether USD</strong>
+              </div>
+              <b>USDT</b>
+            </div>
+            <div className="public-conversion-foot">
+              <span>Solana</span>
+              <span>Na sua carteira</span>
+            </div>
+            <p>
+              Jornada planejada: cotação → revisão → Pix → entrega.
+              <br />
+              No ambiente atual, apenas estimativa e registro de teste.
+            </p>
+          </div>
         </section>
         <section className="public-section" id="como-funciona">
           <div className="public-section-heading">
             <span className="public-eyebrow">SIMPLES EM CADA ETAPA</span>
             <h2>
-              Do primeiro acesso
-              <br />
-              ao acompanhamento.
+              Da cotação
+              <br />à sua carteira.
             </h2>
             <p>Informações claras para você saber onde está e qual é o próximo passo.</p>
           </div>
@@ -98,18 +131,18 @@ export function PublicHome() {
             {[
               {
                 icon: ShieldCheck,
-                title: "Sua conta, seu acesso",
-                text: "Entre com sua conta e acompanhe seu cadastro e as verificações de identidade.",
+                title: "Confira quanto recebe",
+                text: "Informe o valor em reais e consulte a estimativa de USDT, com os custos disponíveis antes de avançar.",
               },
               {
                 icon: Wallet,
-                title: "Uma compra por etapas",
-                text: "Consulte uma estimativa e registre sua intenção de compra no piloto sandbox.",
+                title: "Revise antes de pagar",
+                text: "Confira a carteira de destino e os detalhes. O Pix só fica disponível quando o pagamento estiver habilitado.",
               },
               {
                 icon: Globe2,
-                title: "Tudo no seu histórico",
-                text: "Consulte seus registros e diferencie uma estimativa de uma conversão ou entrega confirmada.",
+                title: "Acompanhe cada etapa",
+                text: "Do pagamento à entrega, acompanhe as confirmações disponíveis no seu histórico. Sem confundir estimativa com USDT recebido.",
               },
             ].map(({ icon: Icon, title, text }, i) => (
               <article key={title}>
@@ -156,8 +189,8 @@ export function PublicHome() {
               Muitas possibilidades.
             </h3>
             <p>
-              Produto em desenvolvimento. Funcionalidades e disponibilidade sujeitas às condições do
-              piloto.
+              Reais na origem. USDT na rede Solana. Cada etapa visível, da cotação à confirmação
+              disponível.
             </p>
           </div>
         </section>
@@ -182,7 +215,7 @@ export function PublicHome() {
               ],
               [
                 "As operações deste ambiente movimentam dinheiro real?",
-                "Não. O ambiente atual é de testes. Uma cotação indicativa ou intenção registrada não representa pagamento, conversão concluída ou entrega na carteira.",
+                "Não. O ambiente atual é de testes. Uma cotação indicativa ou registro de teste não representa pagamento, conversão concluída ou entrega na carteira.",
               ],
               [
                 "O valor estimado é o valor final?",

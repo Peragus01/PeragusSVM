@@ -30,11 +30,11 @@ describe("stored onboarding evidence", () => {
   it("distinguishes local draft, identity approval and separate clear screening", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data }));
     render(<OnboardingEvidence />);
-    expect(await screen.findByText("Aprovada (sandbox)")).toBeInTheDocument();
-    expect(screen.getByText("draft")).toBeInTheDocument();
+    expect(await screen.findByText("Aprovada (teste)")).toBeInTheDocument();
+    expect(screen.getByText("Em preenchimento")).toBeInTheDocument();
     expect(screen.getByText("Concluído · sem apontamentos")).toBeInTheDocument();
-    expect(screen.getByText(/atualidade não avaliada/)).toBeInTheDocument();
-    expect(screen.getByText(/não autorizam operações/)).toBeInTheDocument();
+    expect(screen.getByText(/sem nova validação de atualidade/)).toBeInTheDocument();
+    expect(screen.getByText(/não habilitam compras com dinheiro real/)).toBeInTheDocument();
     expect(fetcher).toHaveBeenCalledWith(
       "/api/v1/me/onboarding/status",
       expect.objectContaining({ credentials: "same-origin", method: "GET" }),
@@ -47,7 +47,7 @@ describe("stored onboarding evidence", () => {
     );
     render(<OnboardingEvidence />);
     expect(await screen.findByText(/Nenhuma aprovação foi inferida/)).toBeInTheDocument();
-    expect(screen.queryByText("Aprovada (sandbox)")).toBeNull();
+    expect(screen.queryByText("Aprovada (teste)")).toBeNull();
   });
   it.each([
     { ...data, customer: { id: "foreign" } },
@@ -70,7 +70,7 @@ describe("stored onboarding evidence", () => {
     );
     const labels = evidenceLabels(await getOnboardingStatus(token, id));
     expect(labels.identity).toBe("Não confirmada");
-    expect(labels.screening).toContain("Não confirmado");
+    expect(labels.screening).toContain("Análise não confirmada");
   });
   it("keeps onboarding proxy GET-only", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch");

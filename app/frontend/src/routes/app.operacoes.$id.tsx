@@ -1,3 +1,4 @@
+import { PurchaseTimeline } from "@/components/peragus/purchase-timeline";
 import { CustomerRefund } from "@/components/peragus/customer-refund";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -94,8 +95,8 @@ function OperationDetail() {
   return (
     <>
       <SectionTitle
-        eyebrow="OPERAÇÕES / DETALHES"
-        title="Detalhes da operação"
+        eyebrow="HISTÓRICO / COMPRA"
+        title="Detalhes da transação"
         description="Confira os valores registrados e acompanhe a situação desta operação."
         action={
           <Link className="customer-button-secondary" to="/app/operacoes">
@@ -120,87 +121,102 @@ function OperationDetail() {
         </CustomerPanel>
       )}
       {operation && status === "ready" && (
-        <div className="customer-details-grid">
-          <CustomerPanel title="Resumo">
-            <div className="customer-row">
-              <span>Identificador</span>
-              <b style={{ overflowWrap: "anywhere" }}>{operation.id}</b>
-            </div>
-            <div className="customer-row">
-              <span>Criada em</span>
-              <b>{displayDate(operation.created_at)}</b>
-            </div>
-            <div className="customer-row">
-              <span>Valor registrado</span>
-              <b>{formatAmount(operation.source.amount, "BRL")}</b>
-            </div>
-            <div className="customer-row">
-              <span>Cotação estimada</span>
-              <b>{formatAmount(operation.estimated_target.amount, "USDT")} (indicativo)</b>
-            </div>
-            <div className="customer-row">
-              <span>Valor convertido</span>
-              <b>{formatAmount(operation.converted_target?.amount, "USDT")}</b>
-            </div>
-            <div className="customer-row">
-              <span>Estado</span>
-              <span className={"customer-chip " + statusStyle(operation)}>
-                {operationLabel(operation)}
-              </span>
-            </div>
-            <div className="customer-row">
-              <span>Rede de prova</span>
-              <b>{operation.destination.proof_network}</b>
-            </div>
-            <div className="customer-row">
-              <span>Carteira destino</span>
-              <b style={{ overflowWrap: "anywhere" }}>{operation.destination.wallet_address}</b>
-            </div>
-          </CustomerPanel>
-          <CustomerPanel title="Evidência e retirada">
-            <CustomerNotice kind="warning">
-              Conclusão no provedor sandbox não comprova transferência para a carteira. Referências
-              simuladas não são links do explorer.
-            </CustomerNotice>
-            <div className="customer-row">
-              <span>Ambiente</span>
-              <b>Sandbox / Devnet</b>
-            </div>
-            <div className="customer-row">
-              <span>Pix</span>
-              <b>{operation.pix?.state ?? "Sem registro"}</b>
-            </div>
-            <div className="customer-row">
-              <span>Retirada</span>
-              <b>{operation.withdrawal?.state ?? "Sem registro"}</b>
-            </div>
-            <div className="customer-row">
-              <span>Provedor finalizado</span>
-              <b>{operation.withdrawal?.provider_completed ? "Sim (sandbox)" : "Não"}</b>
-            </div>
-            <div className="customer-row">
-              <span>Entrega on-chain verificada</span>
-              <b>{operation.onchain_delivery_verified ? "Sim" : "Não"}</b>
-            </div>
-            {result && (
-              <>
+        <>
+          <PurchaseTimeline
+            paymentConfirmed={Boolean(operation.pix?.conversion_completed)}
+            deliveryVerified={operation.onchain_delivery_verified}
+            mainnetExecution={operation.mainnet_execution}
+            testEnvironment={operation.environment === "test"}
+          />
+          <div className="customer-details-grid">
+            <CustomerPanel title="Resumo">
+              <div className="customer-row">
+                <span>Identificador</span>
+                <b style={{ overflowWrap: "anywhere" }}>{operation.id}</b>
+              </div>
+              <div className="customer-row">
+                <span>Criada em</span>
+                <b>{displayDate(operation.created_at)}</b>
+              </div>
+              <div className="customer-row">
+                <span>Valor registrado</span>
+                <b>{formatAmount(operation.source.amount, "BRL")}</b>
+              </div>
+              <div className="customer-row">
+                <span>Cotação estimada</span>
+                <b>{formatAmount(operation.estimated_target.amount, "USDT")} (indicativo)</b>
+              </div>
+              <div className="customer-row">
+                <span>Valor convertido</span>
+                <b>{formatAmount(operation.converted_target?.amount, "USDT")}</b>
+              </div>
+              <div className="customer-row">
+                <span>Estado</span>
+                <span className={"customer-chip " + statusStyle(operation)}>
+                  {operationLabel(operation)}
+                </span>
+              </div>
+              <div className="customer-row">
+                <span>Rede de prova</span>
+                <b>{operation.destination.proof_network}</b>
+              </div>
+              <div className="customer-row">
+                <span>Carteira destino</span>
+                <b style={{ overflowWrap: "anywhere" }}>{operation.destination.wallet_address}</b>
+              </div>
+            </CustomerPanel>
+            <CustomerPanel title="Pagamento e entrega">
+              <CustomerNotice kind="warning">
+                Este registro é de teste, sem dinheiro real. O processamento finalizado não comprova
+                entrega na carteira.
+              </CustomerNotice>
+              <div className="customer-row">
+                <span>Ambiente</span>
+                <b>Testes · Solana Devnet</b>
+              </div>
+              <details className="premium-technical-details">
+                <summary>Detalhes técnicos e suporte</summary>{" "}
                 <div className="customer-row">
-                  <span>Valor bruto USDT</span>
-                  <b>{formatAmount(result.amounts.gross_amount, "USDT")}</b>
+                  <span>Pix</span>
+                  <b>{operation.pix?.state ?? "Sem registro"}</b>
                 </div>
                 <div className="customer-row">
-                  <span>Valor líquido USDT</span>
-                  <b>{formatAmount(result.amounts.net_amount, "USDT")}</b>
+                  <span>Entrega</span>
+                  <b>{operation.withdrawal?.state ?? "Sem registro"}</b>
                 </div>
                 <div className="customer-row">
-                  <span>Taxas deduzidas</span>
-                  <b>{formatAmount(result.amounts.deducted_amount, "USDT")}</b>
+                  <span>Processamento finalizado</span>
+                  <b>{operation.withdrawal?.provider_completed ? "Sim, em teste" : "Não"}</b>
                 </div>
-              </>
-            )}
-            {error && <CustomerNotice kind="warning">{error}</CustomerNotice>}
-          </CustomerPanel>
-        </div>
+                <div className="customer-row">
+                  <span>Entrega on-chain verificada</span>
+                  <b>{operation.onchain_delivery_verified ? "Sim" : "Não"}</b>
+                </div>
+                <p className="customer-muted">
+                  ID da transação na Solana: não disponível. Nenhum link de explorador é gerado sem
+                  uma confirmação verificável.
+                </p>
+              </details>
+              {result && (
+                <>
+                  <div className="customer-row">
+                    <span>Valor bruto USDT</span>
+                    <b>{formatAmount(result.amounts.gross_amount, "USDT")}</b>
+                  </div>
+                  <div className="customer-row">
+                    <span>Valor líquido USDT</span>
+                    <b>{formatAmount(result.amounts.net_amount, "USDT")}</b>
+                  </div>
+                  <div className="customer-row">
+                    <span>Taxas deduzidas</span>
+                    <b>{formatAmount(result.amounts.deducted_amount, "USDT")}</b>
+                  </div>
+                </>
+              )}
+              {error && <CustomerNotice kind="warning">{error}</CustomerNotice>}
+            </CustomerPanel>
+          </div>
+        </>
       )}
       {operation && status === "ready" && accessToken && (
         <CustomerRefund

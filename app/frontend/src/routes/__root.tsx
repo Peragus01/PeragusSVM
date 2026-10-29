@@ -85,6 +85,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { name: "author", content: "Peragus" },
       { property: "og:type", content: "website" },
+      { property: "og:image", content: "/peragus-mark.png" },
+      { name: "theme-color", content: "#080A0F" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
     links: [
@@ -92,7 +94,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "icon", href: "/favicon.png", type: "image/png" },
+      { rel: "icon", href: "/peragus-mark.png", type: "image/png" },
       {
         rel: "preload",
         href: "/fonts/manrope-latin-variable.woff2",

@@ -5,6 +5,7 @@ export interface Quote {
   source: { currency: "BRL"; amount: string };
   target: { currency: "USDT"; amount: string; chain: "solana" };
   rate: string;
+  exchange_conditions?: { amount_deducted: string | null };
   expires_at: string | null;
   environment: "test";
   indicative: true;
@@ -13,6 +14,7 @@ export interface Quote {
   external_delivery_costs_evaluated: false;
 }
 export interface PurchaseRecord {
+  destination?: { wallet_address: string; proof_network: "solana:devnet" };
   id: string;
   request_id: string;
   quote_id: string;
@@ -146,6 +148,14 @@ export function validateQuote(value: unknown, plan: PurchasePlan): Quote {
     value["target"]["chain"] !== "solana" ||
     !decimal(value["target"]["amount"]) ||
     !decimal(value["rate"]) ||
+    (value["exchange_conditions"] !== undefined &&
+      value["exchange_conditions"] !== null &&
+      (!record(value["exchange_conditions"]) ||
+        !(
+          value["exchange_conditions"]["amount_deducted"] === null ||
+          (typeof value["exchange_conditions"]["amount_deducted"] === "string" &&
+            /^\d{1,12}(?:\.\d{1,8})?$/.test(value["exchange_conditions"]["amount_deducted"]))
+        ))) ||
     !(
       value["expires_at"] === null ||
       (typeof value["expires_at"] === "string" && Number.isFinite(Date.parse(value["expires_at"])))
@@ -163,6 +173,11 @@ export function validatePurchase(value: unknown, plan: PurchasePlan, quote: Quot
     value["quote_id"] !== quote.id ||
     value["environment"] !== "test" ||
     value["state"] !== "recorded" ||
+    (value["destination"] !== undefined &&
+      (!record(value["destination"]) ||
+        value["destination"]["proof_network"] !== "solana:devnet" ||
+        typeof value["destination"]["wallet_address"] !== "string" ||
+        !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value["destination"]["wallet_address"]))) ||
     value["record_only"] !== true ||
     value["funding_started"] !== false ||
     value["job_enqueued"] !== false ||

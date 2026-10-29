@@ -44,7 +44,7 @@ describe("financial evidence presentation", () => {
     withdrawal: { provider_completed: true, recovery_required: false },
   } as CustomerOperation;
   it("does not turn provider completion into onchain delivery", () => {
-    expect(operationLabel(record)).toContain("entrega não verificada");
+    expect(operationLabel(record)).toContain("entrega não confirmada");
     expect(statusStyle(record)).not.toContain("green");
   });
   it("does not print unknown net fees as zero", () => {

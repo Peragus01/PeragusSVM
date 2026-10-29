@@ -1,5 +1,5 @@
 import { Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   ClipboardList,
@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import "@/customer.css";
+import "@/premium.css";
+import { useReveal } from "./motion";
 
 export function SectionTitle({
   eyebrow,
@@ -83,38 +85,42 @@ export function CustomerEmpty({ title, description }: { title: string; descripti
 export function PeragusBrand() {
   return (
     <span className="customer-brand">
-      <span className="customer-mark" aria-hidden="true">
-        P
-      </span>
+      <img
+        className="customer-official-mark"
+        src="/peragus-mark.png"
+        width="48"
+        height="34"
+        alt=""
+      />
       <span>
         <b>PERAGUS</b>
-        <small>PAYMENT INFRASTRUCTURE</small>
+        <small>REAIS. USDT. POSSIBILIDADES.</small>
       </span>
     </span>
   );
 }
 const NAV = [
-  { path: "/app" as const, label: "Visão geral", icon: LayoutDashboard, group: "Sua conta" },
+  { path: "/app" as const, label: "Início", icon: LayoutDashboard, group: "MINHA PERAGUS" },
   { path: "/app/comprar-usdt" as const, label: "Comprar USDT", icon: ShoppingBag, group: "" },
-  { path: "/app/operacoes" as const, label: "Operações", icon: ClipboardList, group: "" },
-  {
-    path: "/app/carteira" as const,
-    label: "Carteira",
-    icon: Wallet,
-    group: "Cadastro e segurança",
-  },
-  { path: "/app/minha-conta" as const, label: "Minha conta e KYC", icon: UserRound, group: "" },
-  { path: "/app/auditoria" as const, label: "Evidências", icon: ShieldCheck, group: "" },
+  { path: "/app/carteira" as const, label: "Minha carteira", icon: Wallet, group: "" },
+  { path: "/app/operacoes" as const, label: "Histórico", icon: ClipboardList, group: "" },
+  { path: "/app/minha-conta" as const, label: "Minha conta", icon: UserRound, group: "" },
 ];
 export function CustomerLayout() {
+  useReveal();
   const session = useCustomerSession();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const sidebar = useRef<HTMLElement>(null);
   const [mobile, setMobile] = useState(false);
   useEffect(() => {
     if (!window.matchMedia) return;
     const media = window.matchMedia("(max-width: 800px)");
-    const sync = () => setMobile(media.matches);
+    const sync = () => {
+      setMobile(media.matches);
+      if (!media.matches) setOpen(false);
+    };
     sync();
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
@@ -124,11 +130,34 @@ export function CustomerLayout() {
   }, [session.status, navigate]);
   useEffect(() => {
     if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const links = () =>
+      Array.from(
+        sidebar.current?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? [],
+      ).filter((node) => node.getClientRects().length > 0);
+    links()[0]?.focus();
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
+      if (event.key === "Tab") {
+        const items = links();
+        const first = items[0],
+          last = items[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
     };
     document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("keydown", close);
+      document.body.style.overflow = previousOverflow;
+      menuButton.current?.focus();
+    };
   }, [open]);
   if (session.status !== "authenticated" || !session.identity) {
     return (
@@ -152,7 +181,12 @@ export function CustomerLayout() {
           onClick={() => setOpen(false)}
         />
       )}
-      <aside className={"customer-sidebar" + (open ? " is-open" : "")} inert={mobile && !open}>
+      <aside
+        id="customer-navigation"
+        ref={sidebar}
+        className={"customer-sidebar" + (open ? " is-open" : "")}
+        inert={mobile && !open}
+      >
         <div className="customer-sidebar-brand">
           <Link to="/app" aria-label="Peragus — sua conta">
             <PeragusBrand />
@@ -183,18 +217,42 @@ export function CustomerLayout() {
           ))}
         </nav>
         <div className="customer-sidebar-footer">
-          <ShieldCheck size={20} /> <b>Você está no sandbox</b>
-          <p>Explore o piloto sem movimentar dinheiro real.</p>
+          <ShieldCheck size={20} /> <b>Seu acesso protegido</b>
+          <p>Nunca compartilhe sua senha ou as chaves da sua carteira.</p>
           <Link to="/" className="customer-link">
             Conheça a Peragus <ArrowRight size={14} />
           </Link>
         </div>
       </aside>
-      <div className="customer-main">
+      <nav className="customer-bottom-nav" inert={mobile && open} aria-label="Atalhos no celular">
+        {NAV.map(({ path, label, icon: Icon }) => (
+          <Link
+            key={path}
+            to={path}
+            activeOptions={{ exact: path === "/app" }}
+            activeProps={{ className: "active", "aria-current": "page" }}
+          >
+            <Icon size={20} />
+            <span>
+              {label === "Comprar USDT"
+                ? "Comprar"
+                : label === "Minha carteira"
+                  ? "Carteira"
+                  : label === "Minha conta"
+                    ? "Conta"
+                    : label}
+            </span>
+          </Link>
+        ))}
+      </nav>
+      <div className="customer-main" inert={mobile && open}>
         <header className="customer-topbar">
           <button
             type="button"
             aria-label="Abrir navegação"
+            aria-expanded={open}
+            aria-controls="customer-navigation"
+            ref={menuButton}
             className="customer-menu"
             onClick={() => setOpen(true)}
           >
@@ -204,7 +262,7 @@ export function CustomerLayout() {
             Minha Peragus
           </Link>
           <div className="customer-top-actions">
-            <span className="customer-environment">Sandbox · ambiente de testes</span>
+            <span className="customer-environment">Ambiente de testes · sem dinheiro real</span>
             <Link to="/app/comprar-usdt" className="customer-top-buy customer-button">
               Comprar USDT <ArrowRight size={15} />
             </Link>
@@ -237,6 +295,7 @@ export function CustomerLayout() {
   );
 }
 export function CustomerPublicLayout({ children }: { children: ReactNode }) {
+  useReveal();
   return (
     <div className="customer-public">
       <header className="customer-public-header">

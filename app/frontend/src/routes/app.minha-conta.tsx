@@ -1,5 +1,5 @@
 import { OnboardingEvidence } from "@/components/peragus/onboarding-evidence";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { CustomerNotice, CustomerPanel, SectionTitle } from "@/components/peragus/customer-ui";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
@@ -32,7 +32,7 @@ function AccountPage() {
   return (
     <>
       <SectionTitle
-        eyebrow="PERFIL / COMPLIANCE"
+        eyebrow="CADASTRO E SEGURANÇA"
         title="Minha conta"
         description="Gerencie sua identidade e acompanhe a análise de verificação."
         action={
@@ -89,17 +89,22 @@ function AccountPage() {
           </div>
           <div className="customer-row">
             <span>Dados de KYC</span>
-            <b>Somente metadados de status</b>
+            <b>Status das verificações</b>
           </div>
           <div className="customer-row">
             <span>Consentimento</span>
-            <b>Não solicitado neste módulo</b>
+            <b>Não solicitado nesta página</b>
           </div>
           <p className="customer-muted">
             Quando disponível, a verificação documental será realizada em um fluxo seguro do serviço
             responsável.
           </p>
         </CustomerPanel>
+      </div>
+      <div className="premium-support-link">
+        <Link to="/app/auditoria" className="customer-link">
+          Detalhes da transação e suporte →
+        </Link>
       </div>
       <CustomerPanel title="Verificação de identidade (KYC)">
         <OnboardingEvidence />
@@ -114,7 +119,7 @@ function AccountPage() {
             [
               "3",
               "Análise de conformidade",
-              "Status de verificação obtido do backend; sem aprovação local.",
+              "Análise de acordo com os resultados registrados para sua conta.",
             ],
             [
               "4",

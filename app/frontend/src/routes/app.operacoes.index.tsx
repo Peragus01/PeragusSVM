@@ -34,16 +34,16 @@ export function CustomerOperations() {
   return (
     <>
       <SectionTitle
-        eyebrow="TRANSPARÊNCIA / HISTÓRICO"
-        title="Operações"
-        description="Acompanhe suas intenções de compra e os próximos estados de cada operação."
+        eyebrow="SUAS TRANSAÇÕES"
+        title="Histórico de compras"
+        description="Acompanhe valores, pagamentos e a entrega na sua carteira."
       />
       <CustomerNotice>
-        Os registros exibidos pertencem ao ambiente de testes. Conclusão do provedor não significa
-        entrega on-chain confirmada.
+        Ambiente de testes · sem dinheiro real. Um registro ou processamento finalizado não
+        significa USDT entregue.
       </CustomerNotice>
       <CustomerPanel
-        title="Histórico de operações"
+        title="Suas compras"
         action={
           <Link to="/app/comprar-usdt" className="customer-link">
             Comprar USDT →
@@ -63,9 +63,9 @@ export function CustomerOperations() {
             Etapa
             <select value={stage} onChange={(e) => setStage(e.target.value)}>
               <option value="">Todas as etapas</option>
-              <option value="purchase_recorded">Registro de compra</option>
+              <option value="purchase_recorded">Registro de teste</option>
               <option value="pix">Pix / conversão</option>
-              <option value="withdrawal">Retirada</option>
+              <option value="withdrawal">Entrega</option>
             </select>
           </label>
           {(from || until || stage) && (
@@ -110,13 +110,13 @@ export function CustomerOperations() {
         )}
         {state === "loading" && !data && (
           <p role="status" className="customer-muted">
-            Buscando registros autenticados…
+            Carregando histórico…
           </p>
         )}
         {state !== "error" && data?.data.length === 0 && (
           <CustomerEmpty
             title="Nenhum registro disponível"
-            description="Ainda não existem operações associadas à sua identidade."
+            description="Suas compras e registros de teste aparecerão aqui."
           />
         )}
         {data && visible.length > 0 && (
@@ -126,7 +126,7 @@ export function CustomerOperations() {
             aria-label="Tabela de operações"
             tabIndex={0}
           >
-            <table className="customer-table">
+            <table className="customer-table premium-history-table">
               <caption className="sr-only">Operações da sua conta no ambiente de testes</caption>
               <thead>
                 <tr>
@@ -140,13 +140,13 @@ export function CustomerOperations() {
               <tbody>
                 {visible.map((op) => (
                   <tr key={op.id}>
-                    <td>{displayDate(op.created_at)}</td>
-                    <td>{formatAmount(op.source.amount, "BRL")}</td>
-                    <td>
+                    <td data-label="Data">{displayDate(op.created_at)}</td>
+                    <td data-label="Valor em reais">{formatAmount(op.source.amount, "BRL")}</td>
+                    <td data-label="USDT estimado">
                       {formatAmount(op.estimated_target.amount, "USDT")}{" "}
                       <span className="customer-muted">indicativo</span>
                     </td>
-                    <td>
+                    <td data-label="Status">
                       <span className={"customer-chip " + statusStyle(op)}>
                         {operationLabel(op)}
                       </span>
@@ -156,7 +156,15 @@ export function CustomerOperations() {
                         </p>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Transação">
+                      <details className="premium-history-reference">
+                        <summary>Referências</summary>
+                        <span className="premium-address">
+                          ID: {op.id}
+                          <br />
+                          Carteira: {op.destination?.wallet_address ?? "Não informada"}
+                        </span>
+                      </details>
                       <Link
                         className="customer-link"
                         to="/app/operacoes/$id"

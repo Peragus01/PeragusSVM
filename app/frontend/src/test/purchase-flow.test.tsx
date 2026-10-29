@@ -86,6 +86,37 @@ describe("sandbox purchase flow", () => {
       ),
     ).toThrow();
   });
+  it("preserves reported deductions, rejects malformed costs and ignores a browser destination", () => {
+    const withCost = { ...quote(), exchange_conditions: { amount_deducted: "1.52" } };
+    expect(validateQuote(withCost, plan).exchange_conditions?.amount_deducted).toBe("1.52");
+    expect(() =>
+      validateQuote({ ...withCost, exchange_conditions: { amount_deducted: "free" } }, plan),
+    ).toThrow();
+    expect(validateQuote(quote(), plan).exchange_conditions).toBeUndefined();
+    expect(() =>
+      validatePurchase(
+        {
+          ...purchase(),
+          destination: { wallet_address: "not-an-address", proof_network: "solana:devnet" },
+        },
+        plan,
+        validateQuote(quote(), plan),
+      ),
+    ).toThrow();
+    expect(() =>
+      validatePurchase(
+        {
+          ...purchase(),
+          destination: {
+            wallet_address: "8BRSnNBGszJCxYJ1xhqsacBVsfM2tr6UdaoBKv52YnxB",
+            proof_network: "solana:mainnet",
+          },
+        },
+        plan,
+        validateQuote(quote(), plan),
+      ),
+    ).toThrow();
+  });
   it("persists IDs before POST, blocks double submission and only records an intention", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       const saved = readPurchasePlan(id)!;
@@ -97,13 +128,13 @@ describe("sandbox purchase flow", () => {
     });
     render(<PurchaseForm customerId={id} token="synthetic.token" />);
     fireEvent.change(screen.getByLabelText(/Quanto deseja/), { target: { value: "1000,00" } });
-    const button = screen.getByRole("button", { name: "Consultar cotação sandbox" });
+    const button = screen.getByRole("button", { name: "Consultar cotação" });
     fireEvent.click(button);
     fireEvent.click(button);
     await screen.findByText("184,61 USDT · Solana");
     expect(fetcher).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "Registrar intenção sandbox" }));
-    await screen.findByText(/Intenção registrada:/);
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar registro de teste" }));
+    await screen.findByRole("heading", { name: "Registro de teste salvo" });
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(fetcher.mock.calls.map((c) => c[0])).toEqual([
       "/api/v1/me/quotes",
@@ -118,11 +149,11 @@ describe("sandbox purchase flow", () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network"));
     render(<PurchaseForm customerId={id} token="synthetic.token" />);
     fireEvent.change(screen.getByLabelText(/Quanto deseja/), { target: { value: "1000" } });
-    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação sandbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação" }));
     await screen.findByRole("alert");
     const first = readPurchasePlan(id)!.quoteRequestId;
     expect(fetcher).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação desta intenção" }));
+    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação desta solicitação" }));
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
     expect(readPurchasePlan(id)!.quoteRequestId).toBe(first);
   });
@@ -133,7 +164,7 @@ describe("sandbox purchase flow", () => {
       .mockResolvedValue(Response.json({ data: quote() }));
     render(<PurchaseForm customerId={id} token="synthetic.token" />);
     expect(fetcher).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação desta intenção" }));
+    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação desta solicitação" }));
     await screen.findByText("184,61 USDT · Solana");
     expect(fetcher.mock.calls[0]![1]!.method).toBe("GET");
   });
@@ -147,12 +178,12 @@ describe("sandbox purchase flow", () => {
     );
     const view = render(<PurchaseForm customerId={id} token="first.token" />);
     fireEvent.change(screen.getByLabelText(/Quanto deseja/), { target: { value: "1000" } });
-    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação sandbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação" }));
     const saved = readPurchasePlan(id)!;
     view.rerender(<PurchaseForm customerId={id} token="second.token" />);
     finish(Response.json({ data: quote(saved) }));
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole("button", { name: "Registrar intenção sandbox" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Confirmar registro de teste" })).toBeNull();
   });
   it("blocks expired quotes before recording and does not infer a purchase", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
@@ -162,9 +193,9 @@ describe("sandbox purchase flow", () => {
     );
     render(<PurchaseForm customerId={id} token="synthetic.token" />);
     fireEvent.change(screen.getByLabelText(/Quanto deseja/), { target: { value: "1000" } });
-    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação sandbox" }));
-    await screen.findByRole("button", { name: "Registrar intenção sandbox" });
-    fireEvent.click(screen.getByRole("button", { name: "Registrar intenção sandbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação" }));
+    await screen.findByRole("button", { name: "Confirmar registro de teste" });
+    expect(screen.getByRole("button", { name: "Confirmar registro de teste" })).toBeDisabled();
     await screen.findByText(/A cotação expirou/);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(readPurchasePlan(id)!.purchaseAttempted).toBe(false);
@@ -176,7 +207,7 @@ describe("sandbox purchase flow", () => {
     const fetcher = vi.spyOn(globalThis, "fetch");
     render(<PurchaseForm customerId={id} token="synthetic.token" />);
     fireEvent.change(screen.getByLabelText(/Quanto deseja/), { target: { value: "1000" } });
-    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação sandbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Consultar cotação" }));
     await screen.findByRole("alert");
     expect(fetcher).not.toHaveBeenCalled();
   });

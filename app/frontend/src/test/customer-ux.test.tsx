@@ -79,7 +79,7 @@ describe("customer UX", () => {
   it("exposes login on the public home without polling health or mounting the technical control room", () => {
     const fetcher = vi.spyOn(globalThis, "fetch");
     render(<PublicHome />);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Menos fronteiras");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Sem fronteiras");
     expect(screen.getByRole("link", { name: "Acessar minha conta" })).toHaveAttribute(
       "href",
       "/login",

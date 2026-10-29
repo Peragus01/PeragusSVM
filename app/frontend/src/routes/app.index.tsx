@@ -1,6 +1,6 @@
 import { OnboardingEvidence } from "@/components/peragus/onboarding-evidence";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowUpRight } from "lucide-react";
+import { Wallet, ArrowRight, ArrowUpRight } from "lucide-react";
 import {
   CustomerEmpty,
   CustomerNotice,
@@ -23,41 +23,58 @@ function CustomerDashboard() {
   return (
     <>
       <SectionTitle
-        eyebrow="SUA CENTRAL FINANCEIRA"
+        eyebrow="MINHA PERAGUS"
         title={"Olá, " + name + "."}
-        description="Sua conta e suas últimas operações, com clareza em cada etapa."
+        description="Suas compras, sua carteira e o próximo passo, em um só lugar."
         action={
           <Link to="/app/comprar-usdt" className="customer-button">
             Comprar USDT <ArrowUpRight size={15} />
           </Link>
         }
       />
-      <CustomerNotice kind="warning">
-        Você está no piloto sandbox. Os registros são de teste e não representam movimentações de
-        dinheiro real.
-      </CustomerNotice>
-      <div className="customer-grid">
-        <div className="customer-panel customer-metric">
-          <span>Perfil cadastral local</span>
-          <strong>{identity?.customer?.verification_status ?? "Sem perfil"}</strong>
-          <small>Separado das verificações de identidade</small>
+      <section className="premium-dashboard-hero">
+        <div>
+          <span className="customer-eyebrow">DO SEU JEITO. NA SUA CARTEIRA.</span>
+          <h2>
+            Reais aqui.
+            <br />
+            <em>USDT para ir além.</em>
+          </h2>
+          <p>Consulte sua cotação, confira os detalhes e acompanhe cada confirmação.</p>
+          <Link to="/app/comprar-usdt" className="customer-button">
+            Comprar USDT <ArrowRight size={18} />
+          </Link>
+          <small>Ambiente de testes · sem dinheiro real. Pix e entrega ainda indisponíveis.</small>
         </div>
-        <div className="customer-panel customer-metric">
-          <span>Operações financeiras</span>
-          <strong>
-            {identity?.customer?.operations_enabled ? "Consultar condições" : "Indisponíveis"}
-          </strong>
-          <small>Disponibilidade sujeita às condições da conta</small>
+        <div className="premium-dashboard-assets" aria-hidden="true">
+          <span className="premium-orbit" />
+          <span className="premium-hero-coin brl-icon">R$</span>
+          <ArrowRight size={28} />
+          <span className="premium-hero-coin usdt-icon">₮</span>
+          <span className="premium-orbit second" />
         </div>
-        <div className="customer-panel customer-metric">
-          <span>Operações recentes</span>
-          <strong>{state === "ready" ? String(data?.data.length ?? 0) : "—"}</strong>
-          <small>Nesta consulta · veja mais no histórico</small>
-        </div>
+      </section>
+      <div className="premium-quick-grid">
+        <Link to="/app/carteira" className="premium-quick-link">
+          <Wallet size={23} />
+          <div>
+            <b>Minha carteira</b>
+            <p>Confira sua conexão e a rede disponível.</p>
+          </div>
+          <ArrowUpRight size={20} />
+        </Link>
+        <Link to="/app/minha-conta" className="premium-quick-link">
+          <span className="premium-account-dot" />
+          <div>
+            <b>Minha conta</b>
+            <p>Cadastro, acesso e verificações de identidade.</p>
+          </div>
+          <ArrowUpRight size={20} />
+        </Link>
       </div>
       <div className="customer-grid-two">
         <CustomerPanel
-          title="Últimas operações"
+          title="Últimas compras"
           action={
             <Link to="/app/operacoes" className="customer-link">
               Ver histórico <ArrowUpRight size={14} />
@@ -66,7 +83,7 @@ function CustomerDashboard() {
         >
           {state === "loading" ? (
             <p role="status" className="customer-muted">
-              Carregando operações…
+              Carregando histórico…
             </p>
           ) : state === "error" ? (
             <>
@@ -77,8 +94,8 @@ function CustomerDashboard() {
             </>
           ) : !data?.data.length ? (
             <CustomerEmpty
-              title="Nenhuma operação registrada"
-              description="Seus registros autenticados aparecerão aqui quando estiverem disponíveis."
+              title="Seu histórico começa aqui"
+              description="Suas compras e registros de teste aparecerão aqui. Consulte uma cotação para começar."
             />
           ) : (
             data.data.map((op) => (
@@ -105,12 +122,8 @@ function CustomerDashboard() {
           <div className="customer-steps">
             {[
               ["1", "Identidade", "Confira o status cadastral e de verificação em Minha conta."],
-              [
-                "2",
-                "Carteira",
-                "Confira a carteira conectada e o que ela representa no ambiente de testes.",
-              ],
-              ["3", "Compra", "Consulte uma cotação indicativa e registre sua intenção em reais."],
+              ["2", "Carteira", "Confira seu endereço e a rede antes de qualquer transferência."],
+              ["3", "Cotação", "Informe o valor em reais e revise a estimativa de USDT."],
             ].map(([n, t, d]) => (
               <div className="customer-step" key={n}>
                 <span className="customer-step-count">{n}</span>
@@ -126,9 +139,10 @@ function CustomerDashboard() {
           </Link>
         </CustomerPanel>
       </div>
-      <CustomerPanel title="Cadastro e verificação de identidade">
+      <details className="premium-account-details">
+        <summary>Cadastro e verificação de identidade</summary>
         <OnboardingEvidence />
-      </CustomerPanel>
+      </details>
     </>
   );
 }
