@@ -1,3 +1,4 @@
+import { profileLabel } from "@/lib/peragus/customer-copy";
 import { useEffect, useState } from "react";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import {
@@ -31,29 +32,29 @@ export function OnboardingEvidence() {
   return (
     <>
       <div className="customer-row">
-        <span>Perfil local (separado do KYC)</span>
-        <b>{identity?.customer?.verification_status ?? "Não cadastrado"}</b>
+        <span>Dados cadastrais</span>
+        <b>{profileLabel(identity?.customer?.verification_status)}</b>
       </div>
       {!id ? (
-        <CustomerNotice>Perfil cadastral necessário para consultar as evidências.</CustomerNotice>
+        <CustomerNotice>Perfil cadastral necessário para consultar as verificações.</CustomerNotice>
       ) : failed === accessToken ? (
         <CustomerNotice kind="warning">
-          Não foi possível consultar as evidências. Nenhuma aprovação foi inferida.
+          Não foi possível consultar as verificações. Nenhuma aprovação foi inferida.
         </CustomerNotice>
       ) : !data ? (
-        <p role="status">Consultando evidências…</p>
+        <p role="status">Consultando verificações…</p>
       ) : (
         <>
           <div className="customer-row">
-            <span>Cadastro no provedor</span>
+            <span>Análise cadastral</span>
             <b>{labels?.provider}</b>
           </div>
           <div className="customer-row">
-            <span>Identidade no provedor</span>
+            <span>Verificação de identidade</span>
             <b>{labels?.identity}</b>
           </div>
           <div className="customer-row">
-            <span>Screening separado</span>
+            <span>Análise de conformidade</span>
             <b>{labels?.screening}</b>
           </div>
           <div className="customer-row">
@@ -61,8 +62,8 @@ export function OnboardingEvidence() {
             <b>{data.pending_steps.length ? data.pending_steps.length : "Nenhuma"}</b>
           </div>
           <CustomerNotice>
-            Observações salvas em sandbox; atualidade não avaliada. Identidade e screening são
-            verificações separadas. Esses resultados não autorizam operações financeiras.
+            Resultados registrados em ambiente de testes, sem nova validação de atualidade. Essas
+            verificações não habilitam compras com dinheiro real.
           </CustomerNotice>
         </>
       )}
@@ -72,7 +73,7 @@ export function OnboardingEvidence() {
           className="customer-button-secondary"
           onClick={() => setAttempt((n) => n + 1)}
         >
-          Consultar evidências salvas
+          Atualizar verificações
         </button>
       )}
     </>

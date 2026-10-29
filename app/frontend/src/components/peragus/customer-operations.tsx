@@ -72,19 +72,33 @@ export function formatAmount(amount: string | null | undefined, currency: "BRL" 
   );
 }
 export function operationLabel(operation: CustomerOperation) {
-  if (operation.onchain_delivery_verified && operation.mainnet_execution)
-    return "Entrega verificada";
-  if (operation.withdrawal?.provider_completed)
-    return "Provedor finalizado · entrega não verificada";
+  if (
+    operation.onchain_delivery_verified &&
+    operation.mainnet_execution &&
+    operation.environment !== "test"
+  )
+    return "USDT entregue";
   if (operation.withdrawal?.recovery_required) return "Requer análise";
-  if (operation.stage === "withdrawal") return "Retirada em processamento";
-  if (operation.stage === "pix") return "Pix / conversão em acompanhamento";
-  return "Registro de compra";
+  if (operation.withdrawal?.provider_completed)
+    return "Processamento finalizado · entrega não confirmada";
+  if (operation.stage === "withdrawal")
+    return operation.withdrawal?.withdrawal_started
+      ? "Entrega em processamento"
+      : "Aguardando análise";
+  if (operation.stage === "pix") {
+    if (operation.pix?.state === "expired") return "Pagamento expirado";
+    if (operation.pix?.state === "failed") return "Pagamento não concluído";
+    if (operation.pix?.state === "cancelled") return "Pagamento cancelado";
+    return "Aguardando confirmação";
+  }
+  return "Registro de teste";
 }
 export function statusStyle(operation: CustomerOperation) {
   return operation.withdrawal?.recovery_required
     ? "customer-chip-danger"
-    : operation.onchain_delivery_verified && operation.mainnet_execution
+    : operation.onchain_delivery_verified &&
+        operation.mainnet_execution &&
+        operation.environment !== "test"
       ? "customer-chip-green"
       : "customer-chip-warning";
 }

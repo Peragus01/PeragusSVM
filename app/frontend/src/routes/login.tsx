@@ -44,7 +44,7 @@ export function LoginPage() {
           </CustomerNotice>
         )}
         {error && <CustomerNotice kind="danger">{error}</CustomerNotice>}
-        <form onSubmit={(e) => void submit(e)}>
+        <form aria-busy={busy} onSubmit={(e) => void submit(e)}>
           <label className="customer-field">
             E-mail
             <input
@@ -84,7 +84,10 @@ export function LoginPage() {
             type="submit"
           >
             {busy ? (
-              "Entrando…"
+              <>
+                <span className="premium-spinner" aria-hidden="true" />
+                Entrando…
+              </>
             ) : (
               <>
                 Entrar na Peragus <ArrowRight size={17} />

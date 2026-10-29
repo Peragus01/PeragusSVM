@@ -58,16 +58,16 @@ export async function getOnboardingStatus(
 export function evidenceLabels(d: OnboardingStatus) {
   return {
     provider:
-      d.registration?.provider_status === "approved" ? "Aprovado (sandbox)" : "Não confirmado",
+      d.registration?.provider_status === "approved" ? "Aprovado (teste)" : "Não confirmado",
     identity:
       d.identity?.identity_outcome === "approved"
-        ? "Aprovada (sandbox)"
+        ? "Aprovada (teste)"
         : d.identity?.identity_outcome === "rejected"
-          ? "Rejeitada (sandbox)"
+          ? "Rejeitada (teste)"
           : "Não confirmada",
     screening:
       d.screening?.status === "completed" && d.screening.result === "clear"
         ? "Concluído · sem apontamentos"
-        : "Não confirmado como concluído e clear",
+        : "Análise não confirmada",
   };
 }

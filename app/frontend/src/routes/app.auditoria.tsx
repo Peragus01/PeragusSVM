@@ -16,9 +16,9 @@ function CustomerAudit() {
   return (
     <>
       <SectionTitle
-        eyebrow="EVIDÊNCIAS / CLIENTE"
-        title="Auditoria"
-        description="Evidências permitidas à sua conta, sem acesso a ações ou registros administrativos."
+        eyebrow="HISTÓRICO / SUPORTE"
+        title="Detalhes da transação"
+        description="Consulte os registros das suas transações e informações de suporte."
       />
       <CustomerNotice kind="warning">
         Esta visão apresenta exclusivamente metadados das operações do usuário autenticado. Não
@@ -28,7 +28,7 @@ function CustomerAudit() {
       <CustomerPanel title="Registros observáveis">
         {state === "loading" && !data && (
           <p role="status" className="customer-muted">
-            Consultando suas evidências…
+            Consultando seus registros…
           </p>
         )}
         {state === "error" && (
@@ -41,7 +41,7 @@ function CustomerAudit() {
         )}
         {state !== "error" && data?.data.length === 0 && (
           <CustomerEmpty
-            title="Nenhuma evidência disponível"
+            title="Nenhum registro disponível"
             description="Eventos de operações aparecerão aqui quando existirem registros associados à conta."
           />
         )}
@@ -58,7 +58,7 @@ function CustomerAudit() {
               </div>
             </div>
             <Link className="customer-link" to="/app/operacoes/$id" params={{ id: op.id }}>
-              Inspecionar
+              Ver detalhes
             </Link>
           </div>
         ))}

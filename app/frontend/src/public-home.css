@@ -469,3 +469,343 @@
     margin-left: auto;
   }
 }
+
+/* Peragus premium identity, original photo and supplied official mark. */
+.peragus-home {
+  background: #080a0f;
+  color: #f4f7fc;
+  --public-accent: #8db5ff;
+}
+.public-nav {
+  background: #080a0ff5;
+}
+.public-nav .customer-official-mark {
+  width: 48px;
+  height: 34px;
+}
+.public-nav .customer-brand b {
+  color: #f4f7fc;
+}
+.public-button {
+  background: #2f6ae0;
+  color: #fff;
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease;
+}
+.public-button:hover {
+  background: #285cc5;
+  transform: translateY(-2px);
+}
+.public-button:active {
+  transform: scale(0.985);
+}
+.public-hero {
+  min-height: 690px;
+  position: relative;
+}
+.public-hero > img {
+  opacity: 0.4;
+}
+.public-hero-shade {
+  background:
+    linear-gradient(90deg, #080a0ff5, #080a0fa0 55%, #080a0f65),
+    linear-gradient(0deg, #080a0f, transparent 35%);
+}
+.public-hero-content {
+  position: relative;
+  z-index: 2;
+  max-width: 1280px;
+  width: 100%;
+  margin: auto;
+}
+.public-hero h1 {
+  font-size: clamp(46px, 4.8vw, 72px);
+  line-height: 1.1;
+  letter-spacing: -0.055em;
+  font-weight: 550;
+}
+.public-hero h1 em {
+  color: #8db5ff;
+}
+.public-hero-content > p {
+  max-width: 440px;
+  color: #c4cdde;
+  font-size: 16px;
+}
+.public-eyebrow {
+  color: #8db5ff;
+}
+.public-hero-content > * {
+  animation: peragus-hero-in 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.public-hero-content > h1 {
+  animation-delay: 0.05s;
+}
+.public-hero-content > p {
+  animation-delay: 0.1s;
+}
+.public-hero-content > .public-button {
+  animation-delay: 0.15s;
+}
+.public-conversion-visual {
+  position: absolute;
+  right: max(40px, calc((100vw - 1280px) / 2));
+  top: 50%;
+  transform: translateY(-50%);
+  width: 380px;
+  padding: 26px;
+  border-radius: 26px;
+  background: #0d111beb;
+  border: 1px solid #ffffff1a;
+  box-shadow: 0 30px 90px #0006;
+  z-index: 3;
+  animation: peragus-visual-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.public-conversion-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: #a0aabd;
+  margin-bottom: 24px;
+}
+.public-conversion-top > span:last-child {
+  color: #38c9e8;
+  font-size: 22px;
+}
+.public-asset {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 20px 16px;
+  background: #151c29;
+  border-radius: 16px;
+}
+.public-asset .asset-icon {
+  width: 39px;
+  height: 39px;
+  font-size: 19px;
+}
+.public-asset small {
+  color: #a0aabd;
+  display: block;
+  font-size: 10px;
+  margin-bottom: 5px;
+}
+.public-asset strong {
+  font-weight: 550;
+  font-size: 15px;
+}
+.public-asset > b {
+  margin-left: auto;
+  color: #a0aabd;
+  font-size: 11px;
+}
+.public-conversion-arrow {
+  width: 30px;
+  height: 30px;
+  border: 4px solid #0d111b;
+  display: grid;
+  place-items: center;
+  position: relative;
+  background: #111c30;
+  border-radius: 9px;
+  margin: -5px auto;
+  color: #8db5ff;
+  font-size: 15px;
+}
+.public-conversion-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #8db5ff;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid #ffffff12;
+}
+.public-conversion-visual > p {
+  font-size: 10px;
+  line-height: 1.8;
+  color: #a0aabd;
+  margin: 17px 0 0;
+}
+.public-feature-grid article {
+  background: #0d111b;
+  border-color: #ffffff12;
+  transition:
+    transform 0.22s ease,
+    border-color 0.22s ease;
+}
+.public-feature-grid article:hover {
+  transform: translateY(-4px);
+  border-color: #397bff50;
+}
+.public-feature-icon {
+  background: #397bff12;
+  color: #8db5ff;
+}
+.public-business-card {
+  background: #111c30;
+  border-color: #ffffff12;
+}
+.public-business-card svg {
+  color: #38c9e8;
+}
+.public-business-card > span {
+  color: #8db5ff;
+}
+.public-end {
+  background: #111c30;
+}
+.public-footer {
+  background: #080a0f;
+  border-color: #ffffff0c;
+}
+.reveal-ready {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.6s ease,
+    transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.reveal-ready.is-revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+@keyframes peragus-hero-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes peragus-visual-in {
+  from {
+    opacity: 0;
+    translate: 0 14px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@media (max-width: 1100px) {
+  .public-conversion-visual {
+    width: 320px;
+    right: 28px;
+    padding: 20px;
+  }
+  .public-hero h1 {
+    font-size: 55px;
+  }
+  .public-hero-content > p {
+    max-width: 390px;
+  }
+  .public-hero-content {
+    padding-left: 40px;
+  }
+}
+@media (max-width: 800px) {
+  .public-conversion-visual {
+    position: relative;
+    right: auto;
+    top: auto;
+    transform: none;
+    width: calc(100% - 40px);
+    max-width: 440px;
+    margin: 0 auto 32px;
+  }
+  .public-hero {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+  }
+  .public-hero-content {
+    padding: 55px 24px 30px;
+  }
+  .public-hero h1 {
+    font-size: 48px;
+  }
+  .public-hero-content > p {
+    font-size: 14px;
+  }
+  .public-nav .customer-brand {
+    min-width: 0;
+  }
+  .public-nav .customer-brand small {
+    display: none;
+  }
+  .public-nav .customer-official-mark {
+    width: 36px;
+    height: 27px;
+  }
+  .public-nav .customer-brand b {
+    font-size: 13px;
+  }
+  .public-nav {
+    gap: 12px;
+    padding: 0 20px;
+  }
+  .public-nav-actions {
+    gap: 12px;
+  }
+  .public-nav-actions .public-button {
+    font-size: 10px;
+    padding: 0 12px;
+  }
+  .public-login {
+    font-size: 12px;
+  }
+  .public-nav-actions .public-button svg {
+    display: none;
+  }
+}
+@media (max-width: 370px) {
+  .public-nav .customer-brand b {
+    font-size: 11px;
+  }
+  .public-nav {
+    padding: 0 14px;
+  }
+  .public-nav-actions {
+    gap: 8px;
+  }
+  .public-hero h1 {
+    font-size: 42px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .peragus-home * {
+    animation: none !important;
+    transition: none !important;
+  }
+  .reveal-ready {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (max-width: 800px) {
+  .public-nav-actions .public-button {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .public-login {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .public-hero {
+    height: auto;
+  }
+  .public-hero h1 {
+    font-size: clamp(34px, 10.2vw, 40px);
+    line-height: 1.13;
+  }
+}

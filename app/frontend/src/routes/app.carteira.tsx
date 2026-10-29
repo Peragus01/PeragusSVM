@@ -1,3 +1,4 @@
+import { profileLabel } from "@/lib/peragus/customer-copy";
 import { createFileRoute } from "@tanstack/react-router";
 import { CustomerNotice, CustomerPanel, SectionTitle } from "@/components/peragus/customer-ui";
 import { usePeragusWallet } from "@/components/peragus/wallet-context";
@@ -9,13 +10,13 @@ function WalletPage() {
   return (
     <>
       <SectionTitle
-        eyebrow="IDENTIDADE / SOLANA"
-        title="Carteira e identidade"
-        description="Conexão segura de uma carteira para visualizar sua identificação pública."
+        eyebrow="SEU ENDEREÇO DE RECEBIMENTO"
+        title="Minha carteira"
+        description="Conecte sua carteira Solana e confira o endereço público. Suas chaves continuam com você."
       />
       <CustomerNotice kind="warning">
-        A conexão Wallet Standard existente opera em Devnet. Não representa carteira de recebimento
-        em mainnet e não efetua vinculação de titularidade à conta Peragus.
+        A conexão disponível usa a rede de testes Solana Devnet. Não envie fundos reais. Conectar a
+        carteira aqui não altera o endereço vinculado à sua conta.
       </CustomerNotice>
       <div className="customer-grid-two">
         <CustomerPanel title="Sua carteira">
@@ -28,8 +29,8 @@ function WalletPage() {
             <b style={{ overflowWrap: "anywhere" }}>{wallet.address ?? "Não conectado"}</b>
           </div>
           <div className="customer-row">
-            <span>Saldo on-chain</span>
-            <b>Não consultado</b>
+            <span>Saldo da carteira</span>
+            <b>Não disponível nesta página</b>
           </div>
           <div className="customer-row">
             <span>Comprovação por esta tela</span>
@@ -44,7 +45,8 @@ function WalletPage() {
             {wallet.address ? "Gerenciar carteira" : "Conectar carteira"}
           </button>
           <p className="customer-muted" style={{ marginTop: 15 }}>
-            A Peragus não solicita nem armazena frases-semente ou chaves privadas.
+            A Peragus não solicita frases de recuperação ou chaves privadas. Os saldos não são
+            consultados nesta página e não representam custódia pela Peragus.
           </p>
         </CustomerPanel>
         <CustomerPanel title="Estado da identidade">
@@ -58,11 +60,11 @@ function WalletPage() {
           </div>
           <div className="customer-row">
             <span>Perfil cadastral local</span>
-            <b>{identity?.customer?.verification_status ?? "Não iniciada"}</b>
+            <b>{profileLabel(identity?.customer?.verification_status)}</b>
           </div>
           <div className="customer-row">
             <span>Vínculo consultado nesta tela</span>
-            <b>Não consultado</b>
+            <b>Não disponível nesta página</b>
           </div>
           <CustomerNotice>
             Uma carteira conectada não é prova de titularidade nem autorização para transações.
