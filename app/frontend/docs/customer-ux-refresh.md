@@ -1,5 +1,7 @@
 # Experiência do cliente Peragus
 
+For the current functional onboarding/purchase journey, see [invited-customer-journey.md](invited-customer-journey.md). This document records the preceding milestone.
+
 Esta alteração aplica as referências de navegação e hierarquia enviadas pelo usuário ao frontend existente, com componentes e identidade próprios da Peragus. O layout usa medidas em CSS para zoom de 100%; não utiliza zoom ou transformações para encolher a página.
 
 ## Escopo

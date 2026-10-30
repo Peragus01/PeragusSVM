@@ -7,7 +7,10 @@ import type {
   StandardDisconnectFeature,
   StandardEventsFeature,
 } from "@wallet-standard/features";
-import type { SolanaSignTransactionFeature } from "@solana/wallet-standard-features";
+import type {
+  SolanaSignTransactionFeature,
+  SolanaSignMessageFeature,
+} from "@solana/wallet-standard-features";
 import {
   ChevronRight,
   ExternalLink,
@@ -171,6 +174,22 @@ export function WalletProvider({
     return result.signedTransaction;
   };
 
+  const signMessage = async (message: Uint8Array) => {
+    if (!wallet || !account) throw new Error("Connect a wallet first.");
+    const feature = (wallet.features as Partial<SolanaSignMessageFeature>)["solana:signMessage"];
+    if (!feature) throw new Error("This wallet does not support message signing.");
+    const turn = generation.current;
+    const [result] = await feature.signMessage({ account, message });
+    if (
+      generation.current !== turn ||
+      !result ||
+      result.signature.length !== 64 ||
+      result.signedMessage.length !== message.length ||
+      !result.signedMessage.every((b, i) => b === message[i])
+    )
+      throw new Error("Message signature mismatch or wallet changed.");
+    return result.signature;
+  };
   const address = account?.address ?? null;
   return (
     <WalletContext.Provider
@@ -181,6 +200,7 @@ export function WalletProvider({
           setVisible(true);
         },
         signTransaction,
+        signMessage,
       }}
     >
       {children}

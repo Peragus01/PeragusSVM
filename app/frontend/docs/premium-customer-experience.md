@@ -1,5 +1,7 @@
 # Premium customer experience
 
+For the current functional onboarding/purchase journey, see [invited-customer-journey.md](invited-customer-journey.md). This document records the preceding milestone.
+
 ## Outcome and scope
 
 The customer application now emphasizes buying USDT with BRL, reviewing available costs and following transaction progress. It uses Peragus's supplied official mark, deep black/navy surfaces, electric blue actions, restrained cyan accents and green only for confirmed positive states. The primary navigation is Home, Buy USDT, My wallet, History and My account (Portuguese UI labels).

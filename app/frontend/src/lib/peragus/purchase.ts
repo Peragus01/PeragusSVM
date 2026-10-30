@@ -5,7 +5,7 @@ export interface Quote {
   source: { currency: "BRL"; amount: string };
   target: { currency: "USDT"; amount: string; chain: "solana" };
   rate: string;
-  exchange_conditions?: { amount_deducted: string | null };
+  exchange_conditions?: { amount_deducted: string | null; spread_bps?: number };
   expires_at: string | null;
   environment: "test";
   indicative: true;
@@ -151,6 +151,8 @@ export function validateQuote(value: unknown, plan: PurchasePlan): Quote {
     (value["exchange_conditions"] !== undefined &&
       value["exchange_conditions"] !== null &&
       (!record(value["exchange_conditions"]) ||
+        (value["exchange_conditions"]["spread_bps"] !== undefined &&
+          value["exchange_conditions"]["spread_bps"] !== 0) ||
         !(
           value["exchange_conditions"]["amount_deducted"] === null ||
           (typeof value["exchange_conditions"]["amount_deducted"] === "string" &&

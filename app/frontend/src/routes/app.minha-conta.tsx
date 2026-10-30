@@ -1,3 +1,5 @@
+import { CustomerProfileEditor } from "@/components/peragus/customer-profile-editor";
+import { CustomerOnboarding } from "@/components/peragus/customer-onboarding";
 import { OnboardingEvidence } from "@/components/peragus/onboarding-evidence";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -49,6 +51,7 @@ function AccountPage() {
       {error && <CustomerNotice kind="danger">{error}</CustomerNotice>}
       <div className="customer-grid-two">
         <CustomerPanel title="Dados da conta">
+          {profile && <CustomerProfileEditor key={session.identity?.user.id} />}
           <div className="customer-row">
             <span>E-mail</span>
             <b>{session.identity?.user.email ?? "—"}</b>
@@ -106,44 +109,7 @@ function AccountPage() {
           Detalhes da transação e suporte →
         </Link>
       </div>
-      <CustomerPanel title="Verificação de identidade (KYC)">
-        <OnboardingEvidence />
-        <div className="customer-steps">
-          {[
-            ["1", "Dados cadastrais", "Identificação PF/PJ registrada na conta, quando existente."],
-            [
-              "2",
-              "Documento de identidade",
-              "Envio somente em sessão segura hospedada por provedor autorizado.",
-            ],
-            [
-              "3",
-              "Análise de conformidade",
-              "Análise de acordo com os resultados registrados para sua conta.",
-            ],
-            [
-              "4",
-              "Resultado da verificação",
-              "Aprovação, rejeição ou solicitação adicional conforme estado real da API.",
-            ],
-          ].map(([n, t, d]) => (
-            <div className="customer-step" key={n}>
-              <span className="customer-step-count">{n}</span>
-              <div>
-                <h3>{t}</h3>
-                <p>{d}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-        <button disabled className="customer-button" type="button">
-          Iniciar verificação — integração pendente
-        </button>
-        <p className="customer-muted" style={{ marginTop: 14 }}>
-          O envio de documentos por esta página ainda não está disponível. Você pode consultar acima
-          as verificações já registradas.
-        </p>
-      </CustomerPanel>
+      <CustomerOnboarding key={session.identity?.user.id} />
     </>
   );
 }

@@ -1,5 +1,7 @@
 # Cotação e intenção sandbox
 
+For the current functional onboarding/purchase journey, see [invited-customer-journey.md](invited-customer-journey.md). This document records the preceding milestone.
+
 A tela `/app/comprar-usdt` consulta uma cotação indicativa e permite registrar uma intenção separada. Não gera Pix, não simula pagamentos e não solicita retiradas. A estimativa não representa valor líquido ou entrega em Solana.
 
 As únicas rotas adicionadas ao proxy são POST `/v1/me/quotes`, POST `/v1/me/purchase-intents` e GET dos respectivos registros por UUID. O navegador envia cookies apenas à origem Vercel; o proxy encaminha somente o bearer à API, com cache desativado e sem seguir redirecionamentos.

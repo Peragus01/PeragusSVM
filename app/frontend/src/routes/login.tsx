@@ -10,8 +10,9 @@ export function LoginPage() {
   const submitting = useRef(false);
   const [visible, setVisible] = useState(false);
   useEffect(() => {
-    if (session.status === "authenticated") void navigate({ to: "/app", replace: true });
-  }, [session.status, navigate]);
+    if (session.status === "authenticated")
+      void navigate({ to: session.identity?.customer ? "/app" : "/cadastro", replace: true });
+  }, [session.status, session.identity?.customer, navigate]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -24,7 +25,6 @@ export function LoginPage() {
     setError("");
     try {
       await session.login(email.trim(), password);
-      await navigate({ to: "/app" });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível entrar.");
     } finally {
@@ -103,9 +103,6 @@ export function LoginPage() {
         <p className="customer-auth-divider">Primeiro acesso ao piloto?</p>
         <Link className="customer-button-secondary" to="/cadastro">
           Tenho um convite
-        </Link>
-        <Link className="customer-link customer-operator-link" to="/operador/estornos">
-          Área do operador
         </Link>
         <p className="customer-muted customer-session-note">
           Por segurança, a sessão é mantida somente na memória. Recarregar a página exige novo

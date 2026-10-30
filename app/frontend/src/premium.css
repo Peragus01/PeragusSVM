@@ -1122,3 +1122,91 @@
     padding: 14px 16px;
   }
 }
+.journey-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.journey-check {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 20px 0;
+  color: #c2ccdc;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.journey-check input {
+  margin-top: 5px;
+  accent-color: #397bff;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.journey-step-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  list-style: none;
+  padding: 0;
+  margin: 20px 0;
+  font-size: 11px;
+  color: #8db5ff;
+}
+.journey-onboarding .customer-panel {
+  margin: 22px 0;
+}
+.customer-auth-card.journey-wide {
+  max-width: none;
+}
+.customer-auth-column:has(.journey-wide) {
+  max-width: 900px;
+  width: 100%;
+}
+.customer-public-main:has(.journey-wide) {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 1000px;
+}
+.customer-public-main:has(.journey-wide) .customer-auth-story {
+  display: none;
+}
+.customer-wallet-action {
+  background: #38c9e8;
+  color: #080a0f;
+  border: 1px solid #38c9e8;
+  font-weight: 700;
+}
+.customer-wallet-action:hover:not(:disabled) {
+  background: #80dfef;
+  color: #080a0f;
+}
+@media (max-width: 600px) {
+  .journey-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+#signup-password-help {
+  display: block;
+  margin: 8px 0 18px;
+  color: #a0aabd;
+  font-size: 12px;
+}
+.customer-auth-card form > .customer-button {
+  width: 100%;
+  margin-top: 12px;
+}
+.premium-amount-line input:focus-visible {
+  outline: 0;
+}
+.customer-field textarea {
+  min-height: 110px;
+  background: #080a0f;
+  border: 1px solid #ffffff20;
+  border-radius: 12px;
+  padding: 12px;
+  color: #f4f7fc;
+  overflow-wrap: anywhere;
+  resize: vertical;
+  max-width: 100%;
+}

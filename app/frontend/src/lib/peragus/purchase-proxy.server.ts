@@ -81,7 +81,14 @@ export async function forwardPurchase(request: Request, target: URL, path: strin
     try {
       const parsed = JSON.parse(body);
       const keys =
-        path === "v1/me/quotes" ? ["request_id", "source_amount_brl"] : ["request_id", "quote_id"];
+        path === "v1/me/quotes"
+          ? [
+              "request_id",
+              typeof parsed.target_amount_usdt === "string"
+                ? "target_amount_usdt"
+                : "source_amount_brl",
+            ]
+          : ["request_id", "quote_id"];
       if (
         !parsed ||
         typeof parsed !== "object" ||
@@ -90,7 +97,9 @@ export async function forwardPurchase(request: Request, target: URL, path: strin
         !keys.every((k) => typeof parsed[k] === "string") ||
         !new RegExp(`^${uuid}$`, "i").test(parsed.request_id) ||
         (path === "v1/me/quotes"
-          ? !/^(0|[1-9]\d{0,8})\.\d{2}$/.test(parsed.source_amount_brl)
+          ? !(typeof parsed.target_amount_usdt === "string"
+              ? /^(0|[1-9]\d{0,5})\.\d{6}$/.test(parsed.target_amount_usdt)
+              : /^(0|[1-9]\d{0,8})\.\d{2}$/.test(parsed.source_amount_brl))
           : !new RegExp(`^${uuid}$`, "i").test(parsed.quote_id))
       )
         return error(400, "VALIDATION_ERROR");
