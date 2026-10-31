@@ -60,6 +60,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   sessionStorage.clear();
   custom = null;
+  caps.record = true;
   fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
     const path = String(url);
     if (path.endsWith("/purchase-capabilities")) return Response.json({ data: caps });
@@ -116,6 +117,21 @@ async function type(side: "BRL" | "USDT", value: string) {
 }
 const posts = () => fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
 describe("automatic BRL/USDT purchase", () => {
+  it("allows review with recording disabled without submitting an operation", async () => {
+    caps.record = false;
+    await open();
+    await type("BRL", "1000");
+    const review = screen.getByRole("button", { name: /Revisar estimativa/ });
+    expect(review).toBeEnabled();
+    fireEvent.click(review);
+    expect(screen.getByRole("region", { name: "Revisão da compra" })).toBeVisible();
+    expect(screen.getByText(/O registro de teste está desabilitado/)).toBeVisible();
+    const confirm = screen.getByRole("button", { name: "Confirmar registro de teste" });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(posts().every(([url]) => String(url).endsWith("/quotes"))).toBe(true);
+  });
+
   it("debounces edits and never requires a quote button or creates a payment while typing", async () => {
     await open();
     expect(posts()).toHaveLength(0);
@@ -178,7 +194,7 @@ describe("automatic BRL/USDT purchase", () => {
     await open();
     await type("BRL", "1000");
     expect(sessionStorage.getItem(`peragus-auto-quote-v1:${customer}`)).toContain(qid);
-    fireEvent.click(screen.getByRole("button", { name: "Comprar USDT" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revisar estimativa" }));
     expect(posts()).toHaveLength(1);
     const confirm = screen.getByRole("button", { name: "Confirmar registro de teste" });
     await act(async () => {
@@ -243,7 +259,7 @@ describe("automatic BRL/USDT purchase", () => {
         ),
       });
     await type("BRL", "1000");
-    expect(screen.getByRole("button", { name: "Comprar USDT" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Revisar estimativa" })).toBeDisabled();
   });
   it("blocks a POST if its request IDs cannot be persisted", async () => {
     await open();

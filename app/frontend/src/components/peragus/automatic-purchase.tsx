@@ -510,7 +510,6 @@ export function AutomaticPurchaseForm({
           type="button"
           className="customer-button premium-main-action"
           disabled={
-            !capabilities?.record ||
             !quote ||
             !normalizePurchaseAmount(quote.source.amount) ||
             busy ||
@@ -520,7 +519,7 @@ export function AutomaticPurchaseForm({
           }
           onClick={() => setReview(true)}
         >
-          Comprar USDT <ArrowRight size={18} />
+          Revisar estimativa <ArrowRight size={18} />
         </button>
       )}
       {review && quote && linked && (
@@ -538,11 +537,18 @@ export function AutomaticPurchaseForm({
           <button
             type="button"
             className="customer-button"
-            disabled={busy || blocked || expired}
+            disabled={!capabilities?.record || busy || blocked || expired}
+            aria-describedby={!capabilities?.record ? "record-unavailable" : undefined}
             onClick={() => void confirm()}
           >
             Confirmar registro de teste
           </button>
+          {!capabilities?.record && (
+            <p id="record-unavailable" role="status">
+              O registro de teste está desabilitado neste ambiente. Você pode revisar a estimativa,
+              mas não confirmar uma operação.
+            </p>
+          )}
         </div>
       )}
       {receipt.current?.purchaseAttempted && !record && quote && (
