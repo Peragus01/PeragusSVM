@@ -110,6 +110,9 @@ async function supabaseAuth(
   if (response.status === 204) return {};
   return (await response.json()) as Record<string, unknown>;
 }
+export async function signUpCustomer(email: string, password: string) {
+  await supabaseAuth("signup", { email, password });
+}
 function parseTokens(value: Record<string, unknown>): AuthTokens {
   if (
     typeof value["access_token"] !== "string" ||

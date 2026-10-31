@@ -1,3 +1,4 @@
+import { CustomerWalletLink } from "@/components/peragus/customer-wallet-link";
 import { profileLabel } from "@/lib/peragus/customer-copy";
 import { createFileRoute } from "@tanstack/react-router";
 import { CustomerNotice, CustomerPanel, SectionTitle } from "@/components/peragus/customer-ui";
@@ -20,34 +21,7 @@ function WalletPage() {
       </CustomerNotice>
       <div className="customer-grid-two">
         <CustomerPanel title="Sua carteira">
-          <div className="customer-row">
-            <span>Rede disponível</span>
-            <b>Solana Devnet</b>
-          </div>
-          <div className="customer-row">
-            <span>Endereço conectado</span>
-            <b style={{ overflowWrap: "anywhere" }}>{wallet.address ?? "Não conectado"}</b>
-          </div>
-          <div className="customer-row">
-            <span>Saldo da carteira</span>
-            <b>Não disponível nesta página</b>
-          </div>
-          <div className="customer-row">
-            <span>Comprovação por esta tela</span>
-            <b>Indisponível neste módulo</b>
-          </div>
-          <button
-            type="button"
-            className="customer-button"
-            style={{ marginTop: 18 }}
-            onClick={wallet.open}
-          >
-            {wallet.address ? "Gerenciar carteira" : "Conectar carteira"}
-          </button>
-          <p className="customer-muted" style={{ marginTop: 15 }}>
-            A Peragus não solicita frases de recuperação ou chaves privadas. Os saldos não são
-            consultados nesta página e não representam custódia pela Peragus.
-          </p>
+          <CustomerWalletLink />
         </CustomerPanel>
         <CustomerPanel title="Estado da identidade">
           <div className="customer-row">

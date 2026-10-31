@@ -44,7 +44,9 @@ function CustomerDashboard() {
           <Link to="/app/comprar-usdt" className="customer-button">
             Comprar USDT <ArrowRight size={18} />
           </Link>
-          <small>Ambiente de testes · sem dinheiro real. Pix e entrega ainda indisponíveis.</small>
+          <small>
+            Ambiente de testes · sem dinheiro real. Sem movimentação ou entrega de USDT reais.
+          </small>
         </div>
         <div className="premium-dashboard-assets" aria-hidden="true">
           <span className="premium-orbit" />

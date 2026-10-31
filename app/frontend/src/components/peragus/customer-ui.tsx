@@ -127,7 +127,9 @@ export function CustomerLayout() {
   }, []);
   useEffect(() => {
     if (session.status === "unauthenticated") void navigate({ to: "/login", replace: true });
-  }, [session.status, navigate]);
+    if (session.status === "authenticated" && session.identity && !session.identity.customer)
+      void navigate({ to: "/cadastro", replace: true });
+  }, [session.status, session.identity?.customer, navigate]);
   useEffect(() => {
     if (!open) return;
     const previousOverflow = document.body.style.overflow;
