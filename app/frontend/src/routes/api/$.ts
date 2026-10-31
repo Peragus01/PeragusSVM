@@ -1,3 +1,6 @@
+import { journeyMethods, forwardJourney } from "@/lib/peragus/journey-proxy.server";
+import { forwardPurchase, purchaseMethods } from "@/lib/peragus/purchase-proxy.server";
+import { forwardRefund, refundMethods } from "@/lib/peragus/refund-proxy.server";
 import { forwardCustomerRead, isCustomerReadPath } from "@/lib/peragus/customer-proxy.server";
 import { createFileRoute } from "@tanstack/react-router";
 
@@ -28,6 +31,9 @@ function targetUrl(request: Request, splat: string) {
 
 function isAllowedPath(splat: string) {
   return (
+    journeyMethods(splat).length > 0 ||
+    purchaseMethods(splat).length > 0 ||
+    refundMethods(splat).length > 0 ||
     isCustomerReadPath(splat) ||
     splat === "health" ||
     splat === "v1/settlements" ||
@@ -46,6 +52,12 @@ async function forward({ request, params }: ProxyContext) {
   }
 
   try {
+    if (journeyMethods(params._splat).length)
+      return await forwardJourney(request, targetUrl(request, params._splat), params._splat);
+    if (purchaseMethods(params._splat).length)
+      return await forwardPurchase(request, targetUrl(request, params._splat), params._splat);
+    if (refundMethods(params._splat).length)
+      return await forwardRefund(request, targetUrl(request, params._splat), params._splat);
     if (isCustomerReadPath(params._splat))
       return await forwardCustomerRead(request, targetUrl(request, params._splat));
     const headers = new Headers({ Accept: "application/json" });
@@ -89,6 +101,8 @@ export const Route = createFileRoute("/api/$")({
     handlers: {
       GET: forward,
       POST: forward,
+      PUT: forward,
+      PATCH: forward,
     },
   },
 });

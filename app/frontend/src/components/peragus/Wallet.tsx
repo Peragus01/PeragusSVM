@@ -7,7 +7,10 @@ import type {
   StandardDisconnectFeature,
   StandardEventsFeature,
 } from "@wallet-standard/features";
-import type { SolanaSignTransactionFeature } from "@solana/wallet-standard-features";
+import type {
+  SolanaSignTransactionFeature,
+  SolanaSignMessageFeature,
+} from "@solana/wallet-standard-features";
 import {
   ChevronRight,
   ExternalLink,
@@ -22,7 +25,13 @@ import { WalletContext } from "./wallet-context";
 
 const DEVNET = "solana:devnet";
 
-export function WalletProvider({ children }: { children: ReactNode }) {
+export function WalletProvider({
+  children,
+  showHeaderAction = true,
+}: {
+  children: ReactNode;
+  showHeaderAction?: boolean;
+}) {
   const [visible, setVisible] = useState(false);
   const [wallets, setWallets] = useState<readonly Wallet[]>([]);
   const [wallet, setWallet] = useState<Wallet | null>(null);
@@ -165,6 +174,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return result.signedTransaction;
   };
 
+  const signMessage = async (message: Uint8Array) => {
+    if (!wallet || !account) throw new Error("Connect a wallet first.");
+    const feature = (wallet.features as Partial<SolanaSignMessageFeature>)["solana:signMessage"];
+    if (!feature) throw new Error("This wallet does not support message signing.");
+    const turn = generation.current;
+    const [result] = await feature.signMessage({ account, message });
+    if (
+      generation.current !== turn ||
+      !result ||
+      result.signature.length !== 64 ||
+      result.signedMessage.length !== message.length ||
+      !result.signedMessage.every((b, i) => b === message[i])
+    )
+      throw new Error("Message signature mismatch or wallet changed.");
+    return result.signature;
+  };
   const address = account?.address ?? null;
   return (
     <WalletContext.Provider
@@ -175,36 +200,39 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           setVisible(true);
         },
         signTransaction,
+        signMessage,
       }}
     >
       {children}
-      <div className="wallet-header-action">
-        {address ? (
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="sm" asChild>
-              <a href={explorerAddress(address)} target="_blank" rel="noreferrer">
-                <WalletIcon />
-                <span data-testid="wallet-address">{short(address, 4)}</span>
-                <ExternalLink />
-              </a>
+      {showHeaderAction && (
+        <div className="wallet-header-action">
+          {address ? (
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" asChild>
+                <a href={explorerAddress(address)} target="_blank" rel="noreferrer">
+                  <WalletIcon />
+                  <span data-testid="wallet-address">{short(address, 4)}</span>
+                  <ExternalLink />
+                </a>
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Disconnect wallet"
+                title="Disconnect wallet"
+                onClick={disconnect}
+              >
+                <LogOut />
+              </Button>
+            </div>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => setVisible(true)}>
+              <WalletIcon />
+              Connect Wallet
             </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Disconnect wallet"
-              title="Disconnect wallet"
-              onClick={disconnect}
-            >
-              <LogOut />
-            </Button>
-          </div>
-        ) : (
-          <Button variant="outline" size="sm" onClick={() => setVisible(true)}>
-            <WalletIcon />
-            Connect Wallet
-          </Button>
-        )}
-      </div>
+          )}
+        </div>
+      )}
       {visible &&
         createPortal(
           <div className="wallet-overlay" data-testid="wallet-overlay" onClick={close}>

@@ -10,18 +10,51 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppRouteImport } from './routes/app'
+import { Route as CadastroRouteImport } from './routes/cadastro'
 import { Route as DevelopersRouteImport } from './routes/developers'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as RecuperarSenhaRouteImport } from './routes/recuperar-senha'
 import { Route as SettlementsRouteImport } from './routes/settlements'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as AppIndexRouteImport } from './routes/app.index'
+import { Route as AppAuditoriaRouteImport } from './routes/app.auditoria'
+import { Route as AppCarteiraRouteImport } from './routes/app.carteira'
+import { Route as AppComprarUsdtRouteImport } from './routes/app.comprar-usdt'
+import { Route as AppMinhaContaRouteImport } from './routes/app.minha-conta'
+import { Route as AppOperacoesRouteImport } from './routes/app.operacoes'
+import { Route as OperadorEstornosRouteImport } from './routes/operador.estornos'
+import { Route as AppOperacoesIndexRouteImport } from './routes/app.operacoes.index'
+import { Route as AppOperacoesIdRouteImport } from './routes/app.operacoes.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppRoute = AppRouteImport.update({
+  id: '/app',
+  path: '/app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CadastroRoute = CadastroRouteImport.update({
+  id: '/cadastro',
+  path: '/cadastro',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DevelopersRoute = DevelopersRouteImport.update({
   id: '/developers',
   path: '/developers',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RecuperarSenhaRoute = RecuperarSenhaRouteImport.update({
+  id: '/recuperar-senha',
+  path: '/recuperar-senha',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettlementsRoute = SettlementsRouteImport.update({
@@ -34,39 +67,176 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppIndexRoute = AppIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAuditoriaRoute = AppAuditoriaRouteImport.update({
+  id: '/auditoria',
+  path: '/auditoria',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCarteiraRoute = AppCarteiraRouteImport.update({
+  id: '/carteira',
+  path: '/carteira',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppComprarUsdtRoute = AppComprarUsdtRouteImport.update({
+  id: '/comprar-usdt',
+  path: '/comprar-usdt',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppMinhaContaRoute = AppMinhaContaRouteImport.update({
+  id: '/minha-conta',
+  path: '/minha-conta',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOperacoesRoute = AppOperacoesRouteImport.update({
+  id: '/operacoes',
+  path: '/operacoes',
+  getParentRoute: () => AppRoute,
+} as any)
+const OperadorEstornosRoute = OperadorEstornosRouteImport.update({
+  id: '/operador/estornos',
+  path: '/operador/estornos',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppOperacoesIndexRoute = AppOperacoesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppOperacoesRoute,
+} as any)
+const AppOperacoesIdRoute = AppOperacoesIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => AppOperacoesRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/app': typeof AppRouteWithChildren
+  '/cadastro': typeof CadastroRoute
   '/developers': typeof DevelopersRoute
+  '/login': typeof LoginRoute
+  '/recuperar-senha': typeof RecuperarSenhaRoute
   '/settlements': typeof SettlementsRoute
   '/api/$': typeof ApiSplatRoute
+  '/app/auditoria': typeof AppAuditoriaRoute
+  '/app/carteira': typeof AppCarteiraRoute
+  '/app/comprar-usdt': typeof AppComprarUsdtRoute
+  '/app/minha-conta': typeof AppMinhaContaRoute
+  '/app/operacoes': typeof AppOperacoesRouteWithChildren
+  '/operador/estornos': typeof OperadorEstornosRoute
+  '/app/': typeof AppIndexRoute
+  '/app/operacoes/$id': typeof AppOperacoesIdRoute
+  '/app/operacoes/': typeof AppOperacoesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/cadastro': typeof CadastroRoute
   '/developers': typeof DevelopersRoute
+  '/login': typeof LoginRoute
+  '/recuperar-senha': typeof RecuperarSenhaRoute
   '/settlements': typeof SettlementsRoute
   '/api/$': typeof ApiSplatRoute
+  '/app/auditoria': typeof AppAuditoriaRoute
+  '/app/carteira': typeof AppCarteiraRoute
+  '/app/comprar-usdt': typeof AppComprarUsdtRoute
+  '/app/minha-conta': typeof AppMinhaContaRoute
+  '/operador/estornos': typeof OperadorEstornosRoute
+  '/app': typeof AppIndexRoute
+  '/app/operacoes/$id': typeof AppOperacoesIdRoute
+  '/app/operacoes': typeof AppOperacoesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/app': typeof AppRouteWithChildren
+  '/cadastro': typeof CadastroRoute
   '/developers': typeof DevelopersRoute
+  '/login': typeof LoginRoute
+  '/recuperar-senha': typeof RecuperarSenhaRoute
   '/settlements': typeof SettlementsRoute
   '/api/$': typeof ApiSplatRoute
+  '/app/auditoria': typeof AppAuditoriaRoute
+  '/app/carteira': typeof AppCarteiraRoute
+  '/app/comprar-usdt': typeof AppComprarUsdtRoute
+  '/app/minha-conta': typeof AppMinhaContaRoute
+  '/app/operacoes': typeof AppOperacoesRouteWithChildren
+  '/operador/estornos': typeof OperadorEstornosRoute
+  '/app/': typeof AppIndexRoute
+  '/app/operacoes/$id': typeof AppOperacoesIdRoute
+  '/app/operacoes/': typeof AppOperacoesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/developers' | '/settlements' | '/api/$'
+  fullPaths:
+    | '/'
+    | '/app'
+    | '/cadastro'
+    | '/developers'
+    | '/login'
+    | '/recuperar-senha'
+    | '/settlements'
+    | '/api/$'
+    | '/app/auditoria'
+    | '/app/carteira'
+    | '/app/comprar-usdt'
+    | '/app/minha-conta'
+    | '/app/operacoes'
+    | '/operador/estornos'
+    | '/app/'
+    | '/app/operacoes/$id'
+    | '/app/operacoes/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/developers' | '/settlements' | '/api/$'
-  id: '__root__' | '/' | '/developers' | '/settlements' | '/api/$'
+  to:
+    | '/'
+    | '/cadastro'
+    | '/developers'
+    | '/login'
+    | '/recuperar-senha'
+    | '/settlements'
+    | '/api/$'
+    | '/app/auditoria'
+    | '/app/carteira'
+    | '/app/comprar-usdt'
+    | '/app/minha-conta'
+    | '/operador/estornos'
+    | '/app'
+    | '/app/operacoes/$id'
+    | '/app/operacoes'
+  id:
+    | '__root__'
+    | '/'
+    | '/app'
+    | '/cadastro'
+    | '/developers'
+    | '/login'
+    | '/recuperar-senha'
+    | '/settlements'
+    | '/api/$'
+    | '/app/auditoria'
+    | '/app/carteira'
+    | '/app/comprar-usdt'
+    | '/app/minha-conta'
+    | '/app/operacoes'
+    | '/operador/estornos'
+    | '/app/'
+    | '/app/operacoes/$id'
+    | '/app/operacoes/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AppRoute: typeof AppRouteWithChildren
+  CadastroRoute: typeof CadastroRoute
   DevelopersRoute: typeof DevelopersRoute
+  LoginRoute: typeof LoginRoute
+  RecuperarSenhaRoute: typeof RecuperarSenhaRoute
   SettlementsRoute: typeof SettlementsRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  OperadorEstornosRoute: typeof OperadorEstornosRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -78,11 +248,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app': {
+      id: '/app'
+      path: '/app'
+      fullPath: '/app'
+      preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cadastro': {
+      id: '/cadastro'
+      path: '/cadastro'
+      fullPath: '/cadastro'
+      preLoaderRoute: typeof CadastroRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/developers': {
       id: '/developers'
       path: '/developers'
       fullPath: '/developers'
       preLoaderRoute: typeof DevelopersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/recuperar-senha': {
+      id: '/recuperar-senha'
+      path: '/recuperar-senha'
+      fullPath: '/recuperar-senha'
+      preLoaderRoute: typeof RecuperarSenhaRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settlements': {
@@ -99,14 +297,116 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app/': {
+      id: '/app/'
+      path: '/'
+      fullPath: '/app/'
+      preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/auditoria': {
+      id: '/app/auditoria'
+      path: '/auditoria'
+      fullPath: '/app/auditoria'
+      preLoaderRoute: typeof AppAuditoriaRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/carteira': {
+      id: '/app/carteira'
+      path: '/carteira'
+      fullPath: '/app/carteira'
+      preLoaderRoute: typeof AppCarteiraRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/comprar-usdt': {
+      id: '/app/comprar-usdt'
+      path: '/comprar-usdt'
+      fullPath: '/app/comprar-usdt'
+      preLoaderRoute: typeof AppComprarUsdtRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/minha-conta': {
+      id: '/app/minha-conta'
+      path: '/minha-conta'
+      fullPath: '/app/minha-conta'
+      preLoaderRoute: typeof AppMinhaContaRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/operacoes': {
+      id: '/app/operacoes'
+      path: '/operacoes'
+      fullPath: '/app/operacoes'
+      preLoaderRoute: typeof AppOperacoesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/operador/estornos': {
+      id: '/operador/estornos'
+      path: '/operador/estornos'
+      fullPath: '/operador/estornos'
+      preLoaderRoute: typeof OperadorEstornosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app/operacoes/': {
+      id: '/app/operacoes/'
+      path: '/'
+      fullPath: '/app/operacoes/'
+      preLoaderRoute: typeof AppOperacoesIndexRouteImport
+      parentRoute: typeof AppOperacoesRoute
+    }
+    '/app/operacoes/$id': {
+      id: '/app/operacoes/$id'
+      path: '/$id'
+      fullPath: '/app/operacoes/$id'
+      preLoaderRoute: typeof AppOperacoesIdRouteImport
+      parentRoute: typeof AppOperacoesRoute
+    }
   }
 }
 
+interface AppOperacoesRouteChildren {
+  AppOperacoesIdRoute: typeof AppOperacoesIdRoute
+  AppOperacoesIndexRoute: typeof AppOperacoesIndexRoute
+}
+
+const AppOperacoesRouteChildren: AppOperacoesRouteChildren = {
+  AppOperacoesIdRoute: AppOperacoesIdRoute,
+  AppOperacoesIndexRoute: AppOperacoesIndexRoute,
+}
+
+const AppOperacoesRouteWithChildren = AppOperacoesRoute._addFileChildren(
+  AppOperacoesRouteChildren,
+)
+
+interface AppRouteChildren {
+  AppAuditoriaRoute: typeof AppAuditoriaRoute
+  AppCarteiraRoute: typeof AppCarteiraRoute
+  AppComprarUsdtRoute: typeof AppComprarUsdtRoute
+  AppMinhaContaRoute: typeof AppMinhaContaRoute
+  AppOperacoesRoute: typeof AppOperacoesRouteWithChildren
+  AppIndexRoute: typeof AppIndexRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppAuditoriaRoute: AppAuditoriaRoute,
+  AppCarteiraRoute: AppCarteiraRoute,
+  AppComprarUsdtRoute: AppComprarUsdtRoute,
+  AppMinhaContaRoute: AppMinhaContaRoute,
+  AppOperacoesRoute: AppOperacoesRouteWithChildren,
+  AppIndexRoute: AppIndexRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AppRoute: AppRouteWithChildren,
+  CadastroRoute: CadastroRoute,
   DevelopersRoute: DevelopersRoute,
+  LoginRoute: LoginRoute,
+  RecuperarSenhaRoute: RecuperarSenhaRoute,
   SettlementsRoute: SettlementsRoute,
   ApiSplatRoute: ApiSplatRoute,
+  OperadorEstornosRoute: OperadorEstornosRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

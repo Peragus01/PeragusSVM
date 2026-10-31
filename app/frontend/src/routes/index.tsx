@@ -2,151 +2,252 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   ArrowRight,
   ArrowUpRight,
-  CheckCircle2,
-  CircleDollarSign,
+  Check,
+  ChevronDown,
   Globe2,
-  Layers3,
   ShieldCheck,
-  SquareCode,
+  Wallet,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Architecture } from "@/components/peragus/Architecture";
-import { HealthCard } from "@/components/peragus/HealthCard";
-import networkImage from "@/assets/settlement-network.jpg";
-
+import { PeragusBrand } from "@/components/peragus/customer-ui";
+import { useCustomerSession } from "@/lib/peragus/customer-session";
+import "@/public-home.css";
+import { useReveal } from "@/components/peragus/motion";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Peragus — Settlement Control Room" },
+      { title: "Peragus — Reais em USDT, com clareza em cada etapa" },
       {
         name: "description",
         content:
-          "The on-chain payment processing and settlement network for Latin America. Explore B2B settlement orchestration, atomic Token-2022 execution, and Devnet audit evidence.",
+          "Conheça a experiência Peragus para comprar USDT em reais e acompanhar a entrega na sua carteira Solana. Acesso atual em ambiente de testes.",
       },
-      { property: "og:title", content: "Peragus — Settlement Control Room" },
-      {
-        property: "og:description",
-        content:
-          "Institutional payment infrastructure for Latin America. One instruction, atomic Solana settlement, verifiable audit evidence.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
-  component: Index,
+  component: PublicHome,
 });
-function Index() {
+export function PublicHome() {
+  useReveal();
+  const { status } = useCustomerSession();
   return (
-    <div className="overview-page">
-      <section className="institutional-hero">
-        <img
-          className="network-image"
-          src={networkImage}
-          alt="Latin America connected through an institutional settlement network"
-          width={1536}
-          height={1024}
-        />
-        <div className="hero-content">
-          <div className="hero-eyebrow">
-            <span className="status-dot" />
-            INSTITUTIONAL PAYMENTS. ON-CHAIN CERTAINTY.
-          </div>
-          <h1>
-            The On-Chain Payment
-            <br className="desktop-break" /> Processing & Settlement
-            <br className="desktop-break" /> Network for <span>Latin America.</span>
-          </h1>
-          <p>
-            Built for acquirers, payment processors, and platforms.
-            <br className="desktop-break" />
-            Coordinate fiat rails. Settle atomically on Solana.
-            <br className="desktop-break" />
-            Verify every step.
-          </p>
-          <div className="hero-actions">
-            <Button size="lg" asChild>
-              <Link to="/settlements">
-                Open settlement control room
-                <ArrowRight />
-              </Link>
-            </Button>
-            <Button variant="outline" size="lg" asChild>
-              <Link to="/developers">
-                View API contract
-                <ArrowUpRight />
-              </Link>
-            </Button>
-          </div>
-          <div className="hero-footnote">
-            <ShieldCheck />
-            B2B infrastructure<span>·</span>Solana Devnet<span>·</span>Verifiable by design
-          </div>
+    <div className="peragus-home">
+      <a className="peragus-skip" href="#principal">
+        Ir para o conteúdo
+      </a>
+      <header className="public-nav">
+        <Link to="/" aria-label="Peragus — início">
+          <PeragusBrand />
+        </Link>
+        <nav aria-label="Navegação principal">
+          <a href="#como-funciona">Como funciona</a>
+          <a href="#para-empresas">Para empresas</a>
+          <a href="#duvidas">Dúvidas</a>
+        </nav>
+        <div className="public-nav-actions">
+          <Link to="/login" className="public-login">
+            Entrar
+          </Link>
+          <Link to={status === "authenticated" ? "/app" : "/cadastro"} className="public-button">
+            {status === "authenticated" ? "Minha conta" : "Tenho um convite"}
+            <ArrowUpRight size={16} />
+          </Link>
         </div>
-        <div className="globe-label">
-          <span className="status-dot" />
-          LATAM → GLOBAL SETTLEMENT<span>DEVNET NETWORK</span>
-        </div>
-      </section>
-      <div className="metrics-banner">
-        {[
-          {
-            icon: Layers3,
-            title: "Two-Leg Atomic Execution",
-            subtitle: "Token-2022 · all or nothing",
-          },
-          {
-            icon: ShieldCheck,
-            title: "Contingency Escrow",
-            subtitle: "Protected liquidity · recovery ready",
-          },
-          {
-            icon: CircleDollarSign,
-            title: "Fiat rail coordination",
-            subtitle: "Asynchronous · reconciled · idempotent",
-          },
-          {
-            icon: CheckCircle2,
-            title: "Independent verification",
-            subtitle: "Backend re-checks every Devnet signature",
-          },
-        ].map((metric) => (
-          <div className="metric" key={metric.title}>
-            <metric.icon />
-            <div>
-              <strong>{metric.title}</strong>
-              <span>{metric.subtitle}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="page-content">
-        <HealthCard />
-        <Architecture full />
-        <div className="developer-banner">
-          <div className="flex items-center gap-4">
-            <div className="developer-icon">
-              <SquareCode />
-            </div>
-            <div>
-              <h3>Your payment stack. One settlement API.</h3>
-              <p>
-                From acquirer instruction to sanitized audit evidence — one settlement lifecycle.
-              </p>
-            </div>
-          </div>
-          <Button variant="outline" asChild>
-            <Link to="/developers">
-              View API specification
-              <ArrowUpRight />
+      </header>
+      <main id="principal">
+        <section className="public-hero">
+          <img
+            src="/peragus-life.webp"
+            alt="Empreendedora usando o celular em seu café"
+            width="1672"
+            height="941"
+            fetchPriority="high"
+          />
+          <div className="public-hero-shade" />
+          <div className="public-hero-content">
+            <span className="public-eyebrow">REAIS → USDT · SOLANA</span>
+            <h1>
+              Seu próximo passo.
+              <br />
+              Em reais.
+              <br />
+              <em>Sem fronteiras.</em>
+            </h1>
+            <p>
+              Reais para começar. USDT para ir além. Uma experiência de compra com valores claros e
+              acompanhamento até sua carteira Solana.
+            </p>
+            <Link to="/login" className="public-button">
+              Acessar minha conta <ArrowRight size={19} />
             </Link>
-          </Button>
-        </div>
-        <div className="infrastructure-note">
-          <Globe2 />
-          <span>Built for Latin America. Designed for institutional scale.</span>
-          <span>Fiat coordination ≠ atomic on-chain execution</span>
-        </div>
-      </div>
+            <a href="#como-funciona" className="public-hero-more">
+              Conheça a Peragus <ChevronDown size={16} />
+            </a>
+            <span className="public-pilot-note">
+              Piloto fechado em ambiente de testes. Operações reais ainda não disponíveis.
+            </span>
+          </div>
+          <div className="public-conversion-visual" aria-label="Jornada de compra de USDT">
+            <div className="public-conversion-top">
+              <span>UMA CONEXÃO. MAIS POSSIBILIDADES.</span>
+              <span>↗</span>
+            </div>
+            <div className="public-asset">
+              <span className="asset-icon brl-icon">R$</span>
+              <div>
+                <small>Você paga</small>
+                <strong>Real brasileiro</strong>
+              </div>
+              <b>BRL</b>
+            </div>
+            <div className="public-conversion-arrow">↓</div>
+            <div className="public-asset">
+              <span className="asset-icon usdt-icon">₮</span>
+              <div>
+                <small>Você recebe</small>
+                <strong>Tether USD</strong>
+              </div>
+              <b>USDT</b>
+            </div>
+            <div className="public-conversion-foot">
+              <span>Solana</span>
+              <span>Na sua carteira</span>
+            </div>
+            <p>
+              Jornada planejada: cotação → revisão → Pix → entrega.
+              <br />
+              No ambiente atual, apenas estimativa e registro de teste.
+            </p>
+          </div>
+        </section>
+        <section className="public-section" id="como-funciona">
+          <div className="public-section-heading">
+            <span className="public-eyebrow">SIMPLES EM CADA ETAPA</span>
+            <h2>
+              Da cotação
+              <br />à sua carteira.
+            </h2>
+            <p>Informações claras para você saber onde está e qual é o próximo passo.</p>
+          </div>
+          <div className="public-feature-grid">
+            {[
+              {
+                icon: ShieldCheck,
+                title: "Confira quanto recebe",
+                text: "Informe o valor em reais e consulte a estimativa de USDT, com os custos disponíveis antes de avançar.",
+              },
+              {
+                icon: Wallet,
+                title: "Revise antes de pagar",
+                text: "Confira a carteira de destino e os detalhes. O Pix só fica disponível quando o pagamento estiver habilitado.",
+              },
+              {
+                icon: Globe2,
+                title: "Acompanhe cada etapa",
+                text: "Do pagamento à entrega, acompanhe as confirmações disponíveis no seu histórico. Sem confundir estimativa com USDT recebido.",
+              },
+            ].map(({ icon: Icon, title, text }, i) => (
+              <article key={title}>
+                <span className="public-feature-icon">
+                  <Icon size={23} />
+                </span>
+                <small>0{i + 1}</small>
+                <h3>{title}</h3>
+                <p>{text}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+        <section className="public-business public-section" id="para-empresas">
+          <div>
+            <span className="public-eyebrow">PERAGUS PARA NEGÓCIOS</span>
+            <h2>
+              Conexões que vão
+              <br />
+              além das fronteiras.
+            </h2>
+            <p>
+              Estamos construindo infraestrutura de pagamentos com stablecoins para aproximar
+              empresas, plataformas e clientes na América Latina.
+            </p>
+            <ul>
+              <li>
+                <Check size={17} /> Foco em pagamentos transfronteiriços
+              </li>
+              <li>
+                <Check size={17} /> Acompanhamento das etapas da operação
+              </li>
+              <li>
+                <Check size={17} /> Integração entre moeda local e ativos digitais
+              </li>
+            </ul>
+          </div>
+          <div className="public-business-card">
+            <span>BRASIL ↔ AMÉRICA LATINA</span>
+            <Globe2 size={120} strokeWidth={0.8} />
+            <h3>
+              Uma região.
+              <br />
+              Muitas possibilidades.
+            </h3>
+            <p>
+              Reais na origem. USDT na rede Solana. Cada etapa visível, da cotação à confirmação
+              disponível.
+            </p>
+          </div>
+        </section>
+        <section className="public-section public-faq" id="duvidas">
+          <div className="public-section-heading">
+            <span className="public-eyebrow">ANTES DE COMEÇAR</span>
+            <h2>
+              Suas dúvidas,
+              <br />
+              com clareza.
+            </h2>
+          </div>
+          <div>
+            {[
+              [
+                "Como acesso minha conta?",
+                "Use o botão Entrar no topo da página. Se você já participa do piloto, utilize seu e-mail e senha cadastrados.",
+              ],
+              [
+                "Posso criar uma conta agora?",
+                "O piloto é fechado e o cadastro depende de convite e da disponibilidade de adesão. A página de cadastro informa a situação atual.",
+              ],
+              [
+                "As operações deste ambiente movimentam dinheiro real?",
+                "Não. O ambiente atual é de testes. Uma cotação indicativa ou registro de teste não representa pagamento, conversão concluída ou entrega na carteira.",
+              ],
+              [
+                "O valor estimado é o valor final?",
+                "Não. A estimativa pode variar. Taxas e valores líquidos só são apresentados quando informados e confirmados pelo serviço responsável.",
+              ],
+            ].map(([question, answer]) => (
+              <details key={question}>
+                <summary>
+                  {question}
+                  <ChevronDown size={18} />
+                </summary>
+                <p>{answer}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+        <section className="public-end">
+          <span className="public-eyebrow">SEU PRÓXIMO PASSO</span>
+          <h2>Já faz parte do piloto?</h2>
+          <p>Acesse sua conta e acompanhe suas operações.</p>
+          <Link to="/login" className="public-button">
+            Entrar na Peragus <ArrowRight size={18} />
+          </Link>
+        </section>
+      </main>
+      <footer className="public-footer">
+        <PeragusBrand />
+        <p>Infraestrutura para uma América Latina mais conectada.</p>
+        <Link to="/login">Entrar</Link>
+        <Link to="/cadastro">Acesso por convite</Link>
+        <small>© {new Date().getFullYear()} Peragus. Piloto em ambiente de testes.</small>
+      </footer>
     </div>
   );
 }
