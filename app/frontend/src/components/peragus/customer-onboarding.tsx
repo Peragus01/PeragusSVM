@@ -92,19 +92,44 @@ export function CustomerOnboarding() {
     setSynthetic(false);
     setError("");
     if (!accessToken || !identity?.customer) return;
-    const paths = [
-      "onboarding/individual",
-      "onboarding/terms",
-      "onboarding",
-      "onboarding/verification",
-      "onboarding/screening",
-      "onboarding/status",
-    ];
-    void Promise.allSettled(
-      paths.map((path) =>
-        journeyRequest<any>(accessToken, `v1/me/${path}`, "GET", undefined, abort.signal),
+    void Promise.allSettled([
+      journeyRequest<Draft>(
+        accessToken,
+        "v1/me/onboarding/individual",
+        "GET",
+        undefined,
+        abort.signal,
       ),
-    ).then((results) => {
+      journeyRequest<Terms>(accessToken, "v1/me/onboarding/terms", "GET", undefined, abort.signal),
+      journeyRequest<{ state: string }>(
+        accessToken,
+        "v1/me/onboarding",
+        "GET",
+        undefined,
+        abort.signal,
+      ),
+      journeyRequest<Verification>(
+        accessToken,
+        "v1/me/onboarding/verification",
+        "GET",
+        undefined,
+        abort.signal,
+      ),
+      journeyRequest<{ status: string; result: string }>(
+        accessToken,
+        "v1/me/onboarding/screening",
+        "GET",
+        undefined,
+        abort.signal,
+      ),
+      journeyRequest<OnboardingReview>(
+        accessToken,
+        "v1/me/onboarding/status",
+        "GET",
+        undefined,
+        abort.signal,
+      ),
+    ]).then((results) => {
       if (abort.signal.aborted) return;
       const d = results[0],
         t = results[1],
@@ -134,15 +159,16 @@ export function CustomerOnboarding() {
     setError("");
     const turn = epoch.current;
     try {
-      const result = await journeyRequest<any>(accessToken, `v1/me/${path}`, method, body);
+      const result = await journeyRequest<unknown>(accessToken, `v1/me/${path}`, method, body);
       if (epoch.current !== turn) return;
-      if (path === "onboarding/individual") setDraft(result);
+      if (path === "onboarding/individual") setDraft(result as Draft);
       else if (path.startsWith("onboarding/terms")) {
-        setTerms(result);
+        setTerms(result as Terms);
         setAccepted(false);
-      } else if (path.includes("verification")) setVerification(result);
-      else if (path.includes("screening")) setScreening(result);
-      else if (path.startsWith("onboarding")) setRegistration(result);
+      } else if (path.includes("verification")) setVerification(result as Verification);
+      else if (path.includes("screening"))
+        setScreening(result as { status: string; result: string });
+      else if (path.startsWith("onboarding")) setRegistration(result as { state: string });
       if (path.startsWith("onboarding")) {
         try {
           const status = await journeyRequest<OnboardingReview>(

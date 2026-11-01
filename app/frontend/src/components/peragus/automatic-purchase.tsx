@@ -144,7 +144,15 @@ export function AutomaticPurchaseForm({
   useEffect(() => {
     const abort = new AbortController();
     setCapabilities(null);
-    void journeyRequest<any>(token, "v1/me/purchase-capabilities", "GET", undefined, abort.signal)
+    void journeyRequest<
+      NonNullable<typeof capabilities> & {
+        environment: string;
+        operations_enabled: boolean;
+        real_purchase: boolean;
+        required_costs_complete: boolean;
+        network: string;
+      }
+    >(token, "v1/me/purchase-capabilities", "GET", undefined, abort.signal)
       .then((c) => {
         if (abort.signal.aborted) return;
         if (
@@ -153,7 +161,7 @@ export function AutomaticPurchaseForm({
           c.real_purchase !== false ||
           c.required_costs_complete !== false ||
           c.network !== "solana:devnet" ||
-          !["quote", "record", "pix"].every((k) => typeof c[k] === "boolean")
+          !(["quote", "record", "pix"] as const).every((k) => typeof c[k] === "boolean")
         )
           throw Error();
         setCapabilities(c);
@@ -264,7 +272,9 @@ export function AutomaticPurchaseForm({
         try {
           persist(customerId, saved);
           receipt.current = saved;
-        } catch {}
+        } catch {
+          // Keep the in-memory receipt and block retries if storage is unavailable.
+        }
       }
       setBlocked(true);
       setError(

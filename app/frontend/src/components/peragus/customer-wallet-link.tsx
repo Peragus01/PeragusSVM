@@ -13,13 +13,12 @@ export function useLinkedWallet() {
     setLinked(null);
     setError("");
     if (!accessToken || !identity?.customer) return;
-    void journeyRequest<any>(
-      accessToken,
-      "v1/me/onboarding/status",
-      "GET",
-      undefined,
-      controller.signal,
-    )
+    void journeyRequest<{
+      environment: string;
+      operations_enabled: boolean;
+      customer?: { id: string };
+      wallet?: LinkedWallet;
+    }>(accessToken, "v1/me/onboarding/status", "GET", undefined, controller.signal)
       .then((data) => {
         if (controller.signal.aborted) return;
         if (
@@ -70,7 +69,15 @@ export function CustomerWalletLink({
     const turn = epoch.current,
       address = wallet.address;
     try {
-      const c = await journeyRequest<any>(accessToken, "v1/me/wallet/challenge", "POST", {
+      const c = await journeyRequest<{
+        environment: string;
+        network: string;
+        wallet_address: string;
+        domain: string;
+        message: string;
+        expires_at: string;
+        challenge_id: string;
+      }>(accessToken, "v1/me/wallet/challenge", "POST", {
         wallet_address: address,
       });
       if (epoch.current !== turn) return;
@@ -88,10 +95,15 @@ export function CustomerWalletLink({
         throw Error();
       const signature = await wallet.signMessage(new TextEncoder().encode(c.message));
       if (epoch.current !== turn) return;
-      const result = await journeyRequest<any>(accessToken, "v1/me/wallet/confirm", "POST", {
-        challenge_id: c.challenge_id,
-        signature_base64: btoa(String.fromCharCode(...signature)),
-      });
+      const result = await journeyRequest<LinkedWallet & { environment: string }>(
+        accessToken,
+        "v1/me/wallet/confirm",
+        "POST",
+        {
+          challenge_id: c.challenge_id,
+          signature_base64: btoa(String.fromCharCode(...signature)),
+        },
+      );
       if (epoch.current !== turn) return;
       if (
         result.environment !== "test" ||
