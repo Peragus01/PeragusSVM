@@ -29,14 +29,16 @@ export function journeyMethods(path: string) {
     inviteParts[2] === "pilot-invites" &&
     new RegExp("^" + UUID + "$", "i").test(inviteParts[3] ?? "") &&
     inviteParts[4] === "revoke"
-  ) return ["POST"];
+  )
+    return ["POST"];
   if (
     inviteParts.length === 4 &&
     inviteParts[0] === "v1" &&
     inviteParts[1] === "admin" &&
     inviteParts[2] === "pilot-invites" &&
     new RegExp("^" + UUID + "$", "i").test(inviteParts[3] ?? "")
-  ) return ["GET"];
+  )
+    return ["GET"];
   if (new RegExp(`^v1/me/sandbox-pix/${UUID}$`, "i").test(path)) return ["GET"];
   if (new RegExp(`^v1/me/sandbox-pix/${UUID}/reconcile$`, "i").test(path)) return ["POST"];
   return routes[path] ?? [];

@@ -31,13 +31,18 @@ describe("operator invite proxy allowlist", () => {
       `v1/admin/pilot-invites/${id}/approve`,
       "v1/admin/withdrawal-requests",
       "v1/admin/pilot-invites/../admin",
-    ]) expect(journeyMethods(path)).toEqual([]);
+    ])
+      expect(journeyMethods(path)).toEqual([]);
   });
 
   it("rejects unauthenticated operator reads and writes without contacting the backend", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch");
     for (const method of ["GET", "POST"]) {
-      const response = await forwardJourney(request("v1/admin/pilot-invites", method, false), new URL(`${base}/v1/admin/pilot-invites`), "v1/admin/pilot-invites");
+      const response = await forwardJourney(
+        request("v1/admin/pilot-invites", method, false),
+        new URL(`${base}/v1/admin/pilot-invites`),
+        "v1/admin/pilot-invites",
+      );
       expect(response.status).toBe(401);
       expect(await response.json()).toEqual({ error: { code: "AUTH_REQUIRED" } });
     }
@@ -45,15 +50,19 @@ describe("operator invite proxy allowlist", () => {
   });
 
   it("preserves bearer token, method and one-time response code but never forwards cookies", async () => {
-    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json(
-        { data: { id }, code: "pginv_one_time_code", meta: { idempotent_replay: false } },
-        { status: 201, headers: { "set-cookie": "secret=never-forward" } },
-      ),
-    );
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        Response.json(
+          { data: { id }, code: "pginv_one_time_code", meta: { idempotent_replay: false } },
+          { status: 201, headers: { "set-cookie": "secret=never-forward" } },
+        ),
+      );
     const body = {
-      request_id: id, target_email: "tester@example.test",
-      expires_in_hours: 24, reason: "Operator authorized test invitation",
+      request_id: id,
+      target_email: "tester@example.test",
+      expires_in_hours: 24,
+      reason: "Operator authorized test invitation",
     };
     const response = await forwardJourney(
       request("v1/admin/pilot-invites", "POST", true, body),
@@ -67,16 +76,23 @@ describe("operator invite proxy allowlist", () => {
     expect(response.headers.get("vary")).toBe("Authorization");
     const [target, options] = fetcher.mock.calls[0]!;
     expect(String(target)).toBe(`${base}/v1/admin/pilot-invites`);
-    expect(options).toMatchObject({ method: "POST", credentials: "omit", cache: "no-store", redirect: "error" });
+    expect(options).toMatchObject({
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+    });
     expect(new Headers(options?.headers).get("authorization")).toBe(`Bearer ${bearer}`);
     expect(new Headers(options?.headers).get("cookie")).toBeNull();
     expect(JSON.parse(String(options?.body))).toEqual(body);
   });
 
   it("passes backend MFA denial through without bypassing authorization", async () => {
-    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({ error: { code: "WITHDRAWAL_OPERATOR_MFA_REQUIRED" } }, { status: 403 }),
-    );
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        Response.json({ error: { code: "WITHDRAWAL_OPERATOR_MFA_REQUIRED" } }, { status: 403 }),
+      );
     const response = await forwardJourney(
       request("v1/admin/pilot-invites", "GET"),
       new URL(`${base}/v1/admin/pilot-invites`),
