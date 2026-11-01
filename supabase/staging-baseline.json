@@ -1,0 +1,68 @@
+{
+  "captured_at": "2026-11-01",
+  "project_ref": "lybdkqkbwlfwvmmvstzi",
+  "purpose": "Existing staging baseline; no automatic deployment",
+  "normalization": "SQL files retain historical statement order with a final LF; compare migration history before replay",
+  "edge_function": {
+    "slug": "process-welcome-email",
+    "version": 7,
+    "verify_jwt": true
+  },
+  "resend_template": {
+    "alias": "peragus-boas-vindas",
+    "id": "a7243e17-efbf-42c0-b1f7-bf118c079981",
+    "published_at": "2026-11-01T03:50:53.872Z",
+    "state": "published"
+  },
+  "operator_adoption": {
+    "platform_version": "20261101181204",
+    "backend_filename": "037_expand_operator_invites.sql",
+    "sha256": "9e1a260d658e308626c6062015665542d7f6434ed0f2df384a43b7482b6a4e8e"
+  },
+  "files": [
+    {
+      "path": "supabase/README.md",
+      "sha256": "d0fecbbb3f89b1d107234f7cb86573b1b622898930f3094035f4d33418fa61dc"
+    },
+    {
+      "path": "supabase/config.toml",
+      "sha256": "99a3146ab4fd881d39135ef57fd78aed51ca52e832fead4590a8c9a79194665b"
+    },
+    {
+      "path": "supabase/functions/process-welcome-email/index.ts",
+      "sha256": "14c4f74b0a161511867d222f9068213fc2454cdc0c0ad87e20ea23c014ff78e8"
+    },
+    {
+      "path": "supabase/migrations/20261101024529_welcome_email_outbox_on_confirmation.sql",
+      "sha256": "a4049eb20295394aaba35de9e1bd743d1a3767e956c2219e9f6d8344bc53465e"
+    },
+    {
+      "path": "supabase/migrations/20261101024555_welcome_handle_autoconfirmed_signups.sql",
+      "sha256": "90d7f9c2f77fe7dce71e3101d9574578258777e472edcd00c734875ee6ed6ddd"
+    },
+    {
+      "path": "supabase/migrations/20261101024609_welcome_private_worker_rpc.sql",
+      "sha256": "5c48734942f44a505d229fa2ddec2125327c273eb649dbef7317cff434d4514b"
+    },
+    {
+      "path": "supabase/migrations/20261101035656_prepare_welcome_email_staging_scheduler.sql",
+      "sha256": "bad99d3396e72c6512b8405ec5724b5859d6950ff4db3f78f6f7493944cb987d"
+    },
+    {
+      "path": "supabase/migrations/20261101040833_schedule_welcome_queue_with_vault_guard.sql",
+      "sha256": "8427017ddfaa023fe408dbb92ba117009de812df0c5a1fc2860aa6ba9383e772"
+    },
+    {
+      "path": "supabase/migrations/20261101181204_expand_operator_invites_037.sql",
+      "sha256": "9e1a260d658e308626c6062015665542d7f6434ed0f2df384a43b7482b6a4e8e"
+    },
+    {
+      "path": "supabase/templates/peragus-boas-vindas.html",
+      "sha256": "fa69faa7595a000c9e76cbd66750542c458f8e02b5d999f355806729806cf705"
+    },
+    {
+      "path": "supabase/templates/peragus-boas-vindas.txt",
+      "sha256": "825d5aaa02004592a017fe257d98a2276f646f7864f8e048af8e806eab49957f"
+    }
+  ]
+}
