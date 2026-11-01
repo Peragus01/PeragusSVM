@@ -134,8 +134,6 @@ export interface FileRoutesByFullPath {
   '/app/minha-conta': typeof AppMinhaContaRoute
   '/app/operacoes': typeof AppOperacoesRouteWithChildren
   '/operador/convites': typeof OperadorConvitesRoute
-  '/operador/convites': typeof OperadorConvitesRoute
-  '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
   '/app/': typeof AppIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
@@ -153,6 +151,7 @@ export interface FileRoutesByTo {
   '/app/carteira': typeof AppCarteiraRoute
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
+  '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
   '/app': typeof AppIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
@@ -173,6 +172,7 @@ export interface FileRoutesById {
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
   '/app/operacoes': typeof AppOperacoesRouteWithChildren
+  '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
   '/app/': typeof AppIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
@@ -195,8 +195,6 @@ export interface FileRouteTypes {
     | '/app/minha-conta'
     | '/app/operacoes'
     | '/operador/convites'
-    | '/operador/convites'
-    | '/operador/convites'
     | '/operador/estornos'
     | '/app/'
     | '/app/operacoes/$id'
@@ -214,6 +212,7 @@ export interface FileRouteTypes {
     | '/app/carteira'
     | '/app/comprar-usdt'
     | '/app/minha-conta'
+    | '/operador/convites'
     | '/operador/estornos'
     | '/app'
     | '/app/operacoes/$id'
@@ -233,6 +232,7 @@ export interface FileRouteTypes {
     | '/app/comprar-usdt'
     | '/app/minha-conta'
     | '/app/operacoes'
+    | '/operador/convites'
     | '/operador/estornos'
     | '/app/'
     | '/app/operacoes/$id'
