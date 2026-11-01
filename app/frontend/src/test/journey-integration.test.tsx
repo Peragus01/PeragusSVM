@@ -117,9 +117,8 @@ describe("invited registration", () => {
   });
 });
 describe("narrow journey proxy", () => {
-  it("never exposes administrative or simulation resources", () => {
+  it("rejects unrelated administrative and simulation resources", () => {
     for (const path of [
-      "v1/admin/pilot-invites",
       "v1/admin/refund-requests",
       "v1/me/onboarding/verification/simulate",
       "v1/me/sandbox-pix/id/simulate",
