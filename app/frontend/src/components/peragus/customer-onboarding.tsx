@@ -3,6 +3,7 @@ import { CustomerNotice, CustomerPanel } from "./customer-ui";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
 
+type OnboardingResponse = Draft & Terms & Verification & { state: string; result: string };
 type Draft = { version: number; individual: Individual };
 type Individual = {
   legal_name: string;
@@ -98,7 +99,7 @@ export function CustomerOnboarding() {
     ];
     void Promise.allSettled(
       paths.map((path) =>
-        journeyRequest<any>(accessToken, `v1/me/${path}`, "GET", undefined, abort.signal),
+        journeyRequest<OnboardingResponse>(accessToken, `v1/me/${path}`, "GET", undefined, abort.signal),
       ),
     ).then((results) => {
       if (abort.signal.aborted) return;
@@ -129,7 +130,7 @@ export function CustomerOnboarding() {
     setError("");
     const turn = epoch.current;
     try {
-      const result = await journeyRequest<any>(accessToken, `v1/me/${path}`, method, body);
+      const result = await journeyRequest<OnboardingResponse>(accessToken, `v1/me/${path}`, method, body);
       if (epoch.current !== turn) return;
       if (path === "onboarding/individual") setDraft(result);
       else if (path.startsWith("onboarding/terms")) {
