@@ -1,6 +1,7 @@
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const routes: Record<string, string[]> = {
   "registration/invite/check": ["POST"],
+  "v1/admin/pilot-invites": ["GET", "POST"],
   "v1/me/pilot-invite/redeem": ["POST"],
   "v1/me/purchase-capabilities": ["GET"],
   "v1/me/customer": ["PATCH"],
@@ -20,6 +21,52 @@ const routes: Record<string, string[]> = {
   "v1/me/sandbox-pix": ["POST"],
 };
 export function journeyMethods(path: string) {
+  if (new RegExp(`^v1/admin/pilot-invites/${UUID}const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const routes: Record<string, string[]> = {
+  "registration/invite/check": ["POST"],
+  "v1/admin/pilot-invites": ["GET", "POST"],
+  "v1/me/pilot-invite/redeem": ["POST"],
+  "v1/me/purchase-capabilities": ["GET"],
+  "v1/me/customer": ["PATCH"],
+  "v1/me/onboarding/individual": ["GET", "PUT"],
+  "v1/me/onboarding/terms": ["GET", "POST"],
+  "v1/me/onboarding/terms/accept": ["POST"],
+  "v1/me/onboarding": ["GET"],
+  "v1/me/onboarding/submit": ["POST"],
+  "v1/me/onboarding/refresh": ["POST"],
+  "v1/me/onboarding/verification": ["GET", "POST"],
+  "v1/me/onboarding/verification/refresh": ["POST"],
+  "v1/me/onboarding/screening": ["GET", "POST"],
+  "v1/me/onboarding/screening/refresh": ["POST"],
+  "v1/me/wallet": ["GET"],
+  "v1/me/wallet/challenge": ["POST"],
+  "v1/me/wallet/confirm": ["POST"],
+  "v1/me/sandbox-pix": ["POST"],
+};
+, "i").test(path)) return ["GET"];
+  if (new RegExp(`^v1/admin/pilot-invites/${UUID}/revokeconst UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const routes: Record<string, string[]> = {
+  "registration/invite/check": ["POST"],
+  "v1/admin/pilot-invites": ["GET", "POST"],
+  "v1/me/pilot-invite/redeem": ["POST"],
+  "v1/me/purchase-capabilities": ["GET"],
+  "v1/me/customer": ["PATCH"],
+  "v1/me/onboarding/individual": ["GET", "PUT"],
+  "v1/me/onboarding/terms": ["GET", "POST"],
+  "v1/me/onboarding/terms/accept": ["POST"],
+  "v1/me/onboarding": ["GET"],
+  "v1/me/onboarding/submit": ["POST"],
+  "v1/me/onboarding/refresh": ["POST"],
+  "v1/me/onboarding/verification": ["GET", "POST"],
+  "v1/me/onboarding/verification/refresh": ["POST"],
+  "v1/me/onboarding/screening": ["GET", "POST"],
+  "v1/me/onboarding/screening/refresh": ["POST"],
+  "v1/me/wallet": ["GET"],
+  "v1/me/wallet/challenge": ["POST"],
+  "v1/me/wallet/confirm": ["POST"],
+  "v1/me/sandbox-pix": ["POST"],
+};
+, "i").test(path)) return ["POST"];
   if (new RegExp(`^v1/me/sandbox-pix/${UUID}$`, "i").test(path)) return ["GET"];
   if (new RegExp(`^v1/me/sandbox-pix/${UUID}/reconcile$`, "i").test(path)) return ["POST"];
   return routes[path] ?? [];
