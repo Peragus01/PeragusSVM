@@ -23,6 +23,7 @@ import { Route as AppCarteiraRouteImport } from './routes/app.carteira'
 import { Route as AppComprarUsdtRouteImport } from './routes/app.comprar-usdt'
 import { Route as AppMinhaContaRouteImport } from './routes/app.minha-conta'
 import { Route as AppOperacoesRouteImport } from './routes/app.operacoes'
+import { Route as OperadorConvitesRouteImport } from './routes/operador.convites'
 import { Route as OperadorEstornosRouteImport } from './routes/operador.estornos'
 import { Route as AppOperacoesIndexRouteImport } from './routes/app.operacoes.index'
 import { Route as AppOperacoesIdRouteImport } from './routes/app.operacoes.$id'
@@ -97,6 +98,11 @@ const AppOperacoesRoute = AppOperacoesRouteImport.update({
   path: '/operacoes',
   getParentRoute: () => AppRoute,
 } as any)
+const OperadorConvitesRoute = OperadorConvitesRouteImport.update({
+  id: '/operador/convites',
+  path: '/operador/convites',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OperadorEstornosRoute = OperadorEstornosRouteImport.update({
   id: '/operador/estornos',
   path: '/operador/estornos',
@@ -127,6 +133,7 @@ export interface FileRoutesByFullPath {
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
   '/app/operacoes': typeof AppOperacoesRouteWithChildren
+  '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
   '/app/': typeof AppIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
@@ -144,6 +151,7 @@ export interface FileRoutesByTo {
   '/app/carteira': typeof AppCarteiraRoute
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
+  '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
   '/app': typeof AppIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
@@ -164,6 +172,7 @@ export interface FileRoutesById {
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
   '/app/operacoes': typeof AppOperacoesRouteWithChildren
+  '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
   '/app/': typeof AppIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
@@ -185,6 +194,7 @@ export interface FileRouteTypes {
     | '/app/comprar-usdt'
     | '/app/minha-conta'
     | '/app/operacoes'
+    | '/operador/convites'
     | '/operador/estornos'
     | '/app/'
     | '/app/operacoes/$id'
@@ -202,6 +212,7 @@ export interface FileRouteTypes {
     | '/app/carteira'
     | '/app/comprar-usdt'
     | '/app/minha-conta'
+    | '/operador/convites'
     | '/operador/estornos'
     | '/app'
     | '/app/operacoes/$id'
@@ -221,6 +232,7 @@ export interface FileRouteTypes {
     | '/app/comprar-usdt'
     | '/app/minha-conta'
     | '/app/operacoes'
+    | '/operador/convites'
     | '/operador/estornos'
     | '/app/'
     | '/app/operacoes/$id'
@@ -236,6 +248,7 @@ export interface RootRouteChildren {
   RecuperarSenhaRoute: typeof RecuperarSenhaRoute
   SettlementsRoute: typeof SettlementsRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  OperadorConvitesRoute: typeof OperadorConvitesRoute
   OperadorEstornosRoute: typeof OperadorEstornosRoute
 }
 
@@ -339,6 +352,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOperacoesRouteImport
       parentRoute: typeof AppRoute
     }
+    '/operador/convites': {
+      id: '/operador/convites'
+      path: '/operador/convites'
+      fullPath: '/operador/convites'
+      preLoaderRoute: typeof OperadorConvitesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/operador/estornos': {
       id: '/operador/estornos'
       path: '/operador/estornos'
@@ -406,6 +426,7 @@ const rootRouteChildren: RootRouteChildren = {
   RecuperarSenhaRoute: RecuperarSenhaRoute,
   SettlementsRoute: SettlementsRoute,
   ApiSplatRoute: ApiSplatRoute,
+  OperadorConvitesRoute: OperadorConvitesRoute,
   OperadorEstornosRoute: OperadorEstornosRoute,
 }
 export const routeTree = rootRouteImport

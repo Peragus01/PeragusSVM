@@ -4,6 +4,22 @@ import { usePeragusWallet } from "./wallet-context";
 import { CustomerNotice } from "./customer-ui";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
 export type LinkedWallet = { wallet_address: string; network: "solana:devnet" };
+type WalletStatus = {
+  environment: string;
+  customer: { id: string };
+  operations_enabled: boolean;
+  wallet: LinkedWallet | null;
+};
+type WalletChallenge = {
+  environment: string;
+  network: string;
+  wallet_address: string;
+  domain: string;
+  message: string;
+  expires_at: string;
+  challenge_id: string;
+};
+type WalletConfirmation = { environment: string; network: "solana:devnet"; wallet_address: string };
 export function useLinkedWallet() {
   const { accessToken, identity } = useCustomerSession();
   const [linked, setLinked] = useState<LinkedWallet | null>(null);
@@ -13,12 +29,13 @@ export function useLinkedWallet() {
     setLinked(null);
     setError("");
     if (!accessToken || !identity?.customer) return;
-    void journeyRequest<{
-      environment: string;
-      operations_enabled: boolean;
-      customer?: { id: string };
-      wallet?: LinkedWallet;
-    }>(accessToken, "v1/me/onboarding/status", "GET", undefined, controller.signal)
+    void journeyRequest<WalletStatus>(
+      accessToken,
+      "v1/me/onboarding/status",
+      "GET",
+      undefined,
+      controller.signal,
+    )
       .then((data) => {
         if (controller.signal.aborted) return;
         if (
@@ -69,17 +86,14 @@ export function CustomerWalletLink({
     const turn = epoch.current,
       address = wallet.address;
     try {
-      const c = await journeyRequest<{
-        environment: string;
-        network: string;
-        wallet_address: string;
-        domain: string;
-        message: string;
-        expires_at: string;
-        challenge_id: string;
-      }>(accessToken, "v1/me/wallet/challenge", "POST", {
-        wallet_address: address,
-      });
+      const c = await journeyRequest<WalletChallenge>(
+        accessToken,
+        "v1/me/wallet/challenge",
+        "POST",
+        {
+          wallet_address: address,
+        },
+      );
       if (epoch.current !== turn) return;
       if (
         c.environment !== "test" ||
@@ -95,7 +109,7 @@ export function CustomerWalletLink({
         throw Error();
       const signature = await wallet.signMessage(new TextEncoder().encode(c.message));
       if (epoch.current !== turn) return;
-      const result = await journeyRequest<LinkedWallet & { environment: string }>(
+      const result = await journeyRequest<WalletConfirmation>(
         accessToken,
         "v1/me/wallet/confirm",
         "POST",
