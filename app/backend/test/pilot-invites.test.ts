@@ -172,35 +172,38 @@ describe("closed PF pilot invitations", () => {
         .rows[0],
     ).toEqual({ n: 0 });
   });
-  it("enforces five slots under concurrent issuance and retains redeemed seats", async () => {
-    const issued = await Promise.allSettled(
+  it("allocates new slots beyond five without losing audit or one-use semantics", async () => {
+    const issued = await Promise.all(
       Array.from({ length: 7 }, () => issue()),
     );
-    const successes = issued.filter(
-      (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof issue>>> =>
-        r.status === "fulfilled",
-    );
-    expect(successes).toHaveLength(5);
-    for (const { value } of successes)
+    expect(issued).toHaveLength(7);
+    expect(new Set(issued.map((item) => item.data.slot)).size).toBe(7);
+    for (const value of issued)
       await service().redeem(
-        { id: value.data.target_user_id, email: "verified@example.test" },
+        { id: value.data.target_user_id!, email: "verified@example.test" },
         randomUUID(),
         value.code!,
         "Synthetic customer",
       );
-    await expect(issue()).rejects.toThrow("PILOT_CAPACITY_UNAVAILABLE");
+    const next = await issue();
+    expect(next.data.slot).toBeGreaterThan(5);
     await expect(
-      service().revoke(
-        operator,
-        successes[0]!.value.data.id,
-        randomUUID(),
-        reason,
-      ),
+      service().revoke(operator, issued[0]!.data.id, randomUUID(), reason),
     ).rejects.toThrow("PILOT_INVITE_TERMINAL");
     expect(
-      (await db.query("select count(*)::int as n from peragus_customers"))
-        .rows[0],
-    ).toEqual({ n: 5 });
+      (await db.query("select count(*)::int as n from peragus_customers")).rows[0],
+    ).toEqual({ n: 7 });
+  });
+  it("restricts invite history to MFA operators and never returns codes", async () => {
+    const issued = await issue();
+    const history = await service().list(operator);
+    expect(history.some((item) => item.id === issued.data.id)).toBe(true);
+    expect(JSON.stringify(history)).not.toContain(issued.code!);
+    await expect(service().list({
+      id: randomUUID(),
+      email: "not-operator@example.test",
+      assuranceLevel: "aal2",
+    })).rejects.toThrow();
   });
   it("revokes an unused code idempotently and reuses its slot without restoring it", async () => {
     const issued = await issue(),
