@@ -224,8 +224,17 @@ export class PilotInviteService {
     where s.admitted_user_id is null and (s.current_invite_id is null or i.state in ('revoked','expired'))
      and not exists(select 1 from peragus_customers where owner_user_id=$3 or owner_user_id=$2)
     order by s.slot limit 1 for update of s skip locked
+   ), allocated as (
+    insert into peragus_pilot_invite_slots(slot)
+    select nextval('public.peragus_pilot_invite_slot_sequence')::integer
+    where not exists(select 1 from available)
+    returning slot,current_invite_id
+   ), chosen as (
+    select slot,current_invite_id from available
+    union all
+    select slot,current_invite_id from allocated
    ), claimed as (
-    update peragus_pilot_invite_slots s set current_invite_id=$1 from available a
+    update peragus_pilot_invite_slots s set current_invite_id=$1 from chosen a
     where s.slot=a.slot and s.admitted_user_id is null and s.current_invite_id is not distinct from a.current_invite_id returning s.slot
    ) insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,code_hash,duration_hours,reason,expires_at,target_email_hash)
     select $1,slot,$3,$2,$4,$5,$6,$7,now()+($6::int*interval '1 hour'),$8 from claimed returning *`,
@@ -244,6 +253,14 @@ export class PilotInviteService {
         return this.replayIssue(winner, target, hours, reason, emailHash);
       fail("PILOT_USER_ALREADY_INVITED");
     }
+  }
+  async list(user: AuthenticatedUser) {
+    this.authorize(user);
+    const rows = await this.pool.query<InviteRow>(
+      "select * from peragus_pilot_invites where environment='test' order by created_at desc,id desc limit 50",
+    );
+    // Raw codes and email hashes are never persisted in or returned by the list API.
+    return rows.rows.map(view);
   }
   async read(user: AuthenticatedUser, id: string) {
     this.authorize(user);
