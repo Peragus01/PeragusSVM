@@ -4,8 +4,21 @@ import { usePeragusWallet } from "./wallet-context";
 import { CustomerNotice } from "./customer-ui";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
 export type LinkedWallet = { wallet_address: string; network: "solana:devnet" };
-type WalletStatus = { environment: string; customer: { id: string }; operations_enabled: boolean; wallet: LinkedWallet | null };
-type WalletChallenge = { environment: string; network: string; wallet_address: string; domain: string; message: string; expires_at: string; challenge_id: string };
+type WalletStatus = {
+  environment: string;
+  customer: { id: string };
+  operations_enabled: boolean;
+  wallet: LinkedWallet | null;
+};
+type WalletChallenge = {
+  environment: string;
+  network: string;
+  wallet_address: string;
+  domain: string;
+  message: string;
+  expires_at: string;
+  challenge_id: string;
+};
 type WalletConfirmation = { environment: string; network: "solana:devnet"; wallet_address: string };
 export function useLinkedWallet() {
   const { accessToken, identity } = useCustomerSession();
@@ -73,9 +86,14 @@ export function CustomerWalletLink({
     const turn = epoch.current,
       address = wallet.address;
     try {
-      const c = await journeyRequest<WalletChallenge>(accessToken, "v1/me/wallet/challenge", "POST", {
-        wallet_address: address,
-      });
+      const c = await journeyRequest<WalletChallenge>(
+        accessToken,
+        "v1/me/wallet/challenge",
+        "POST",
+        {
+          wallet_address: address,
+        },
+      );
       if (epoch.current !== turn) return;
       if (
         c.environment !== "test" ||
@@ -91,10 +109,15 @@ export function CustomerWalletLink({
         throw Error();
       const signature = await wallet.signMessage(new TextEncoder().encode(c.message));
       if (epoch.current !== turn) return;
-      const result = await journeyRequest<WalletConfirmation>(accessToken, "v1/me/wallet/confirm", "POST", {
-        challenge_id: c.challenge_id,
-        signature_base64: btoa(String.fromCharCode(...signature)),
-      });
+      const result = await journeyRequest<WalletConfirmation>(
+        accessToken,
+        "v1/me/wallet/confirm",
+        "POST",
+        {
+          challenge_id: c.challenge_id,
+          signature_base64: btoa(String.fromCharCode(...signature)),
+        },
+      );
       if (epoch.current !== turn) return;
       if (
         result.environment !== "test" ||

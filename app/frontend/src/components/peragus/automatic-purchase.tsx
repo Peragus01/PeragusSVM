@@ -144,7 +144,17 @@ export function AutomaticPurchaseForm({
   useEffect(() => {
     const abort = new AbortController();
     setCapabilities(null);
-    void journeyRequest<{environment: string; operations_enabled: boolean; real_purchase: boolean; required_costs_complete: boolean; network: string; quote: boolean; record: boolean; pix: boolean; [key: string]: unknown}>(token, "v1/me/purchase-capabilities", "GET", undefined, abort.signal)
+    void journeyRequest<{
+      environment: string;
+      operations_enabled: boolean;
+      real_purchase: boolean;
+      required_costs_complete: boolean;
+      network: string;
+      quote: boolean;
+      record: boolean;
+      pix: boolean;
+      [key: string]: unknown;
+    }>(token, "v1/me/purchase-capabilities", "GET", undefined, abort.signal)
       .then((c) => {
         if (abort.signal.aborted) return;
         if (

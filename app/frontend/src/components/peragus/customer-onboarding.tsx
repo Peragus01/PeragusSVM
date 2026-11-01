@@ -99,7 +99,13 @@ export function CustomerOnboarding() {
     ];
     void Promise.allSettled(
       paths.map((path) =>
-        journeyRequest<OnboardingResponse>(accessToken, `v1/me/${path}`, "GET", undefined, abort.signal),
+        journeyRequest<OnboardingResponse>(
+          accessToken,
+          `v1/me/${path}`,
+          "GET",
+          undefined,
+          abort.signal,
+        ),
       ),
     ).then((results) => {
       if (abort.signal.aborted) return;
@@ -130,7 +136,12 @@ export function CustomerOnboarding() {
     setError("");
     const turn = epoch.current;
     try {
-      const result = await journeyRequest<OnboardingResponse>(accessToken, `v1/me/${path}`, method, body);
+      const result = await journeyRequest<OnboardingResponse>(
+        accessToken,
+        `v1/me/${path}`,
+        method,
+        body,
+      );
       if (epoch.current !== turn) return;
       if (path === "onboarding/individual") setDraft(result);
       else if (path.startsWith("onboarding/terms")) {
