@@ -5,7 +5,7 @@ import {
   CustomerPanel,
   CustomerPublicLayout,
 } from "@/components/peragus/customer-ui";
-import { useCustomerSession } from "@/lib/peragus/customer-session";
+import { CustomerSessionError, useCustomerSession } from "@/lib/peragus/customer-session";
 import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
 
 export const Route = createFileRoute("/operador/convites")({ component: OperatorInvitesPage });
@@ -104,7 +104,7 @@ function OperatorInvitesPage() {
   );
 }
 
-function InviteConsole({
+export function InviteConsole({
   token,
   verifyMfa,
 }: {
@@ -129,8 +129,11 @@ function InviteConsole({
     reason: string;
   } | null>(null);
   function handleError(err: unknown) {
-    if (err instanceof JourneyError && err.code === "WITHDRAWAL_OPERATOR_MFA_REQUIRED")
+    if (err instanceof JourneyError && err.code === "WITHDRAWAL_OPERATOR_MFA_REQUIRED") {
       setMfaNeeded(true);
+      setError("Confirme a autenticação multifator para liberar a emissão de convites.");
+      return;
+    }
     setError(journeyMessage(err));
   }
   async function refresh() {
@@ -155,9 +158,13 @@ function InviteConsole({
       await verifyMfa(mfaCode);
       setMfaNeeded(false);
       setMfaCode("");
-      await refresh();
-    } catch {
-      setError("Código MFA inválido ou expirado.");
+      setInfo("MFA confirmado. Você já pode gerar o convite ou atualizar o histórico.");
+    } catch (err) {
+      setError(
+        err instanceof CustomerSessionError && err.code === "MFA_REQUIRED"
+          ? err.message
+          : "Não foi possível confirmar o MFA. Verifique o código e tente novamente.",
+      );
     } finally {
       setBusy(false);
     }
@@ -195,7 +202,12 @@ function InviteConsole({
         error?: { code?: string };
         meta?: { idempotent_replay?: boolean };
       };
-      if (!response.ok) throw new JourneyError(payload.error?.code ?? "UNAVAILABLE");
+      if (!response.ok) {
+        // A definite client/auth rejection never issued a code. Only keep the
+        // idempotency key if the operation's outcome might genuinely be unknown.
+        if ([400, 401, 403, 404, 409, 422, 429].includes(response.status)) pending.current = null;
+        throw new JourneyError(payload.error?.code ?? "UNAVAILABLE");
+      }
       if (!payload.data) throw new JourneyError("INVALID_RESPONSE");
       if (payload.code) {
         setCreated({ code: payload.code, record: payload.data });
