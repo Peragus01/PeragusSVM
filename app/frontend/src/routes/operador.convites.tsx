@@ -5,7 +5,7 @@ import {
   CustomerPanel,
   CustomerPublicLayout,
 } from "@/components/peragus/customer-ui";
-import { useCustomerSession } from "@/lib/peragus/customer-session";
+import { CustomerSessionError, useCustomerSession } from "@/lib/peragus/customer-session";
 import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
 
 export const Route = createFileRoute("/operador/convites")({ component: OperatorInvitesPage });
@@ -159,8 +159,12 @@ function InviteConsole({
       setMfaNeeded(false);
       setMfaCode("");
       setInfo("MFA confirmado. Você já pode gerar o convite ou atualizar o histórico.");
-    } catch {
-      setError("Código MFA inválido ou expirado.");
+    } catch (err) {
+      setError(
+        err instanceof CustomerSessionError && err.code === "MFA_REQUIRED"
+          ? err.message
+          : "Não foi possível confirmar o MFA. Verifique o código e tente novamente.",
+      );
     } finally {
       setBusy(false);
     }
