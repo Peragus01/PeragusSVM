@@ -225,19 +225,17 @@ export class PilotInviteService {
      and not exists(select 1 from peragus_customers where owner_user_id=$3 or owner_user_id=$2)
     order by s.slot limit 1 for update of s skip locked
    ), allocated as (
-    insert into peragus_pilot_invite_slots(slot)
-    select nextval('public.peragus_pilot_invite_slot_sequence')::integer
+    insert into peragus_pilot_invite_slots(slot,current_invite_id)
+    select nextval('public.peragus_pilot_invite_slot_sequence')::integer,$1
     where not exists(select 1 from available)
-    returning slot,current_invite_id
-   ), chosen as (
-    select slot,current_invite_id from available
-    union all
-    select slot,current_invite_id from allocated
+    returning slot
    ), claimed as (
-    update peragus_pilot_invite_slots s set current_invite_id=$1 from chosen a
+    update peragus_pilot_invite_slots s set current_invite_id=$1 from available a
     where s.slot=a.slot and s.admitted_user_id is null and s.current_invite_id is not distinct from a.current_invite_id returning s.slot
+   ), assigned as (
+    select slot from allocated union all select slot from claimed
    ) insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,code_hash,duration_hours,reason,expires_at,target_email_hash)
-    select $1,slot,$3,$2,$4,$5,$6,$7,now()+($6::int*interval '1 hour'),$8 from claimed returning *`,
+    select $1,slot,$3,$2,$4,$5,$6,$7,now()+($6::int*interval '1 hour'),$8 from assigned returning *`,
         [id, user.id, target, requestId, hash(code), hours, reason, emailHash],
       );
       const row = inserted.rows[0];
