@@ -3,7 +3,11 @@ import { CustomerNotice, CustomerPanel } from "./customer-ui";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
 
-type OnboardingResponse = Draft & Terms & Omit<Verification, "status"> & { status: string; state: string; result: string };
+type OnboardingResponse = Draft & Terms & Omit<Verification, "status"> & {
+  status: string;
+  state: string;
+  result: string;
+};
 type Draft = { version: number; individual: Individual };
 type Individual = {
   legal_name: string;
