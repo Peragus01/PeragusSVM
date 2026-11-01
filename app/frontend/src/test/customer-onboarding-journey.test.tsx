@@ -44,7 +44,7 @@ describe("resumable required KYC", () => {
     await screen.findByRole("button", { name: "Iniciar verificação de identidade" });
     expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Iniciar verificação de identidade" }));
-    await screen.findByText(/A OZAV não disponibiliza captura hospedada/);
+    await screen.findByText(/Sobre a verificação no ambiente de testes/);
     expect(screen.queryByRole("button", { name: "Iniciar verificação de identidade" })).toBeNull();
     view.unmount();
     render(<CustomerOnboarding />);
@@ -56,6 +56,6 @@ describe("resumable required KYC", () => {
       expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(2),
     );
     expect(fetcher.mock.calls.some(([url]) => String(url).includes("/simulate"))).toBe(false);
-    expect(screen.getByText(/não autoriza transações reais/)).toBeInTheDocument();
+    expect(screen.getByText(/Este ambiente não permite operações reais/)).toBeInTheDocument();
   });
 });
