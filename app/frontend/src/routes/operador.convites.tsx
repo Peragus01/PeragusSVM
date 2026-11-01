@@ -104,7 +104,7 @@ function OperatorInvitesPage() {
   );
 }
 
-function InviteConsole({
+export function InviteConsole({
   token,
   verifyMfa,
 }: {
