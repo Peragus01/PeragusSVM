@@ -11,7 +11,8 @@ const issuedInvite = {
   reason: "Convite autorizado pelo operador Peragus",
   target_user_id: null,
 };
-const success = () => Response.json({ data: issuedInvite, code: "pginv_test_code" }, { status: 201 });
+const success = () =>
+  Response.json({ data: issuedInvite, code: "pginv_test_code" }, { status: 201 });
 const history = () => Response.json({ data: [] });
 
 afterEach(() => {
