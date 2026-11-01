@@ -205,8 +205,7 @@ export function InviteConsole({
       if (!response.ok) {
         // A definite client/auth rejection never issued a code. Only keep the
         // idempotency key if the operation's outcome might genuinely be unknown.
-        if ([400, 401, 403, 404, 409, 422, 429].includes(response.status))
-          pending.current = null;
+        if ([400, 401, 403, 404, 409, 422, 429].includes(response.status)) pending.current = null;
         throw new JourneyError(payload.error?.code ?? "UNAVAILABLE");
       }
       if (!payload.data) throw new JourneyError("INVALID_RESPONSE");
