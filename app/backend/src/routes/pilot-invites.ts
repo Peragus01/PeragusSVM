@@ -90,6 +90,7 @@ export async function registerPilotInviteRoutes(
     );
     for (const [action, method, url] of [
       ["issue", "POST", "/v1/admin/pilot-invites"],
+      ["list", "GET", "/v1/admin/pilot-invites"],
       ["read", "GET", "/v1/admin/pilot-invites/:id"],
       ["revoke", "POST", "/v1/admin/pilot-invites/:id/revoke"],
       ["redeem", "POST", "/v1/me/pilot-invite/redeem"],
@@ -120,12 +121,12 @@ export async function registerPilotInviteRoutes(
               return reply
                 .code(400)
                 .send({ error: { code: "VALIDATION_ERROR" } });
-            if (action === "read") {
+            if (action === "read" || action === "list") {
               if (request.body !== undefined)
                 return reply
                   .code(400)
                   .send({ error: { code: "VALIDATION_ERROR" } });
-              return { data: await service.read(user, params.data!.id) };
+              return { data: action === "list" ? await service.list(user) : await service.read(user, params.data!.id) };
             }
             let body: unknown;
             try {
