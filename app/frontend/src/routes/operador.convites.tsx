@@ -129,8 +129,11 @@ function InviteConsole({
     reason: string;
   } | null>(null);
   function handleError(err: unknown) {
-    if (err instanceof JourneyError && err.code === "WITHDRAWAL_OPERATOR_MFA_REQUIRED")
+    if (err instanceof JourneyError && err.code === "WITHDRAWAL_OPERATOR_MFA_REQUIRED") {
       setMfaNeeded(true);
+      setError("Confirme a autenticação multifator para liberar a emissão de convites.");
+      return;
+    }
     setError(journeyMessage(err));
   }
   async function refresh() {
@@ -155,7 +158,7 @@ function InviteConsole({
       await verifyMfa(mfaCode);
       setMfaNeeded(false);
       setMfaCode("");
-      await refresh();
+      setInfo("MFA confirmado. Você já pode gerar o convite ou atualizar o histórico.");
     } catch {
       setError("Código MFA inválido ou expirado.");
     } finally {
@@ -195,7 +198,13 @@ function InviteConsole({
         error?: { code?: string };
         meta?: { idempotent_replay?: boolean };
       };
-      if (!response.ok) throw new JourneyError(payload.error?.code ?? "UNAVAILABLE");
+      if (!response.ok) {
+        // A definite client/auth rejection never issued a code. Only keep the
+        // idempotency key if the operation's outcome might genuinely be unknown.
+        if ([400, 401, 403, 404, 409, 422, 429].includes(response.status))
+          pending.current = null;
+        throw new JourneyError(payload.error?.code ?? "UNAVAILABLE");
+      }
       if (!payload.data) throw new JourneyError("INVALID_RESPONSE");
       if (payload.code) {
         setCreated({ code: payload.code, record: payload.data });
