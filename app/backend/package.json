@@ -19,7 +19,8 @@
     "demo:offramp": "node scripts/ozav-pix-expiry-demo.mjs offramp",
     "demo:audit": "node scripts/settlement-audit-demo.mjs",
     "dev:worker": "tsx watch src/worker.ts",
-    "start:worker": "node dist/worker.js"
+    "start:worker": "node dist/worker.js",
+    "start:onboarding-emails": "node dist/onboarding-email-worker.js"
   },
   "keywords": [],
   "author": "",

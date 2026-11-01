@@ -1,3 +1,5 @@
+import { notificationConfig } from "./notifications/config.js";
+import { emailNotificationReady } from "./notifications/onboarding-email.js";
 import { SandboxClosureService } from "./withdrawals/sandbox-closure.js";
 import { OperatorAlertService } from "./operations/operator-alerts.js";
 import { PostgresApiRateLimiter } from "./auth/api-rate-limits.js";
@@ -113,6 +115,7 @@ import { PostgresSolanaSettlementPreparationRepository } from "./repositories/so
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
 
 const env = getEnv();
+const onboardingEmailConfig = notificationConfig();
 
 // The executable API has no unauthenticated fallback. buildApp supports isolated
 // dependency-injected tests, but the deployed server must always enforce access.
@@ -617,6 +620,9 @@ const app = await buildApp({
             screening: env.CUSTOMER_SCREENINGS_ENABLED,
             wallet: env.CUSTOMER_WALLET_LINKING_ENABLED,
           },
+          undefined,
+          async customer => onboardingEmailConfig.enabled && onboardingEmailConfig.owners.includes(customer.ownerUserId)
+            ? emailNotificationReady(pool!, customer.ownerUserId) : false,
         ),
       }
     : {}),

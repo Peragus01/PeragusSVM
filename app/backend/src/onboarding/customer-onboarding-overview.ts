@@ -1,3 +1,4 @@
+import { onboardingReview } from "../notifications/onboarding-result.js";
 import type { Customer } from "../auth/customer-access.js";
 import type { OzavVerification } from "../providers/ozav-client.js";
 import type { TermsState } from "./terms-types.js";
@@ -21,7 +22,8 @@ const captureChecks = ["kyc_document", "liveness", "face_match"] as const;
 const allowedChecks = [...captureChecks,"aml_name_screening"] as const;
 export class CustomerOnboardingOverview {
   constructor(private readonly repository: OnboardingOverviewRepository, private readonly actions: OnboardingActions,
-    private readonly now: () => Date = () => new Date()) {}
+    private readonly now: () => Date = () => new Date(),
+    private readonly emailReady: (customer: Customer) => Promise<boolean> = async () => false) {}
   async read(customer: Customer) {
     const facts = await this.repository.read(customer.id);
     if (!facts.binding_consistent) throw new Error("ONBOARDING_EVIDENCE_CONFLICT");
@@ -63,6 +65,8 @@ export class CustomerOnboardingOverview {
     }
     return {
       customer: { id: customer.id, type: customer.type, verification_status: customer.verificationStatus },
+      review_state: onboardingReview(facts),
+      email_notifications: { enabled: await this.emailReady(customer).catch(() => false), channel: "email" },
       environment: "test", sandbox_only: true, source: "stored_observations", checked_at: this.now().toISOString(),
       draft: facts.draft ? { version: facts.draft.version, updated_at: facts.draft.updated_at,
         matches_submitted_version: facts.registration ? facts.draft.version===facts.registration.draft_version : null } : null,
