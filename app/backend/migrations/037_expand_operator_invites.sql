@@ -9,4 +9,12 @@ alter table public.peragus_pilot_invites add constraint peragus_pilot_invites_sl
 create sequence if not exists public.peragus_pilot_invite_slot_sequence as integer;
 select setval('public.peragus_pilot_invite_slot_sequence',
   greatest(5, coalesce((select max(slot) from public.peragus_pilot_invite_slots),0)), true);
-revoke all on sequence public.peragus_pilot_invite_slot_sequence from public, anon, authenticated;
+revoke all on sequence public.peragus_pilot_invite_slot_sequence from public;
+do $ begin
+  if exists(select 1 from pg_roles where rolname='anon') then
+    revoke all on sequence public.peragus_pilot_invite_slot_sequence from anon;
+  end if;
+  if exists(select 1 from pg_roles where rolname='authenticated') then
+    revoke all on sequence public.peragus_pilot_invite_slot_sequence from authenticated;
+  end if;
+end $;
