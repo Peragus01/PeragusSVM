@@ -92,6 +92,7 @@ function OperatorRefundPage() {
             )}
           </>
         )}
+        <p><Link className="customer-link" to="/operador/convites">Gerenciar convites de acesso</Link></p>
         <Link className="customer-link" to="/login">
           Acesso do cliente
         </Link>
