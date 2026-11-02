@@ -40,6 +40,7 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await db.exec(await readFile(new URL("../migrations/039_add_bank_statement_uploads.sql", import.meta.url), "utf8"));
 }, 30000);
 afterAll(async () => {
   await Promise.all(apps.map((a) => a.close()));
@@ -319,13 +320,14 @@ describe("private PF document uploads", () => {
     s.provider.listCustomerDocuments.mockResolvedValueOnce({
       data: [],
       has_more: false,
-      still_required: ["liveness", "identity_document"],
+      still_required: ["liveness", "identity_document", "bank_statement"],
       private_reason: "must not return",
     } as never);
     const required = await s.service.requirements(s.customer);
     expect(required.required_documents).toEqual([
       { doc_type: "liveness", supported_for_upload: false },
       { doc_type: "identity_document", supported_for_upload: true },
+      { doc_type: "bank_statement", supported_for_upload: true },
     ]);
     expect(JSON.stringify(required)).not.toContain("private_reason");
   });
@@ -441,6 +443,17 @@ describe("private PF document uploads", () => {
       validateDocument(pdf, Buffer.from("%PDF-1.7\n/JavaScript\n%%EOF")),
     ).toThrow("DOCUMENT_VALIDATION_ERROR");
     expect(s.provider.declareCustomerDocument).not.toHaveBeenCalled();
+  });
+  it("accepts a synthetic bank statement PDF and confirms matching receipt", async () => {
+    const s = await setup();
+    const input = { ...s.input, doc_type: "bank_statement" as const, side: "none" as const, mime: "application/pdf" as const };
+    const bytes = Buffer.from("%PDF-1.7\nsynthetic\n%%EOF");
+    const result = await s.service.send(s.customer, input, bytes);
+    expect(result.data.state).toBe("received");
+    expect(result.data.doc_type).toBe("bank_statement");
+    expect(result.data.identity_verified).toBe(false);
+    expect(result.data.operations_enabled).toBe(false);
+    expect(() => validateDocument(input, Buffer.from("%PDF-1.7\n/JavaScript\n%%EOF"))).toThrow("DOCUMENT_VALIDATION_ERROR");
   });
   it("rejects live capabilities in this staging implementation", async () => {
     const s = await setup();
