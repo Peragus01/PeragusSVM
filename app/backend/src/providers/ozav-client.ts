@@ -730,6 +730,19 @@ export class OzavClient {
     throw new OzavClientError("OZAV request failed", true);
   }
 
+  async declareCustomerDocument(customerId: string, body: Record<string, unknown>): Promise<unknown> {
+    identifier(customerId, "ozav_cus_");
+    if (this.attempts !== 1) throw new OzavClientError("Document declaration requires one attempt", false);
+    // Caller persists the declaration claim before this non-retryable write.
+    return (await this.post({path: `/v2/customers/${customerId}/documents`, body})).body;
+  }
+
+  async listCustomerDocuments(customerId: string, cursor?: string): Promise<unknown> {
+    identifier(customerId, "ozav_cus_");
+    if (cursor) identifier(cursor, "ozav_doc_");
+    return this.get(`/v2/customers/${customerId}/documents?limit=100${cursor ? `&starting_after=${encodeURIComponent(cursor)}` : ""}`);
+  }
+
   async getCapabilities(): Promise<{ environment: "test"; scopes: string[] }> {
     const row = object(await this.get("/v2/capabilities"));
     if (row.environment !== "test" || !Array.isArray(row.scopes)) {

@@ -1,3 +1,5 @@
+import { CustomerDocumentService, DocumentRepository } from "./onboarding/customer-documents.js";
+import { uploadDocumentBytes } from "./providers/document-upload.js";
 import { notificationConfig } from "./notifications/config.js";
 import { emailNotificationReady } from "./notifications/onboarding-email.js";
 import { SandboxClosureService } from "./withdrawals/sandbox-closure.js";
@@ -186,6 +188,19 @@ if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
   throw new Error(
     "CUSTOMER_WEBHOOK_SECRET is required for customer update notifications",
   );
+}
+const documentOrigins = new Set(env.CUSTOMER_DOCUMENT_UPLOAD_ORIGINS.split(",").map(v=>v.trim()).filter(Boolean));
+if (env.CUSTOMER_DOCUMENTS_ENABLED) {
+  assertSmokeTestSafety(env);
+  if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co" || !env.OZAV_API_KEY?.startsWith("ozav_sk_test_")
+    || !env.CUSTOMER_SUBMISSION_ENABLED || !env.API_RATE_LIMITS_ENABLED || !documentOrigins.size)
+    throw new Error("DOCUMENT_STAGING_CONFIGURATION_REQUIRED");
+  for (const value of documentOrigins) {
+    let origin: URL;
+    try { origin = new URL(value); } catch { throw new Error("DOCUMENT_UPLOAD_ORIGIN_INVALID"); }
+    if (origin.origin !== value || origin.protocol !== "https:" || origin.port || origin.hostname !== "storage.ozav.io")
+      throw new Error("DOCUMENT_UPLOAD_ORIGIN_INVALID");
+  }
 }
 if (
   env.CUSTOMER_VERIFICATION_SIMULATION_ENABLED &&
@@ -639,6 +654,10 @@ const app = await buildApp({
         ),
       }
     : {}),
+  ...(env.CUSTOMER_DOCUMENTS_ENABLED ? {customerDocumentService: new CustomerDocumentService(
+    new DocumentRepository(pool!), new PostgresOnboardingSubmissionRepository(pool!),
+    new OzavClient({apiKey:env.OZAV_API_KEY!, attempts:1, timeoutMs:5000}), documentOrigins, uploadDocumentBytes,
+  )} : {}),
   ...(env.CUSTOMER_VERIFICATIONS_ENABLED
     ? {
         customerVerificationService: new CustomerVerificationService(
@@ -714,6 +733,7 @@ const app = await buildApp({
   logger: {
     redact: [
       "req.headers.authorization",
+      "req.body",
       "req.headers.cookie",
       'res.headers["set-cookie"]',
       'req.headers["x-ozav-signature"]',
