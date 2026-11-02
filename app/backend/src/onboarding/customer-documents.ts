@@ -224,6 +224,7 @@ export class CustomerDocumentService {
       url: URL,
       bytes: Buffer,
       mime: string,
+      binding: { customerId: string; documentId: string },
     ) => Promise<void>,
     private readonly diagnostic: (entry: {
       stage: string;
@@ -384,8 +385,11 @@ export class CustomerDocumentService {
       stage = "save_provider_id";
       row = await this.repo.update(row, "uploading", grant.id);
       stage = "upload";
-      // No API credential, cookie or caller header is passed to the upload transport.
-      await this.upload(grant.url, bytes, input.mime);
+      // The transport confines any test key to the bound OZAV path; caller headers are never forwarded.
+      await this.upload(grant.url, bytes, input.mime, {
+        customerId: providerCustomer,
+        documentId: grant.id,
+      });
       stage = "save_upload_state";
       row = await this.repo.update(row, "pending_confirmation");
     } catch (error) {
