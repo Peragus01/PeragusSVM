@@ -215,6 +215,10 @@ export class CustomerDocumentService {
       bytes: Buffer,
       mime: string,
     ) => Promise<void>,
+    private readonly diagnostic: (entry: {
+      stage: string;
+      reason: string;
+    }) => void = () => {},
   ) {}
   private async binding(customer: string) {
     const b = await this.submissions.find(customer);
@@ -328,6 +332,7 @@ export class CustomerDocumentService {
     });
     let row = reservation.row;
     if (!reservation.created) return { data: view(row), replayed: true };
+    let stage = "declaration";
     try {
       const raw = await this.provider.declareCustomerDocument(
         providerCustomer,
@@ -342,12 +347,30 @@ export class CustomerDocumentService {
           sha256,
         },
       );
+      stage = "grant_validation";
       const grant = uploadGrant(raw, row, this.origins);
+      stage = "save_provider_id";
       row = await this.repo.update(row, "uploading", grant.id);
+      stage = "upload";
       // No API credential, cookie or caller header is passed to the upload transport.
       await this.upload(grant.url, bytes, input.mime);
+      stage = "save_upload_state";
       row = await this.repo.update(row, "pending_confirmation");
-    } catch {
+    } catch (error) {
+      const allowed = [
+        "DOCUMENT_PROVIDER_INVALID",
+        "DOCUMENT_UPLOAD_ORIGIN_REFUSED",
+        "DOCUMENT_STATE_CONFLICT",
+      ];
+      const reason =
+        error instanceof DocumentError && allowed.includes(error.code)
+          ? error.code
+          : "UNCLASSIFIED";
+      try {
+        this.diagnostic({ stage, reason });
+      } catch {
+        /* diagnostics cannot affect durable state */
+      }
       try {
         row = await this.repo.update(row, "uncertain");
       } catch {

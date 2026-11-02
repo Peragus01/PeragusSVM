@@ -179,6 +179,63 @@ const headers = (s: Awaited<ReturnType<typeof setup>>) => ({
   "x-document-side": s.input.side,
 });
 describe("private PF document uploads", () => {
+  it("records only safe failure categories and preserves ambiguous outcomes without retry", async () => {
+    const s = await setup();
+    const diagnostic = vi.fn();
+    const service = new CustomerDocumentService(
+      repo,
+      s.binding as never,
+      s.provider,
+      origins,
+      s.upload,
+      diagnostic,
+    );
+    s.provider.declareCustomerDocument.mockImplementationOnce(async () => {
+      throw new Error("sensitive provider URL and token");
+    });
+    await expect(
+      service.send(s.customer, s.input, jpeg()),
+    ).rejects.toMatchObject({ code: "DOCUMENT_UPLOAD_UNCONFIRMED" });
+    expect(diagnostic).toHaveBeenCalledWith({
+      stage: "declaration",
+      reason: "UNCLASSIFIED",
+    });
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("sensitive");
+    expect((await service.list(s.customer))[0]?.state).toBe("uncertain");
+    expect(s.provider.declareCustomerDocument).toHaveBeenCalledTimes(1);
+    expect(s.upload).not.toHaveBeenCalled();
+  });
+  it("distinguishes a rejected upload origin without logging its URL", async () => {
+    const s = await setup();
+    const diagnostic = vi.fn();
+    const original =
+      s.provider.declareCustomerDocument.getMockImplementation()!;
+    s.provider.declareCustomerDocument.mockImplementationOnce(
+      async (...args) => ({
+        ...(await original(...args)),
+        upload_url: "https://elsewhere.invalid/secret?token=private",
+      }),
+    );
+    const service = new CustomerDocumentService(
+      repo,
+      s.binding as never,
+      s.provider,
+      origins,
+      s.upload,
+      diagnostic,
+    );
+    await expect(
+      service.send(s.customer, s.input, jpeg()),
+    ).rejects.toMatchObject({ code: "DOCUMENT_UPLOAD_UNCONFIRMED" });
+    expect(diagnostic).toHaveBeenCalledWith({
+      stage: "grant_validation",
+      reason: "DOCUMENT_UPLOAD_ORIGIN_REFUSED",
+    });
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
+      /token|elsewhere|secret/,
+    );
+    expect(s.upload).not.toHaveBeenCalled();
+  });
   it("uploads only once, confirms the provider hash and stores no bytes or signed URL", async () => {
     const s = await setup();
     const first = await s.service.send(s.customer, s.input, jpeg());
