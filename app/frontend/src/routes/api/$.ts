@@ -1,3 +1,4 @@
+import { documentMethods, forwardDocument } from "@/lib/peragus/document-proxy.server";
 import { journeyMethods, forwardJourney } from "@/lib/peragus/journey-proxy.server";
 import { forwardPurchase, purchaseMethods } from "@/lib/peragus/purchase-proxy.server";
 import { forwardRefund, refundMethods } from "@/lib/peragus/refund-proxy.server";
@@ -31,6 +32,7 @@ function targetUrl(request: Request, splat: string) {
 
 function isAllowedPath(splat: string) {
   return (
+    documentMethods(splat).length > 0 ||
     journeyMethods(splat).length > 0 ||
     purchaseMethods(splat).length > 0 ||
     refundMethods(splat).length > 0 ||
@@ -52,6 +54,8 @@ async function forward({ request, params }: ProxyContext) {
   }
 
   try {
+    if (documentMethods(params._splat).length)
+      return await forwardDocument(request, targetUrl(request, params._splat), params._splat);
     if (journeyMethods(params._splat).length)
       return await forwardJourney(request, targetUrl(request, params._splat), params._splat);
     if (purchaseMethods(params._splat).length)

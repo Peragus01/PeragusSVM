@@ -1547,3 +1547,26 @@
   outline: 2px solid #a4b4ff;
   outline-offset: 4px;
 }
+
+.customer-document-fields {
+  border: 0;
+  padding: 0;
+  margin-top: 1.5rem;
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+.customer-document-fields legend {
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+.customer-document-fields input[type="file"] {
+  max-width: 100%;
+  height: auto;
+  padding: 0.75rem;
+}
+.customer-document-fields .customer-document-consent {
+  width: auto;
+  min-height: 1.25rem;
+  height: 1.25rem;
+}
