@@ -39,18 +39,25 @@ export async function uploadDocumentBytes(
       url.hostname,
     );
   } catch {
-    throw new DocumentError("DOCUMENT_UPLOAD_UNCONFIRMED");
+    throw new DocumentError(
+      "DOCUMENT_UPLOAD_UNCONFIRMED",
+      "UPLOAD_DNS_FAILURE",
+    );
   }
   if (!addresses.length || addresses.some((ip) => !publicIPv4(ip)))
-    throw new DocumentError("DOCUMENT_UPLOAD_ORIGIN_REFUSED");
+    throw new DocumentError(
+      "DOCUMENT_UPLOAD_ORIGIN_REFUSED",
+      "UPLOAD_DNS_ADDRESS_REFUSED",
+    );
   // Pin the checked address while keeping the original hostname for TLS verification.
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    const finish = (failed: boolean) => {
+    const finish = (reason?: string) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (failed) reject(new DocumentError("DOCUMENT_UPLOAD_UNCONFIRMED"));
+      if (reason)
+        reject(new DocumentError("DOCUMENT_UPLOAD_UNCONFIRMED", reason));
       else resolve();
     };
     const req = https.request(
@@ -71,33 +78,42 @@ export async function uploadDocumentBytes(
         res.on("data", (chunk: Buffer) => {
           received += chunk.length;
           if (received > 8192) {
-            finish(true);
+            finish("UPLOAD_RESPONSE_TOO_LARGE");
             req.destroy();
           }
         });
         res.on("error", () => {
-          finish(true);
+          finish("UPLOAD_RESPONSE_INTERRUPTED");
           req.destroy();
         });
         res.on("aborted", () => {
-          finish(true);
+          finish("UPLOAD_RESPONSE_INTERRUPTED");
           req.destroy();
         });
         res.on("close", () => {
-          if (!res.complete) finish(true);
+          if (!res.complete) finish("UPLOAD_RESPONSE_INTERRUPTED");
         });
-        res.on("end", () =>
+        res.on("end", () => {
+          const status = res.statusCode ?? 0;
           finish(
-            !(res.statusCode && res.statusCode >= 200 && res.statusCode < 300),
-          ),
-        );
+            status >= 200 && status < 300
+              ? undefined
+              : status >= 300 && status < 400
+                ? "UPLOAD_HTTP_3XX"
+                : status >= 400 && status < 500
+                  ? "UPLOAD_HTTP_4XX"
+                  : status >= 500 && status < 600
+                    ? "UPLOAD_HTTP_5XX"
+                    : "UPLOAD_HTTP_OTHER",
+          );
+        });
       },
     );
     const timer = setTimeout(() => {
-      finish(true);
+      finish("UPLOAD_TIMEOUT");
       req.destroy();
     }, 10000);
-    req.on("error", () => finish(true));
+    req.on("error", () => finish("UPLOAD_NETWORK_ERROR"));
     req.end(bytes);
   });
 }

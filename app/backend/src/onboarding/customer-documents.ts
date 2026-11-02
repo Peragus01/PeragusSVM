@@ -5,7 +5,10 @@ import type { SubmissionRepository } from "./submission-types.js";
 
 export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
 export class DocumentError extends Error {
-  constructor(public readonly code: string) {
+  constructor(
+    public readonly code: string,
+    public readonly diagnosticReason?: string,
+  ) {
     super(code);
   }
 }
@@ -396,11 +399,22 @@ export class CustomerDocumentService {
         "DOCUMENT_UPLOAD_EXPIRY_TOO_SOON",
         "DOCUMENT_UPLOAD_EXPIRY_TOO_LATE",
         "DOCUMENT_STATE_CONFLICT",
+        "UPLOAD_DNS_FAILURE",
+        "UPLOAD_DNS_ADDRESS_REFUSED",
+        "UPLOAD_HTTP_3XX",
+        "UPLOAD_HTTP_4XX",
+        "UPLOAD_HTTP_5XX",
+        "UPLOAD_HTTP_OTHER",
+        "UPLOAD_RESPONSE_TOO_LARGE",
+        "UPLOAD_RESPONSE_INTERRUPTED",
+        "UPLOAD_NETWORK_ERROR",
+        "UPLOAD_TIMEOUT",
       ];
-      const reason =
-        error instanceof DocumentError && allowed.includes(error.code)
-          ? error.code
-          : "UNCLASSIFIED";
+      const candidate =
+        error instanceof DocumentError
+          ? (error.diagnosticReason ?? error.code)
+          : "";
+      const reason = allowed.includes(candidate) ? candidate : "UNCLASSIFIED";
       try {
         this.diagnostic({
           stage,
