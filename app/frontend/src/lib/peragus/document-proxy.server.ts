@@ -78,12 +78,12 @@ export async function forwardDocument(request: Request, target: URL, path: strin
     const key = request.headers.get("idempotency-key") ?? "";
     if (
       !["image/jpeg", "image/png", "application/pdf"].includes(mime) ||
-      !["identity_document", "selfie", "proof_of_address"].includes(type) ||
+      !["identity_document", "selfie", "proof_of_address", "bank_statement"].includes(type) ||
       !(type === "identity_document"
         ? ["front", "back", "single"].includes(side)
         : side === "none") ||
       !new RegExp(`^${id}$`, "i").test(key) ||
-      (mime === "application/pdf" && type !== "proof_of_address")
+      (mime === "application/pdf" && !["proof_of_address", "bank_statement"].includes(type))
     )
       return fail(400, "DOCUMENT_VALIDATION_ERROR");
     for (const name of ["content-type", "x-document-type", "x-document-side", "idempotency-key"])
