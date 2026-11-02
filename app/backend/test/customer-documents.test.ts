@@ -229,7 +229,7 @@ describe("private PF document uploads", () => {
     ).rejects.toMatchObject({ code: "DOCUMENT_UPLOAD_UNCONFIRMED" });
     expect(diagnostic).toHaveBeenCalledWith({
       stage: "grant_validation",
-      reason: "DOCUMENT_UPLOAD_ORIGIN_REFUSED",
+      reason: "DOCUMENT_UPLOAD_ORIGIN_OTHER",
     });
     expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
       /token|elsewhere|secret/,
@@ -491,15 +491,19 @@ describe("private PF document uploads", () => {
       status: "pending_upload",
       upload_expires_at: new Date(Date.now() + 60000).toISOString(),
     };
-    for (const url of [
-      "http://storage.ozav.io/x",
-      "https://evil.example/x",
-      "https://user:pass@storage.ozav.io/x",
-      "https://storage.ozav.io/x#fragment",
+    for (const [url, reason] of [
+      ["http://storage.ozav.io/x", "DOCUMENT_UPLOAD_URL_INVALID"],
+      ["https://evil.example/x", "DOCUMENT_UPLOAD_ORIGIN_OTHER"],
+      [
+        "https://storage.googleapis.com/x?secret=redacted",
+        "DOCUMENT_UPLOAD_ORIGIN_GOOGLE_STORAGE",
+      ],
+      ["https://user:pass@storage.ozav.io/x", "DOCUMENT_UPLOAD_URL_INVALID"],
+      ["https://storage.ozav.io/x#fragment", "DOCUMENT_UPLOAD_URL_INVALID"],
     ])
       expect(() =>
         uploadGrant({ ...grant, upload_url: url }, row, origins),
-      ).toThrow("DOCUMENT_UPLOAD_ORIGIN_REFUSED");
+      ).toThrow(reason);
     expect(() =>
       uploadGrant(
         {
@@ -510,7 +514,7 @@ describe("private PF document uploads", () => {
         row,
         origins,
       ),
-    ).toThrow("DOCUMENT_UPLOAD_ORIGIN_REFUSED");
+    ).toThrow("DOCUMENT_UPLOAD_EXPIRY_TOO_SOON");
     for (const ip of [
       "127.0.0.1",
       "10.0.0.1",

@@ -186,13 +186,20 @@ export function uploadGrant(
     url.username ||
     url.password ||
     url.hash ||
-    url.port ||
-    !origins.has(url.origin) ||
-    !Number.isFinite(expires) ||
-    expires <= now + 5000 ||
-    expires > now + 86400000
+    url.port
   )
-    throw new DocumentError("DOCUMENT_UPLOAD_ORIGIN_REFUSED");
+    throw new DocumentError("DOCUMENT_UPLOAD_URL_INVALID");
+  if (!origins.has(url.origin)) {
+    const kind =
+      url.hostname === "storage.googleapis.com" ? "GOOGLE_STORAGE" : "OTHER";
+    throw new DocumentError(`DOCUMENT_UPLOAD_ORIGIN_${kind}`);
+  }
+  if (!Number.isFinite(expires))
+    throw new DocumentError("DOCUMENT_UPLOAD_EXPIRY_INVALID");
+  if (expires <= now + 5000)
+    throw new DocumentError("DOCUMENT_UPLOAD_EXPIRY_TOO_SOON");
+  if (expires > now + 86400000)
+    throw new DocumentError("DOCUMENT_UPLOAD_EXPIRY_TOO_LATE");
   return { id: v.id, url };
 }
 const view = (row: DocumentRow) => ({
@@ -360,6 +367,12 @@ export class CustomerDocumentService {
       const allowed = [
         "DOCUMENT_PROVIDER_INVALID",
         "DOCUMENT_UPLOAD_ORIGIN_REFUSED",
+        "DOCUMENT_UPLOAD_URL_INVALID",
+        "DOCUMENT_UPLOAD_ORIGIN_GOOGLE_STORAGE",
+        "DOCUMENT_UPLOAD_ORIGIN_OTHER",
+        "DOCUMENT_UPLOAD_EXPIRY_INVALID",
+        "DOCUMENT_UPLOAD_EXPIRY_TOO_SOON",
+        "DOCUMENT_UPLOAD_EXPIRY_TOO_LATE",
         "DOCUMENT_STATE_CONFLICT",
       ];
       const reason =
