@@ -225,6 +225,7 @@ export class CustomerDocumentService {
     private readonly diagnostic: (entry: {
       stage: string;
       reason: string;
+      hostname?: string;
     }) => void = () => {},
   ) {}
   private async binding(customer: string) {
@@ -340,6 +341,7 @@ export class CustomerDocumentService {
     let row = reservation.row;
     if (!reservation.created) return { data: view(row), replayed: true };
     let stage = "declaration";
+    let rejectedHostname: string | undefined;
     try {
       const raw = await this.provider.declareCustomerDocument(
         providerCustomer,
@@ -355,6 +357,26 @@ export class CustomerDocumentService {
         },
       );
       stage = "grant_validation";
+      // The test-only diagnostic retains only an HTTPS hostname, never the path or query.
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        const urlValue = (raw as Record<string, unknown>).upload_url;
+        if (typeof urlValue === "string") {
+          try {
+            const parsed = new URL(urlValue);
+            if (
+              parsed.protocol === "https:" &&
+              !parsed.username &&
+              !parsed.password &&
+              !parsed.port &&
+              !parsed.hash &&
+              /^[a-z0-9.-]{1,253}$/.test(parsed.hostname)
+            )
+              rejectedHostname = parsed.hostname;
+          } catch {
+            /* No URL details are retained. */
+          }
+        }
+      }
       const grant = uploadGrant(raw, row, this.origins);
       stage = "save_provider_id";
       row = await this.repo.update(row, "uploading", grant.id);
@@ -380,7 +402,13 @@ export class CustomerDocumentService {
           ? error.code
           : "UNCLASSIFIED";
       try {
-        this.diagnostic({ stage, reason });
+        this.diagnostic({
+          stage,
+          reason,
+          ...(reason === "DOCUMENT_UPLOAD_ORIGIN_OTHER" && rejectedHostname
+            ? { hostname: rejectedHostname }
+            : {}),
+        });
       } catch {
         /* diagnostics cannot affect durable state */
       }

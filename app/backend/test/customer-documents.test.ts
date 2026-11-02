@@ -230,9 +230,10 @@ describe("private PF document uploads", () => {
     expect(diagnostic).toHaveBeenCalledWith({
       stage: "grant_validation",
       reason: "DOCUMENT_UPLOAD_ORIGIN_OTHER",
+      hostname: "elsewhere.invalid",
     });
     expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
-      /token|elsewhere|secret/,
+      /token|secret|private|https/,
     );
     expect(s.upload).not.toHaveBeenCalled();
   });
