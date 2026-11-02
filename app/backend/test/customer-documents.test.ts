@@ -237,6 +237,39 @@ describe("private PF document uploads", () => {
     );
     expect(s.upload).not.toHaveBeenCalled();
   });
+  it("reports only the upload category and preserves the provider binding", async () => {
+    const s = await setup();
+    const diagnostic = vi.fn();
+    const { DocumentError } =
+      await import("../src/onboarding/customer-documents.js");
+    const upload = vi.fn(async () => {
+      throw new DocumentError("DOCUMENT_UPLOAD_UNCONFIRMED", "UPLOAD_HTTP_4XX");
+    });
+    const service = new CustomerDocumentService(
+      repo,
+      s.binding as never,
+      s.provider,
+      origins,
+      upload,
+      diagnostic,
+    );
+    await expect(
+      service.send(s.customer, s.input, jpeg()),
+    ).rejects.toMatchObject({ code: "DOCUMENT_UPLOAD_UNCONFIRMED" });
+    expect(diagnostic).toHaveBeenCalledWith({
+      stage: "upload",
+      reason: "UPLOAD_HTTP_4XX",
+    });
+    const row = await db.query<{
+      state: string;
+      provider_document_id: string | null;
+    }>(
+      "select state,provider_document_id from peragus_customer_document_uploads where customer_id=$1",
+      [s.customer],
+    );
+    expect(row.rows[0]?.state).toBe("uncertain");
+    expect(row.rows[0]?.provider_document_id).not.toBeNull();
+  });
   it("uploads only once, confirms the provider hash and stores no bytes or signed URL", async () => {
     const s = await setup();
     const first = await s.service.send(s.customer, s.input, jpeg());

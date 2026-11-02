@@ -78,6 +78,40 @@ describe("signed document PUT transport", () => {
     ).rejects.toThrow("DOCUMENT_UPLOAD_ORIGIN_REFUSED");
     expect(t.request).not.toHaveBeenCalled();
   });
+  it("classifies provider status and DNS failure without exposing request details", async () => {
+    for (const [status, category] of [
+      [302, "UPLOAD_HTTP_3XX"],
+      [403, "UPLOAD_HTTP_4XX"],
+      [503, "UPLOAD_HTTP_5XX"],
+    ] as const) {
+      const t = transport(status);
+      await expect(
+        uploadDocumentBytes(
+          new URL("https://storage.ozav.io/secret?signature=private"),
+          Buffer.from("x"),
+          "image/jpeg",
+        ),
+      ).rejects.toMatchObject({
+        code: "DOCUMENT_UPLOAD_UNCONFIRMED",
+        diagnosticReason: category,
+      });
+      expect(t.request).toHaveBeenCalledTimes(1);
+      vi.restoreAllMocks();
+    }
+    const t = transport();
+    t.resolver.mockRejectedValueOnce(new Error("sensitive URL"));
+    await expect(
+      uploadDocumentBytes(
+        new URL("https://storage.ozav.io/x"),
+        Buffer.from("x"),
+        "image/jpeg",
+      ),
+    ).rejects.toMatchObject({
+      code: "DOCUMENT_UPLOAD_UNCONFIRMED",
+      diagnosticReason: "UPLOAD_DNS_FAILURE",
+    });
+    expect(t.request).not.toHaveBeenCalled();
+  });
   it("does not follow redirects or silently accept an interrupted response", async () => {
     for (const [status, aborted] of [
       [302, false],
