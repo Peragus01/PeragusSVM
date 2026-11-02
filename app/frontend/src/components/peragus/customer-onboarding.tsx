@@ -1,3 +1,4 @@
+import { CustomerDocuments } from "./customer-documents";
 import { OnboardingReceipt, type OnboardingReview } from "./onboarding-receipt";
 import { useEffect, useRef, useState } from "react";
 import { CustomerNotice, CustomerPanel } from "./customer-ui";
@@ -434,6 +435,7 @@ export function CustomerOnboarding() {
           {locked && (
             <>
               <OnboardingReceipt review={review} />
+              <CustomerDocuments />
               <CustomerPanel title="Verificação de identidade obrigatória">
                 <div className="customer-row">
                   <span>KYC</span>
@@ -452,8 +454,9 @@ export function CustomerOnboarding() {
                     <details>
                       <summary>Sobre a verificação no ambiente de testes</summary>
                       <p>
-                        A captura de documentos não está disponível neste ambiente. A verificação
-                        permanece pendente; não envie documentos reais.
+                        O envio de arquivos, quando disponível, aparece na seção de documentos. A
+                        verificação permanece pendente até a análise; não envie documentos reais
+                        neste ambiente.
                       </p>
                     </details>
                     <button
