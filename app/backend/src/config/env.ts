@@ -90,6 +90,8 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    CUSTOMER_DOCUMENTS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
+    CUSTOMER_DOCUMENT_UPLOAD_ORIGINS: z.string().default(""),
     CUSTOMER_VERIFICATIONS_ENABLED: z
       .enum(["true", "false"])
       .default("false")

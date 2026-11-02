@@ -1,3 +1,5 @@
+import { registerCustomerDocumentRoutes } from "./routes/customer-documents.js";
+import type { CustomerDocumentService } from "./onboarding/customer-documents.js";
 import { registerPilotInviteRoutes } from "./routes/pilot-invites.js";
 import type { PilotInviteService } from "./invites/pilot-invites.js";
 import { registerCustomerReconciliationStatusRoutes } from "./routes/customer-reconciliation-status.js";
@@ -100,6 +102,7 @@ export interface BuildAppOptions {
   customerWalletService?: CustomerWalletService;
   customerOnboardingOverview?: CustomerOnboardingOverview;
   customerScreeningService?: CustomerScreeningService;
+  customerDocumentService?: CustomerDocumentService;
   customerVerificationService?: CustomerVerificationService;
   verificationSimulationEnabled?: boolean;
   customerSubmissionService?: CustomerSubmissionService;
@@ -255,6 +258,7 @@ export async function buildApp(
     app,
     options.customerAccess ? options.customerScreeningService : undefined,
   );
+  await registerCustomerDocumentRoutes(app, options.customerAccess, options.customerDocumentService);
   await registerCustomerVerificationRoutes(
     app,
     options.customerAccess ? options.customerVerificationService : undefined,
