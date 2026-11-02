@@ -492,6 +492,25 @@ describe("private PF document uploads", () => {
       status: "pending_upload",
       upload_expires_at: new Date(Date.now() + 60000).toISOString(),
     };
+    const observed = uploadGrant(
+      {
+        ...grant,
+        upload_url: "https://developers.ozav.io/synthetic?signature=private",
+      },
+      row,
+      new Set(["https://developers.ozav.io"]),
+    );
+    expect(observed.url.hostname).toBe("developers.ozav.io");
+    expect(() =>
+      uploadGrant(
+        {
+          ...grant,
+          upload_url: "https://developers.ozav.io.evil.example/synthetic",
+        },
+        row,
+        new Set(["https://developers.ozav.io"]),
+      ),
+    ).toThrow("DOCUMENT_UPLOAD_ORIGIN_OTHER");
     for (const [url, reason] of [
       ["http://storage.ozav.io/x", "DOCUMENT_UPLOAD_URL_INVALID"],
       ["https://evil.example/x", "DOCUMENT_UPLOAD_ORIGIN_OTHER"],

@@ -198,7 +198,7 @@ if (env.CUSTOMER_DOCUMENTS_ENABLED) {
   for (const value of documentOrigins) {
     let origin: URL;
     try { origin = new URL(value); } catch { throw new Error("DOCUMENT_UPLOAD_ORIGIN_INVALID"); }
-    if (origin.origin !== value || origin.protocol !== "https:" || origin.port || origin.hostname !== "storage.ozav.io")
+    if (origin.origin !== value || origin.protocol !== "https:" || origin.port || !["storage.ozav.io", "developers.ozav.io"].includes(origin.hostname))
       throw new Error("DOCUMENT_UPLOAD_ORIGIN_INVALID");
   }
 }
