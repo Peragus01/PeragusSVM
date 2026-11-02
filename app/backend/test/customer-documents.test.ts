@@ -528,7 +528,7 @@ describe("private PF document uploads", () => {
     const observed = uploadGrant(
       {
         ...grant,
-        upload_url: "https://developers.ozav.io/synthetic?signature=private",
+        upload_url: `https://developers.ozav.io/v2/customers/${row.provider_customer_id}/documents/${grant.id}/upload?upload_token=synthetic`,
       },
       row,
       new Set(["https://developers.ozav.io"]),

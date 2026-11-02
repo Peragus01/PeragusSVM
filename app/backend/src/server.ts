@@ -656,7 +656,8 @@ const app = await buildApp({
     : {}),
   ...(env.CUSTOMER_DOCUMENTS_ENABLED ? {customerDocumentService: new CustomerDocumentService(
     new DocumentRepository(pool!), new PostgresOnboardingSubmissionRepository(pool!),
-    new OzavClient({apiKey:env.OZAV_API_KEY!, attempts:1, timeoutMs:5000}), documentOrigins, uploadDocumentBytes,
+    new OzavClient({apiKey:env.OZAV_API_KEY!, attempts:1, timeoutMs:5000}), documentOrigins,
+    (url, bytes, mime, binding) => uploadDocumentBytes(url, bytes, mime, {apiKey: env.OZAV_API_KEY!, ...binding}),
     (event) => console.warn(JSON.stringify({event:"customer_document_upload_failure", ...event})),
   )} : {}),
   ...(env.CUSTOMER_VERIFICATIONS_ENABLED

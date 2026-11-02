@@ -6,7 +6,11 @@ import { uploadDocumentBytes } from "../src/providers/document-upload.js";
 afterEach(() => {
   vi.restoreAllMocks();
 });
-function transport(status = 200, aborted = false) {
+function transport(
+  status = 200,
+  aborted = false,
+  origin = "https://storage.ozav.io",
+) {
   const resolver = vi
     .spyOn(Resolver.prototype, "resolve4")
     .mockResolvedValue(["1.1.1.1"] as never);
@@ -18,7 +22,7 @@ function transport(status = 200, aborted = false) {
     opts: Record<string, unknown>,
     callback: (res: EventEmitter) => void,
   ) => {
-    expect(url.origin).toBe("https://storage.ozav.io");
+    expect(url.origin).toBe(origin);
     options = opts;
     const req = new EventEmitter();
     Object.assign(req, {
@@ -65,6 +69,69 @@ describe("signed document PUT transport", () => {
     lookup("storage.ozav.io", {}, cb);
     expect(cb).toHaveBeenCalledWith(null, "1.1.1.1", 4);
     expect(t.options()).not.toHaveProperty("rejectUnauthorized", false);
+  });
+  it("sends only a sandbox API key to the exact bound OZAV document path", async () => {
+    const t = transport(200, false, "https://developers.ozav.io");
+    const auth = {
+      apiKey: "ozav_sk_test_synthetic123",
+      customerId: "ozav_cus_1234567890123456",
+      documentId: "ozav_doc_1234567890123456",
+    };
+    const url = new URL(
+      `https://developers.ozav.io/v2/customers/${auth.customerId}/documents/${auth.documentId}/upload?upload_token=synthetic`,
+    );
+    await uploadDocumentBytes(
+      url,
+      Buffer.from("synthetic"),
+      "image/jpeg",
+      auth,
+    );
+    expect(t.options().headers).toEqual({
+      "Content-Type": "image/jpeg",
+      "Content-Length": 9,
+      "X-API-Key": auth.apiKey,
+    });
+    expect(t.request).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+    for (const [badUrl, badAuth] of [
+      [
+        new URL(
+          `https://developers.ozav.io/v2/customers/${auth.customerId}/documents/ozav_doc_9999999999999999/upload?upload_token=synthetic`,
+        ),
+        auth,
+      ],
+      [url, { ...auth, apiKey: "ozav_sk_live_forbidden" }],
+      [
+        new URL(
+          `https://developers.ozav.io/v2/customers/${auth.customerId}/documents/${auth.documentId}/upload`,
+        ),
+        auth,
+      ],
+    ] as const) {
+      const next = transport(200, false, "https://developers.ozav.io");
+      await expect(
+        uploadDocumentBytes(badUrl, Buffer.from("x"), "image/jpeg", badAuth),
+      ).rejects.toThrow("DOCUMENT_UPLOAD_ORIGIN_REFUSED");
+      expect(next.request).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    }
+  });
+  it("never sends OZAV API keys to an external storage origin", async () => {
+    const t = transport();
+    await uploadDocumentBytes(
+      new URL("https://storage.ozav.io/upload?signature=synthetic"),
+      Buffer.from("x"),
+      "image/jpeg",
+      {
+        apiKey: "ozav_sk_test_synthetic123",
+        customerId: "ozav_cus_1234567890123456",
+        documentId: "ozav_doc_1234567890123456",
+      },
+    );
+    expect(t.options().headers).toEqual({
+      "Content-Type": "image/jpeg",
+      "Content-Length": 1,
+    });
   });
   it("refuses private DNS answers without creating an HTTPS request", async () => {
     const t = transport();

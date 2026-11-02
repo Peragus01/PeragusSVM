@@ -23,6 +23,7 @@ export async function uploadDocumentBytes(
   url: URL,
   bytes: Buffer,
   mime: string,
+  auth?: { apiKey: string; customerId: string; documentId: string },
 ): Promise<void> {
   if (
     url.protocol !== "https:" ||
@@ -33,6 +34,22 @@ export async function uploadDocumentBytes(
     isIP(url.hostname)
   )
     throw new DocumentError("DOCUMENT_UPLOAD_ORIGIN_REFUSED");
+  let apiKey: string | undefined;
+  if (url.origin === "https://developers.ozav.io") {
+    const token = url.searchParams.getAll("upload_token");
+    if (
+      !auth ||
+      !/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(auth.apiKey) ||
+      !/^ozav_cus_[A-Za-z0-9]{16,}$/.test(auth.customerId) ||
+      !/^ozav_doc_[A-Za-z0-9]{16,}$/.test(auth.documentId) ||
+      url.pathname !==
+        `/v2/customers/${auth.customerId}/documents/${auth.documentId}/upload` ||
+      token.length !== 1 ||
+      !token[0]
+    )
+      throw new DocumentError("DOCUMENT_UPLOAD_ORIGIN_REFUSED");
+    apiKey = auth.apiKey;
+  }
   let addresses: string[];
   try {
     addresses = await new Resolver({ timeout: 2000, tries: 1 }).resolve4(
@@ -71,7 +88,11 @@ export async function uploadDocumentBytes(
             callback(null, [{ address: addresses[0]!, family: 4 }]);
           else callback(null, addresses[0]!, 4);
         },
-        headers: { "Content-Type": mime, "Content-Length": bytes.length },
+        headers: {
+          "Content-Type": mime,
+          "Content-Length": bytes.length,
+          ...(apiKey ? { "X-API-Key": apiKey } : {}),
+        },
       },
       (res) => {
         let received = 0;
