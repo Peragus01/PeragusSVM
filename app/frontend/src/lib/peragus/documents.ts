@@ -1,5 +1,5 @@
 export const DOCUMENT_LIMIT = 4 * 1024 * 1024;
-export type DocumentType = "identity_document" | "selfie" | "proof_of_address";
+export type DocumentType = "identity_document" | "selfie" | "proof_of_address" | "bank_statement";
 export type DocumentSide = "front" | "back" | "single" | "none";
 export type DocumentState =
   "declaring" | "uploading" | "pending_confirmation" | "received" | "rejected" | "uncertain";
@@ -19,6 +19,7 @@ export const documentLabels: Record<DocumentType, string> = {
   identity_document: "Documento de identidade",
   selfie: "Selfie",
   proof_of_address: "Comprovante de endereço",
+  bank_statement: "Extrato bancário",
 };
 export const documentStates: Record<DocumentState, string> = {
   declaring: "Envio em acompanhamento",
@@ -129,7 +130,7 @@ export async function documentRequirements(
         typeof x["doc_type"] !== "string" ||
         !/^[a-z_]{1,50}$/.test(x["doc_type"]) ||
         typeof x["supported_for_upload"] !== "boolean" ||
-        x["supported_for_upload"] !== Object.hasOwn(documentLabels, x["doc_type"]),
+        (x["supported_for_upload"] && !Object.hasOwn(documentLabels, x["doc_type"])),
     )
   )
     throw new DocumentClientError("DOCUMENT_RESPONSE_INVALID");
@@ -144,12 +145,12 @@ export function validateDocumentFile(file: File, type: DocumentType) {
   if (!file.size || file.size > DOCUMENT_LIMIT) return "Selecione um arquivo de até 4 MiB.";
   if (
     !(
-      type === "proof_of_address"
+      ["proof_of_address", "bank_statement"].includes(type)
         ? ["image/jpeg", "image/png", "application/pdf"]
         : ["image/jpeg", "image/png"]
     ).includes(file.type)
   )
-    return "Formato inválido. Use JPEG ou PNG; PDF somente para comprovante de endereço.";
+    return "Formato inválido. Use JPEG ou PNG; PDF somente para comprovante de endereço ou extrato bancário.";
   return null;
 }
 export async function sendDocument(

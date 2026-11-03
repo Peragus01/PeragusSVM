@@ -242,7 +242,7 @@ function DocumentForm({ token }: { token: string }) {
                     aria-label="Arquivo de teste"
                     type="file"
                     accept={
-                      type === "proof_of_address"
+                      ["proof_of_address", "bank_statement"].includes(type)
                         ? "image/jpeg,image/png,application/pdf"
                         : "image/jpeg,image/png"
                     }

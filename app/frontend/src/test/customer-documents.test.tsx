@@ -87,6 +87,24 @@ describe("private document journey", () => {
     await screen.findByText(/Prova de vida/);
     expect(screen.queryByLabelText("Arquivo de teste")).toBeNull();
   });
+  it("supports synthetic bank statement PDFs when the backend permits them", async () => {
+    mock([{ doc_type: "bank_statement", supported_for_upload: true }]);
+    render(<CustomerDocuments />);
+    await screen.findByLabelText("Arquivo de teste");
+    expect(screen.getByLabelText("Tipo de documento")).toHaveValue("bank_statement");
+    expect(
+      validateDocumentFile(
+        new File(["synthetic"], "test.pdf", { type: "application/pdf" }),
+        "bank_statement",
+      ),
+    ).toBeNull();
+  });
+  it("accepts bank statements reported as unsupported during rollout", async () => {
+    mock([{ doc_type: "bank_statement", supported_for_upload: false }]);
+    render(<CustomerDocuments />);
+    await screen.findByText(/Extrato bancário/);
+    expect(screen.queryByLabelText("Arquivo de teste")).toBeNull();
+  });
   it("shows disabled feature without upload controls", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json({ error: { code: "CUSTOMER_DOCUMENTS_DISABLED" } }, { status: 503 }),
