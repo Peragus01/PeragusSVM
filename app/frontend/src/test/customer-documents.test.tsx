@@ -92,7 +92,12 @@ describe("private document journey", () => {
     render(<CustomerDocuments />);
     await screen.findByLabelText("Arquivo de teste");
     expect(screen.getByLabelText("Tipo de documento")).toHaveValue("bank_statement");
-    expect(validateDocumentFile(new File(["synthetic"], "test.pdf", { type: "application/pdf" }), "bank_statement")).toBeNull();
+    expect(
+      validateDocumentFile(
+        new File(["synthetic"], "test.pdf", { type: "application/pdf" }),
+        "bank_statement",
+      ),
+    ).toBeNull();
   });
   it("accepts bank statements reported as unsupported during rollout", async () => {
     mock([{ doc_type: "bank_statement", supported_for_upload: false }]);
