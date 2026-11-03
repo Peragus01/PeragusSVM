@@ -18,7 +18,7 @@ const invalid = (): never => {
 export const documentInput = z
   .object({
     request_id: z.uuid(),
-    doc_type: z.enum(["identity_document", "selfie", "proof_of_address"]),
+    doc_type: z.enum(["identity_document", "selfie", "proof_of_address", "bank_statement"]),
     side: z.enum(["front", "back", "single", "none"]),
     mime: z.enum(["image/jpeg", "image/png", "application/pdf"]),
   })
@@ -58,7 +58,7 @@ export function validateDocument(input: DocumentInput, bytes: Buffer) {
     invalid();
   if (input.mime === "application/pdf") {
     if (
-      input.doc_type !== "proof_of_address" ||
+      !["proof_of_address", "bank_statement"].includes(input.doc_type) ||
       !/^%PDF-1\.[0-7]/.test(bytes.subarray(0, 8).toString("ascii")) ||
       !bytes.subarray(-1024).includes(Buffer.from("%%EOF")) ||
       /\/(JavaScript|JS|OpenAction|AA|EmbeddedFile|Launch|RichMedia)\b/.test(
@@ -299,6 +299,7 @@ export class CustomerDocumentService {
             "identity_document",
             "selfie",
             "proof_of_address",
+            "bank_statement",
           ].includes(doc_type),
         }),
       );
