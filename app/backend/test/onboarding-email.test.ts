@@ -239,12 +239,16 @@ describe("onboarding result notifications", () => {
     expect(fetcher.mock.calls[0]![1].headers["Idempotency-Key"]).toBe(
       "peragus-onboarding-test/local-id",
     );
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
     fetcher.mockResolvedValue(
       Response.json({ private: "do not log" }, { status: 429 }),
     );
     await expect(sender.send("local-id", message)).rejects.toThrow(
       "RESEND_SEND_UNCONFIRMED",
     );
+    expect(log).toHaveBeenCalledWith(JSON.stringify({ event: "onboarding_email_send_unconfirmed", reason: "HTTP_429" }));
+    expect(JSON.stringify(log.mock.calls)).not.toContain("do not log");
+    log.mockRestore();
   });
   it("validates disabled-by-default configuration, mandatory test allowlist and safe HTTPS links", () => {
     expect(notificationConfig({}).enabled).toBe(false);
