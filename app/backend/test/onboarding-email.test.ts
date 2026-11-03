@@ -250,6 +250,15 @@ describe("onboarding result notifications", () => {
     expect(JSON.stringify(log.mock.calls)).not.toContain("do not log");
     log.mockRestore();
   });
+  it("renders branded HTML without exposing unescaped URL attributes", () => {
+    for (const outcome of ["approved", "rejected", "action_required"] as const) {
+      const message = notificationMessage(outcome, 'https://example.test/"x');
+      expect(message.html).toContain("#0c1321");
+      expect(message.html).toContain("&quot;x");
+      expect(message.html).toContain("Ambiente de testes");
+      expect(message.text).toContain("Ambiente de testes");
+    }
+  });
   it("validates disabled-by-default configuration, mandatory test allowlist and safe HTTPS links", () => {
     expect(notificationConfig({}).enabled).toBe(false);
     expect(() =>
