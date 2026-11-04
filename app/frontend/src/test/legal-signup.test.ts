@@ -62,14 +62,12 @@ describe("registration legal acknowledgements", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
   it("revalidates invitation before signup", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ data: { valid: false, environment: "test" } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: { valid: false, environment: "test" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
     const res = await handleLegalSignup(request(data), { env, fetcher });
     expect(res.status).toBe(409);
     expect(fetcher).toHaveBeenCalledTimes(1);
