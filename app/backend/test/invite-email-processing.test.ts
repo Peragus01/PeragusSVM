@@ -44,7 +44,8 @@ for (const mode of ["embedded", ...(realUrl ? ["postgres"] : [])])
         const r = real
           ? await pg!.query(sql, args)
           : await embedded!.query(sql, args);
-        return { ...r, rowCount: r.rows.length };
+        const result = Array.isArray(r) ? r.at(-1)! : r;
+        return { ...result, rowCount: result.rows.length };
       },
     } as unknown as Pool;
     const operator = {
@@ -356,6 +357,56 @@ for (const mode of ["embedded", ...(realUrl ? ["postgres"] : [])])
       expect(provider.send).not.toHaveBeenCalled();
       expect((await row(id)).encrypted_payload).toBeNull();
     });
+    it.skipIf(!real)(
+      "cancels dispatch when natural expiry wins while the invitation lock is held",
+      async () => {
+        const id = randomUUID(),
+          code = "pginv_" + randomBytes(32).toString("base64url"),
+          email = "expiry-race@example.test";
+        const sealed = cipher.seal(id, {
+          email,
+          code,
+          message: invitationMessage(email, code, "contato@peragus.com.br"),
+        });
+        await db.query(
+          `with s as (update peragus_pilot_invite_slots set current_invite_id=$1 where slot=1 returning slot),
+        i as (insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,reason,code_hash,duration_hours,expires_at)
+        select $1,slot,$2,$3,$4,$5,$6,1,clock_timestamp()+interval '1 second' from s returning id)
+        insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload) select id,'peragus-invitation-test/'||id::text,$7::jsonb from i`,
+          [
+            id,
+            randomUUID(),
+            operator.id,
+            randomUUID(),
+            reason,
+            createHash("sha256").update(code).digest("hex"),
+            JSON.stringify(sealed),
+          ],
+        );
+        const blocker = await pg!.connect();
+        let worker: Promise<boolean> | undefined;
+        try {
+          await blocker.query("begin");
+          await blocker.query(
+            "select id from peragus_pilot_invites where id=$1 for update",
+            [id],
+          );
+          worker = process();
+          for (let n = 0; n < 50; n++) {
+            if ((await row(id)).attempt_count === 1) break;
+            await new Promise((r) => setTimeout(r, 10));
+          }
+          expect((await row(id)).attempt_count).toBe(1);
+          await new Promise((r) => setTimeout(r, 1100));
+        } finally {
+          await blocker.query("commit");
+          blocker.release();
+        }
+        await worker;
+        expect(provider.send).not.toHaveBeenCalled();
+        expect((await row(id)).encrypted_payload).toBeNull();
+      },
+    );
     for (const action of ["revoke", "redeem"])
       it.skipIf(!real)(
         `serializes workers and waits for dispatch before ${action} commits`,
