@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { LegalAcknowledgements } from "./legal-acknowledgement";
 
 /**
  * Frontend-only, memory-only Supabase Auth bridge. The backend remains authoritative:
@@ -110,8 +111,32 @@ async function supabaseAuth(
   if (response.status === 204) return {};
   return (await response.json()) as Record<string, unknown>;
 }
-export async function signUpCustomer(email: string, password: string) {
-  await supabaseAuth("signup", { email, password });
+export async function signUpCustomer(
+  email: string,
+  password: string,
+  inviteCode: string,
+  legal: LegalAcknowledgements,
+) {
+  let response: Response;
+  try {
+    response = await fetch("/api/registration/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      body: JSON.stringify({ email, password, inviteCode, legal }),
+    });
+  } catch {
+    throw new CustomerSessionError("AUTH_UNAVAILABLE", "Cadastro temporariamente indisponível.");
+  }
+  if (response.ok) return;
+  const code = (await response.json().catch(() => null))?.error?.code;
+  if (code === "LEGAL_ACKNOWLEDGEMENT_REQUIRED" || code === "DOCUMENT_VERSION_MISMATCH")
+    throw new CustomerSessionError(code, "Revise e confirme os documentos jurídicos para criar sua conta.");
+  if (code === "PILOT_INVITE_NOT_AVAILABLE")
+    throw new CustomerSessionError(code, "Convite inválido, expirado ou vinculado a outro e-mail.");
+  throw new CustomerSessionError("AUTH_REJECTED", "Não foi possível criar a conta. Confira os dados e tente novamente.");
 }
 function parseTokens(value: Record<string, unknown>): AuthTokens {
   if (

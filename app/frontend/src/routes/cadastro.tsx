@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { CustomerPublicLayout, CustomerNotice } from "@/components/peragus/customer-ui";
 import { CustomerOnboarding } from "@/components/peragus/customer-onboarding";
 import { useCustomerSession, signUpCustomer } from "@/lib/peragus/customer-session";
+import { canCreateAccount, LEGAL_TERMS_VERSION, LEGAL_PRIVACY_VERSION, LEGAL_URLS } from "@/lib/peragus/legal-acknowledgement";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
 export const Route = createFileRoute("/cadastro")({ component: RegistrationPage });
 export function RegistrationPage() {
@@ -14,10 +15,16 @@ export function RegistrationPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [privacyAcknowledged, setPrivacyAcknowledged] = useState(false);
   const lock = useRef(false);
   const redemption = useRef<string | null>(null);
   async function submit() {
     if (lock.current) return;
+    if (session.status !== "authenticated" && !canCreateAccount(termsAccepted, privacyAcknowledged)) {
+      setError("Para criar a conta, aceite os Termos de Uso e confirme ciência da Política de Privacidade.");
+      return;
+    }
     lock.current = true;
     setBusy(true);
     setError("");
@@ -33,18 +40,12 @@ export function RegistrationPage() {
         await session.reloadIdentity();
         setCode("");
       } else {
-        const checked = await journeyRequest<{ valid: boolean; environment: string }>(
-          null,
-          "registration/invite/check",
-          "POST",
-          {
-            code,
-            email: email.trim(),
-          },
-        );
-        if (checked.valid !== true || checked.environment !== "test")
-          throw new Error("Invalid invitation response");
-        await signUpCustomer(email.trim(), password);
+        await signUpCustomer(email.trim(), password, code, {
+          termsAccepted,
+          privacyAcknowledged,
+          termsVersion: LEGAL_TERMS_VERSION,
+          privacyVersion: LEGAL_PRIVACY_VERSION,
+        });
         setPassword("");
         setMessage(
           "Confira seu e-mail para confirmar a conta. Depois, entre e volte a esta página com o mesmo código para concluir o cadastro. O convite ainda não foi consumido.",
@@ -148,12 +149,45 @@ export function RegistrationPage() {
                   />
                 </label>
                 <small id="signup-password-help">Use pelo menos 12 caracteres.</small>
+                <fieldset className="peragus-legal-acknowledgements">
+                  <legend>Documentos jurídicos</legend>
+                  <label className="peragus-legal-check">
+                    <input
+                      type="checkbox"
+                      checked={termsAccepted}
+                      disabled={busy}
+                      onChange={(e) => setTermsAccepted(e.target.checked)}
+                    />
+                    <span>
+                      Li e aceito os{" "}
+                      <a href={LEGAL_URLS.terms} target="_blank" rel="noopener noreferrer">
+                        Termos de Uso
+                      </a>{" "}
+                      da Peragus.
+                    </span>
+                  </label>
+                  <label className="peragus-legal-check">
+                    <input
+                      type="checkbox"
+                      checked={privacyAcknowledged}
+                      disabled={busy}
+                      onChange={(e) => setPrivacyAcknowledged(e.target.checked)}
+                    />
+                    <span>
+                      Li e declaro ciência da{" "}
+                      <a href={LEGAL_URLS.privacy} target="_blank" rel="noopener noreferrer">
+                        Política de Privacidade
+                      </a>{" "}
+                      da Peragus.
+                    </span>
+                  </label>
+                </fieldset>
               </>
             )}
             <button
               className="customer-button"
               type="submit"
-              disabled={busy || !session.configured}
+              disabled={busy || !session.configured || (session.status !== "authenticated" && !canCreateAccount(termsAccepted, privacyAcknowledged))}
             >
               {busy
                 ? "Processando…"
@@ -170,7 +204,10 @@ export function RegistrationPage() {
         )}
         <p className="customer-muted">
           O convite é validado pelo servidor e vinculado ao seu e-mail. Não compartilhe seu código.
-          Ambiente de testes, sem dinheiro real.
+          Ambiente de testes, sem dinheiro real. Consulte também nossa{" "}
+          <a className="customer-link" href={LEGAL_URLS.refund} target="_blank" rel="noopener noreferrer">
+            Política de Reembolso
+          </a>.
         </p>
         <Link className="customer-link" to="/login">
           Já tenho conta · Entrar
