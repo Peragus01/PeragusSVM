@@ -13,6 +13,16 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    INVITE_EMAIL_OUTBOX_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    INVITE_EMAIL_ENCRYPTION_KEY: z.string().optional(),
+    INVITE_EMAIL_FROM: z.email().optional(),
+    INVITE_EMAIL_ENCRYPTION_KEY_ID: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,32}$/)
+      .optional(),
     PILOT_INVITE_EMAIL_HASH_KEY: z
       .string()
       .regex(/^[a-f0-9]{64}$/i)
@@ -228,6 +238,31 @@ const envSchema = z
     SOLANA_FEE_PAYER_KEYPAIR_BASE64: z.string().min(1).optional(),
   })
   .superRefine((env, context) => {
+    if (env.INVITE_EMAIL_OUTBOX_ENABLED) {
+      const key = env.INVITE_EMAIL_ENCRYPTION_KEY ?? "";
+      const decoded = Buffer.from(key, "base64");
+      if (
+        decoded.length !== 32 ||
+        decoded.toString("base64") !== key ||
+        !env.INVITE_EMAIL_ENCRYPTION_KEY_ID ||
+        !env.INVITE_EMAIL_FROM?.endsWith("@peragus.com.br") ||
+        !env.PILOT_INVITE_EMAIL_HASH_KEY ||
+        !env.DATABASE_URL ||
+        env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co" ||
+        env.OZAV_ONRAMP_WRITES_ENABLED ||
+        env.OZAV_OFFRAMP_WRITES_ENABLED ||
+        env.SOLANA_COSIGNING_ENABLED ||
+        env.SOLANA_CONTINGENCY_RESERVE_ENABLED ||
+        env.PERAGUS_SANDBOX_DEMO_ENABLED
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["INVITE_EMAIL_OUTBOX_ENABLED"],
+          message:
+            "Invitation outbox requires staging and valid encryption configuration",
+        });
+      }
+    }
     const validateSigner = (
       pathValue: string | undefined,
       base64Value: string | undefined,

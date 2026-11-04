@@ -16,6 +16,19 @@ jobs:
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: invitation_test
+          POSTGRES_USER: invitation_test
+          POSTGRES_PASSWORD: invitation_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U invitation_test -d invitation_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_INVITE_DATABASE_URL: postgres://invitation_test:invitation_test@127.0.0.1:5432/invitation_test
     defaults:
       run:
         working-directory: app/backend
@@ -30,7 +43,7 @@ jobs:
       - run: node --check scripts/ozav-pix-expiry-demo.mjs
       - run: node --check scripts/settlement-audit-demo.mjs
       - run: npm run typecheck
-      - run: npm test
+      - run: npm test -- --maxWorkers=2
       - run: npm run build
 
   frontend:
