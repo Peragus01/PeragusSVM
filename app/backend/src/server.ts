@@ -1,3 +1,4 @@
+import { InviteEmailDelivery } from "./invites/invite-email-delivery.js";
 import { InviteEmailCipher } from "./invites/invite-email-cipher.js";
 import { CustomerDocumentService, DocumentRepository } from "./onboarding/customer-documents.js";
 import { uploadDocumentBytes } from "./providers/document-upload.js";
@@ -718,6 +719,9 @@ const app = await buildApp({
           ),
         },
       }
+    : {}),
+  ...(env.INVITE_EMAIL_OUTBOX_ENABLED && env.INVITE_EMAIL_WEBHOOK_SECRET
+    ? { inviteDelivery: { secret: env.INVITE_EMAIL_WEBHOOK_SECRET, service: new InviteEmailDelivery(pool!) } }
     : {}),
   customerAccess: {
     authenticate,

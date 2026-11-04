@@ -31,3 +31,7 @@ The email links to the verified integration branch alias at `/cadastro`; no code
 ## Verification
 
 `test/invite-email-processing.test.ts` runs embedded state/failure tests plus independent-connection PostgreSQL tests when `TEST_INVITE_DATABASE_URL` points to a disposable localhost database named `invitation_test`. CI provides PostgreSQL 17. The real database tests cover concurrent same-request issuance, duplicate targets, two workers, revocation/redemption while a send holds the invitation lock, rollback and uncertain recovery. Tests never connect to staging or send email.
+
+## Signed delivery notifications
+
+The staging Resend key is sending-only. Production worker delivery polling is disabled: `/webhooks/invitation-email` verifies original Svix-signed bytes (HMAC-SHA256, 5-minute tolerance) with `INVITE_EMAIL_WEBHOOK_SECRET`. It records only invitation delivery/bounce/complaint/failure metadata by the already accepted provider ID and exact invitation subject. Other queues are ignored. Duplicate events preserve the first delivery timestamp; delayed delivery does not undo failure. A notification arriving before acceptance commits returns 503 for provider retry. No raw webhook body, recipient or code is stored or logged. Existing provider-confirmed deliveries can be reconciled from an authoritative Resend lookup without resending email.

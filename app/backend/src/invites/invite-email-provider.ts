@@ -8,6 +8,7 @@ export class InviteEmailProvider {
   constructor(
     private readonly key: string,
     private readonly fetcher: typeof fetch = fetch,
+    private readonly pollDelivery = true,
   ) {}
   async send(key: string, body: string): Promise<string> {
     let response: Response;
@@ -40,6 +41,7 @@ export class InviteEmailProvider {
     }
   }
   async status(id: string): Promise<string | null> {
+    if (!this.pollDelivery) return null;
     try {
       const r = await this.fetcher(
         `https://api.resend.com/emails/${encodeURIComponent(id)}`,

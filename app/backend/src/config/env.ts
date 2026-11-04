@@ -19,6 +19,7 @@ const envSchema = z
       .transform((value) => value === "true"),
     INVITE_EMAIL_ENCRYPTION_KEY: z.string().optional(),
     INVITE_EMAIL_FROM: z.email().optional(),
+    INVITE_EMAIL_WEBHOOK_SECRET: z.string().regex(/^whsec_[A-Za-z0-9+/=_-]{16,256}$/).optional(),
     INVITE_EMAIL_ENCRYPTION_KEY_ID: z
       .string()
       .regex(/^[A-Za-z0-9_-]{1,32}$/)
