@@ -1570,3 +1570,45 @@
   min-height: 1.25rem;
   height: 1.25rem;
 }
+
+/* Registration-only legal acknowledgements; do not alter OZAV onboarding checkboxes. */
+.peragus-legal-acknowledgements {
+  display: grid;
+  gap: 13px;
+  border: 1px solid var(--cline);
+  border-radius: 10px;
+  padding: 15px;
+  margin: 18px 0;
+  min-width: 0;
+}
+.peragus-legal-acknowledgements legend {
+  color: var(--cmuted);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 5px;
+}
+.peragus-legal-check {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  color: var(--ctext);
+  font-size: 13px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.peragus-legal-check input {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--caccent);
+  flex-shrink: 0;
+}
+.peragus-legal-check a {
+  color: var(--caccent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.peragus-legal-check input:focus-visible {
+  outline: 2px solid var(--caccent);
+  outline-offset: 3px;
+}

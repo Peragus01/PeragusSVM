@@ -36,40 +36,54 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 describe("invited registration", () => {
-  it("validates the invitation before Auth signup without consuming it or storing the code", async () => {
-    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({
-        data: { valid: true, environment: "test", email_confirmation_required: true },
-      }),
-    );
+  it("requires both legal acknowledgements before account signup", async () => {
     render(<RegistrationPage />);
     fireEvent.change(screen.getByLabelText("Código de convite"), {
       target: { value: "pginv_" + "a".repeat(43) },
     });
     fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "client@example.test" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "synthetic-password" } });
-    fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
+    const submit = screen.getByRole("button", { name: "Criar minha conta" });
+    const terms = screen.getByRole("checkbox", { name: /Termos de Uso/ });
+    const privacy = screen.getByRole("checkbox", { name: /Política de Privacidade/ });
+    expect(submit).toBeDisabled();
+    expect(terms).not.toBeChecked();
+    expect(privacy).not.toBeChecked();
+    fireEvent.click(terms);
+    expect(submit).toBeDisabled();
+    fireEvent.click(privacy);
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
     await waitFor(() =>
-      expect(state.signup).toHaveBeenCalledWith("client@example.test", "synthetic-password"),
+      expect(state.signup).toHaveBeenCalledWith(
+        "client@example.test",
+        "synthetic-password",
+        "pginv_" + "a".repeat(43),
+        {
+          termsAccepted: true,
+          privacyAcknowledged: true,
+          termsVersion: "draft-0.9-2026-11-03",
+          privacyVersion: "draft-0.9-2026-11-03",
+        },
+      ),
     );
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0]![0]).toBe("/api/registration/invite/check");
     expect(sessionStorage.length).toBe(0);
     expect(await screen.findByText(/O convite ainda não foi consumido/)).toBeInTheDocument();
   });
-  it("does not sign up with an invalid invitation", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({ error: { code: "PILOT_INVITE_NOT_AVAILABLE" } }, { status: 409 }),
-    );
+  it("does not show signup success if server rejects the invitation", async () => {
+    state.signup.mockRejectedValueOnce(new Error("PILOT_INVITE_NOT_AVAILABLE"));
     render(<RegistrationPage />);
     fireEvent.change(screen.getByLabelText("Código de convite"), {
       target: { value: "pginv_" + "a".repeat(43) },
     });
     fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "client@example.test" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "synthetic-password" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Termos de Uso/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Política de Privacidade/ }));
     fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
     await screen.findByRole("alert");
-    expect(state.signup).not.toHaveBeenCalled();
+    expect(state.signup).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/O convite ainda não foi consumido/)).not.toBeInTheDocument();
   });
   it("presents mandatory onboarding once a confirmed account has redeemed its invite", () => {
     state.status = "authenticated";
