@@ -133,10 +133,16 @@ export async function signUpCustomer(
   if (response.ok) return;
   const code = (await response.json().catch(() => null))?.error?.code;
   if (code === "LEGAL_ACKNOWLEDGEMENT_REQUIRED" || code === "DOCUMENT_VERSION_MISMATCH")
-    throw new CustomerSessionError(code, "Revise e confirme os documentos jurídicos para criar sua conta.");
+    throw new CustomerSessionError(
+      code,
+      "Revise e confirme os documentos jurídicos para criar sua conta.",
+    );
   if (code === "PILOT_INVITE_NOT_AVAILABLE")
     throw new CustomerSessionError(code, "Convite inválido, expirado ou vinculado a outro e-mail.");
-  throw new CustomerSessionError("AUTH_REJECTED", "Não foi possível criar a conta. Confira os dados e tente novamente.");
+  throw new CustomerSessionError(
+    "AUTH_REJECTED",
+    "Não foi possível criar a conta. Confira os dados e tente novamente.",
+  );
 }
 function parseTokens(value: Record<string, unknown>): AuthTokens {
   if (

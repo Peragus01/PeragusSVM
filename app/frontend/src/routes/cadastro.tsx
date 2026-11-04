@@ -3,7 +3,12 @@ import { useRef, useState } from "react";
 import { CustomerPublicLayout, CustomerNotice } from "@/components/peragus/customer-ui";
 import { CustomerOnboarding } from "@/components/peragus/customer-onboarding";
 import { useCustomerSession, signUpCustomer } from "@/lib/peragus/customer-session";
-import { canCreateAccount, LEGAL_TERMS_VERSION, LEGAL_PRIVACY_VERSION, LEGAL_URLS } from "@/lib/peragus/legal-acknowledgement";
+import {
+  canCreateAccount,
+  LEGAL_TERMS_VERSION,
+  LEGAL_PRIVACY_VERSION,
+  LEGAL_URLS,
+} from "@/lib/peragus/legal-acknowledgement";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
 export const Route = createFileRoute("/cadastro")({ component: RegistrationPage });
 export function RegistrationPage() {
@@ -21,8 +26,13 @@ export function RegistrationPage() {
   const redemption = useRef<string | null>(null);
   async function submit() {
     if (lock.current) return;
-    if (session.status !== "authenticated" && !canCreateAccount(termsAccepted, privacyAcknowledged)) {
-      setError("Para criar a conta, aceite os Termos de Uso e confirme ciência da Política de Privacidade.");
+    if (
+      session.status !== "authenticated" &&
+      !canCreateAccount(termsAccepted, privacyAcknowledged)
+    ) {
+      setError(
+        "Para criar a conta, aceite os Termos de Uso e confirme ciência da Política de Privacidade.",
+      );
       return;
     }
     lock.current = true;
@@ -187,7 +197,12 @@ export function RegistrationPage() {
             <button
               className="customer-button"
               type="submit"
-              disabled={busy || !session.configured || (session.status !== "authenticated" && !canCreateAccount(termsAccepted, privacyAcknowledged))}
+              disabled={
+                busy ||
+                !session.configured ||
+                (session.status !== "authenticated" &&
+                  !canCreateAccount(termsAccepted, privacyAcknowledged))
+              }
             >
               {busy
                 ? "Processando…"
@@ -205,9 +220,15 @@ export function RegistrationPage() {
         <p className="customer-muted">
           O convite é validado pelo servidor e vinculado ao seu e-mail. Não compartilhe seu código.
           Ambiente de testes, sem dinheiro real. Consulte também nossa{" "}
-          <a className="customer-link" href={LEGAL_URLS.refund} target="_blank" rel="noopener noreferrer">
+          <a
+            className="customer-link"
+            href={LEGAL_URLS.refund}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             Política de Reembolso
-          </a>.
+          </a>
+          .
         </p>
         <Link className="customer-link" to="/login">
           Já tenho conta · Entrar

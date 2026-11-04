@@ -22,7 +22,10 @@ export function canCreateAccount(termsAccepted: boolean, privacyAcknowledged: bo
 export function validLegalAcknowledgements(value: unknown): value is LegalAcknowledgements {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const a = value as Record<string, unknown>;
-  return a["termsAccepted"] === true && a["privacyAcknowledged"] === true
-    && a["termsVersion"] === LEGAL_TERMS_VERSION
-    && a["privacyVersion"] === LEGAL_PRIVACY_VERSION;
+  return (
+    a["termsAccepted"] === true &&
+    a["privacyAcknowledged"] === true &&
+    a["termsVersion"] === LEGAL_TERMS_VERSION &&
+    a["privacyVersion"] === LEGAL_PRIVACY_VERSION
+  );
 }
