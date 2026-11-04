@@ -39,15 +39,15 @@ export async function handleLegalSignup(
       return fail(400, "VALIDATION_ERROR");
     payload = parsed as Record<string, unknown>;
   } catch { return fail(400, "VALIDATION_ERROR"); }
-  if (!validLegalAcknowledgements(payload.legal)) {
-    const legal = payload.legal as Record<string, unknown> | undefined;
-    if (legal && legal.termsAccepted === true && legal.privacyAcknowledged === true)
+  if (!validLegalAcknowledgements(payload["legal"])) {
+    const legal = payload["legal"] as Record<string, unknown> | undefined;
+    if (legal && legal["termsAccepted"] === true && legal["privacyAcknowledged"] === true)
       return fail(409, "DOCUMENT_VERSION_MISMATCH");
     return fail(422, "LEGAL_ACKNOWLEDGEMENT_REQUIRED");
   }
-  const email = typeof payload.email === "string" ? payload.email.trim() : "";
-  const password = payload.password;
-  const inviteCode = payload.inviteCode;
+  const email = typeof payload["email"] === "string" ? payload["email"].trim() : "";
+  const password = payload["password"];
+  const inviteCode = payload["inviteCode"];
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
     typeof password !== "string" || password.length < 12 || password.length > 256 ||
     typeof inviteCode !== "string" || !/^pginv_[A-Za-z0-9_-]{43}$/.test(inviteCode))
