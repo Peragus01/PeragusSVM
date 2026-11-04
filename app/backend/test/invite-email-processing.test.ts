@@ -1,3 +1,4 @@
+import { InviteEmailDelivery } from "../src/invites/invite-email-delivery.js";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -253,6 +254,46 @@ for (const mode of ["embedded", ...(realUrl ? ["postgres"] : [])])
       await process();
       expect((await row(value.data.id)).state).toBe("delivered");
       expect((await row(value.data.id)).delivered_at).toBeTruthy();
+    });
+    it("records signed delivery metadata idempotently without touching other queues or losing later failure", async () => {
+      const value = await issue();
+      await process();
+      const accepted = await row(value.data.id);
+      const delivery = new InviteEmailDelivery(db);
+      const event = {
+        type: "email.delivered",
+        data: {
+          email_id: accepted.provider_email_id,
+          subject: "[TESTES] Seu convite para a Peragus",
+        },
+      };
+      expect(await delivery.receive(event)).toBe("recorded");
+      const first = await row(value.data.id);
+      expect(first.state).toBe("delivered");
+      expect(await delivery.receive(event)).toBe("recorded");
+      expect((await row(value.data.id)).delivered_at).toEqual(
+        first.delivered_at,
+      );
+      expect(
+        await delivery.receive({
+          ...event,
+          data: { ...event.data, subject: "Other queue" },
+        }),
+      ).toBe("ignored");
+      expect(
+        await delivery.receive({
+          ...event,
+          data: { ...event.data, email_id: "unknown-provider-id" },
+        }),
+      ).toBe("retry");
+      await delivery.receive({ ...event, type: "email.bounced" });
+      await delivery.receive(event);
+      expect(await row(value.data.id)).toMatchObject({
+        state: "failed",
+        last_error: "BOUNCED",
+        encrypted_payload: null,
+      });
+      expect(provider.send).toHaveBeenCalledTimes(1);
     });
     it("recovers acceptance followed by database failure using the same message/key", async () => {
       const value = await issue();

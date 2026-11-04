@@ -1,3 +1,4 @@
+import { registerInviteDeliveryRoute, type InviteDeliveryOptions } from "./routes/invite-email-delivery.js";
 import { registerCustomerDocumentRoutes } from "./routes/customer-documents.js";
 import type { CustomerDocumentService } from "./onboarding/customer-documents.js";
 import { registerPilotInviteRoutes } from "./routes/pilot-invites.js";
@@ -85,6 +86,7 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  inviteDelivery?: InviteDeliveryOptions;
   manualRefundService?: ManualRefundService;
   sandboxWithdrawalRecoveryService?: SandboxWithdrawalRecoveryService;
   operatorWithdrawalAuditService?: OperatorWithdrawalAuditService;
@@ -141,6 +143,7 @@ export async function buildApp(
   });
 
   await app.register(sensible);
+  await registerInviteDeliveryRoute(app, options.inviteDelivery);
   await registerCustomerWebhookRoutes(app, options.customerWebhooks);
 
   if (options.apiRateLimiter && !options.customerAccess)

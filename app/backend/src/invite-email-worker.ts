@@ -17,7 +17,7 @@ const cipher = new InviteEmailCipher(
   env.INVITE_EMAIL_ENCRYPTION_KEY!,
   env.INVITE_EMAIL_ENCRYPTION_KEY_ID!,
 );
-const provider = new InviteEmailProvider(process.env.RESEND_API_KEY);
+const provider = new InviteEmailProvider(process.env.RESEND_API_KEY, fetch, false);
 let stopping = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.once(signal, () => {
