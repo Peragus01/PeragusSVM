@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID, createHash, randomBytes } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import type { Pool } from "pg";
@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
 import { buildApp } from "../src/app.js";
 import { AuthenticationError } from "../src/auth/customer-access.js";
 import { PostgresCustomerRepository } from "../src/repositories/postgres-customer-repository.js";
+import { InviteEmailCipher } from "../src/invites/invite-email-cipher.js";
 import { PilotInviteService } from "../src/invites/pilot-invites.js";
 const db = new PGlite();
 const pool = {
@@ -87,6 +88,81 @@ async function issue(
   return service().issue(operator, request, target, hours, reason);
 }
 describe("closed PF pilot invitations", () => {
+  it("atomically issues an email invitation with encrypted outbox and replays without duplicates", async () => {
+    const cipher = new InviteEmailCipher(
+      randomBytes(32).toString("base64"),
+      "v1",
+    );
+    const svc = new PilotInviteService(
+      pool,
+      new Set([operator.id]),
+      true,
+      "ab".repeat(32),
+      cipher,
+      "contato@peragus.com.br",
+    );
+    const request = randomUUID(),
+      email = "synthetic@example.test";
+    const issued = await svc.issueEmail(operator, request, email, 24, reason);
+    const rows = await db.query<{
+      invite_id: string;
+      encrypted_payload: unknown;
+    }>("select invite_id,encrypted_payload from peragus_invite_email_outbox");
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]!.invite_id).toBe(issued.data.id);
+    const decrypted = cipher.open(
+      issued.data.id,
+      rows.rows[0]!.encrypted_payload,
+    );
+    expect(decrypted.email).toBe(email);
+    expect(decrypted.code).toMatch(/^pginv_/);
+    expect(issued.code).toBeNull();
+    expect(issued.data.email_delivery?.state).toBe("pending");
+    expect(JSON.stringify(rows.rows)).not.toContain(email);
+    expect(JSON.stringify(rows.rows)).not.toContain(decrypted.code);
+    expect(
+      (await svc.issueEmail(operator, request, email, 24, reason)).replayed,
+    ).toBe(true);
+    expect(
+      (await db.query("select invite_id from peragus_invite_email_outbox"))
+        .rows,
+    ).toHaveLength(1);
+  });
+  it("rolls back invite when outbox insertion fails", async () => {
+    const cipher = new InviteEmailCipher(
+      randomBytes(32).toString("base64"),
+      "v1",
+    );
+    const svc = new PilotInviteService(
+      pool,
+      new Set([operator.id]),
+      true,
+      "ab".repeat(32),
+      cipher,
+      "contato@peragus.com.br",
+    );
+    await db.exec(
+      "alter table peragus_invite_email_outbox add constraint test_reject check (false)",
+    );
+    try {
+      await expect(
+        svc.issueEmail(
+          operator,
+          randomUUID(),
+          "synthetic@example.test",
+          24,
+          reason,
+        ),
+      ).rejects.toThrow();
+      expect(
+        (await db.query("select id from peragus_pilot_invites")).rows,
+      ).toHaveLength(0);
+    } finally {
+      await db.exec(
+        "alter table peragus_invite_email_outbox drop constraint test_reject",
+      );
+    }
+  });
   it("counts existing PF profiles in the initial five slots", () => {
     expect(seeded).toBe(2);
   });
@@ -173,9 +249,7 @@ describe("closed PF pilot invitations", () => {
     ).toEqual({ n: 0 });
   });
   it("allocates new slots beyond five without losing audit or one-use semantics", async () => {
-    const issued = await Promise.all(
-      Array.from({ length: 7 }, () => issue()),
-    );
+    const issued = await Promise.all(Array.from({ length: 7 }, () => issue()));
     expect(issued).toHaveLength(7);
     expect(new Set(issued.map((item) => item.data.slot)).size).toBe(7);
     for (const value of issued)
@@ -191,7 +265,8 @@ describe("closed PF pilot invitations", () => {
       service().revoke(operator, issued[0]!.data.id, randomUUID(), reason),
     ).rejects.toThrow("PILOT_INVITE_TERMINAL");
     expect(
-      (await db.query("select count(*)::int as n from peragus_customers")).rows[0],
+      (await db.query("select count(*)::int as n from peragus_customers"))
+        .rows[0],
     ).toEqual({ n: 7 });
   });
   it("restricts invite history to MFA operators and never returns codes", async () => {
@@ -199,11 +274,13 @@ describe("closed PF pilot invitations", () => {
     const history = await service().list(operator);
     expect(history.some((item) => item.id === issued.data.id)).toBe(true);
     expect(JSON.stringify(history)).not.toContain(issued.code!);
-    await expect(service().list({
-      id: randomUUID(),
-      email: "not-operator@example.test",
-      assuranceLevel: "aal2",
-    })).rejects.toThrow();
+    await expect(
+      service().list({
+        id: randomUUID(),
+        email: "not-operator@example.test",
+        assuranceLevel: "aal2",
+      }),
+    ).rejects.toThrow();
   });
   it("revokes an unused code idempotently and reuses its slot without restoring it", async () => {
     const issued = await issue(),

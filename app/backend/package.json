@@ -20,7 +20,8 @@
     "demo:audit": "node scripts/settlement-audit-demo.mjs",
     "dev:worker": "tsx watch src/worker.ts",
     "start:worker": "node dist/worker.js",
-    "start:onboarding-emails": "node dist/onboarding-email-worker.js"
+    "start:onboarding-emails": "node dist/onboarding-email-worker.js",
+    "start:invite-emails": "node dist/invite-email-worker.js"
   },
   "keywords": [],
   "author": "",

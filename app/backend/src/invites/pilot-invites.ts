@@ -1,5 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import type { Pool } from "pg";
+import type { InviteEmailCipher } from "./invite-email-cipher.js";
+import { invitationMessage } from "./invite-email-template.js";
 import type { AuthenticatedUser } from "../auth/customer-access.js";
 import { authorizeWithdrawalOperator } from "../withdrawals/operator-approvals.js";
 export class PilotInviteError extends Error {
@@ -26,6 +28,13 @@ interface InviteRow {
   revocation_request_id: string | null;
   revocation_reason: string | null;
   revoked_at: Date | string | null;
+  email_delivery?: {
+    state: string;
+    accepted_at: string | null;
+    delivered_at: string | null;
+    retry_blocked: boolean;
+    last_error: string | null;
+  } | null;
 }
 interface ProfileRow {
   id: string;
@@ -51,6 +60,7 @@ const view = (r: InviteRow) => ({
   redeemed_at: iso(r.redeemed_at),
   revoked_at: iso(r.revoked_at),
   environment: "test",
+  email_delivery: r.email_delivery ?? null,
 });
 const profile = (r: ProfileRow) => ({
   id: r.id,
@@ -75,6 +85,8 @@ export class PilotInviteService {
     private readonly operators: ReadonlySet<string>,
     private readonly enabled = false,
     private readonly emailKey?: string,
+    private readonly inviteEmailCipher?: InviteEmailCipher,
+    private readonly inviteEmailFrom?: string,
   ) {}
   authorize(user: AuthenticatedUser) {
     authorizeWithdrawalOperator(user, this.operators);
@@ -98,7 +110,7 @@ export class PilotInviteService {
   }
   private async find(where: string, args: unknown[]) {
     const r = await this.pool.query<InviteRow>(
-      `select * from peragus_pilot_invites where environment='test' and ${where}`,
+      `select i.* ${this.inviteEmailCipher ? ", (select jsonb_build_object('state',o.state,'accepted_at',o.accepted_at,'delivered_at',o.delivered_at,'retry_blocked',o.retry_blocked_at is not null,'last_error',o.last_error) from peragus_invite_email_outbox o where o.invite_id=i.id) as email_delivery" : ""} from peragus_pilot_invites i where environment='test' and ${where}`,
       args,
     );
     return r.rows[0] ?? null;
@@ -186,6 +198,7 @@ export class PilotInviteService {
       hours,
       reason,
       this.emailHash(email),
+      email.trim().toLowerCase(),
     );
   }
   private async issueTarget(
@@ -195,6 +208,7 @@ export class PilotInviteService {
     hours: number,
     reason: string,
     emailHash: string | null,
+    email: string | null = null,
   ) {
     this.authorize(user);
     this.writable();
@@ -216,6 +230,16 @@ export class PilotInviteService {
     );
     const code = "pginv_" + randomBytes(32).toString("base64url"),
       id = randomUUID();
+    if (email && this.inviteEmailCipher && !this.inviteEmailFrom)
+      fail("PILOT_EMAIL_INVITES_DISABLED");
+    const sealed =
+      email && this.inviteEmailCipher
+        ? this.inviteEmailCipher.seal(id, {
+            email,
+            code,
+            message: invitationMessage(email, code, this.inviteEmailFrom!),
+          })
+        : null;
     try {
       const inserted = await this.pool.query<InviteRow>(
         `with available as (
@@ -234,13 +258,49 @@ export class PilotInviteService {
     where s.slot=a.slot and s.admitted_user_id is null and s.current_invite_id is not distinct from a.current_invite_id returning s.slot
    ), assigned as (
     select slot from allocated union all select slot from claimed
-   ) insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,code_hash,duration_hours,reason,expires_at,target_email_hash)
-    select $1,slot,$3,$2,$4,$5,$6,$7,now()+($6::int*interval '1 hour'),$8 from assigned returning *`,
-        [id, user.id, target, requestId, hash(code), hours, reason, emailHash],
+   ), issued as (
+    insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,code_hash,duration_hours,reason,expires_at,target_email_hash)
+    select $1,slot,$3,$2,$4,$5,$6,$7,now()+($6::int*interval '1 hour'),$8 from assigned returning *
+   ) ${
+     sealed
+       ? `, queued as (
+    insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload)
+    select id,'peragus-invitation-test/'||id::text,$9::jsonb from issued returning invite_id
+   )`
+       : ""
+   } select * from issued`,
+        [
+          id,
+          user.id,
+          target,
+          requestId,
+          hash(code),
+          hours,
+          reason,
+          emailHash,
+          ...(sealed ? [JSON.stringify(sealed)] : []),
+        ],
       );
       const row = inserted.rows[0];
       if (!row) fail("PILOT_CAPACITY_UNAVAILABLE");
-      return { data: view(row), code, replayed: false };
+      return {
+        data: view(
+          sealed
+            ? {
+                ...row,
+                email_delivery: {
+                  state: "pending",
+                  accepted_at: null,
+                  delivered_at: null,
+                  retry_blocked: false,
+                  last_error: null,
+                },
+              }
+            : row,
+        ),
+        code: sealed ? null : code,
+        replayed: false,
+      };
     } catch (error) {
       if (!duplicate(error)) throw error;
       const winner = await this.find("operator_user_id=$1 and request_id=$2", [
@@ -255,7 +315,7 @@ export class PilotInviteService {
   async list(user: AuthenticatedUser) {
     this.authorize(user);
     const rows = await this.pool.query<InviteRow>(
-      "select * from peragus_pilot_invites where environment='test' order by created_at desc,id desc limit 50",
+      `select i.* ${this.inviteEmailCipher ? ", (select jsonb_build_object('state',o.state,'accepted_at',o.accepted_at,'delivered_at',o.delivered_at,'retry_blocked',o.retry_blocked_at is not null,'last_error',o.last_error) from peragus_invite_email_outbox o where o.invite_id=i.id) as email_delivery" : ""} from peragus_pilot_invites i where environment='test' order by created_at desc,id desc limit 50`,
     );
     // Raw codes and email hashes are never persisted in or returned by the list API.
     return rows.rows.map(view);

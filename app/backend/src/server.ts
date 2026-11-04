@@ -1,3 +1,4 @@
+import { InviteEmailCipher } from "./invites/invite-email-cipher.js";
 import { CustomerDocumentService, DocumentRepository } from "./onboarding/customer-documents.js";
 import { uploadDocumentBytes } from "./providers/document-upload.js";
 import { notificationConfig } from "./notifications/config.js";
@@ -493,6 +494,10 @@ const app = await buildApp({
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
           env.PILOT_INVITES_ENABLED,
           env.PILOT_INVITE_EMAIL_HASH_KEY,
+          env.INVITE_EMAIL_OUTBOX_ENABLED
+            ? new InviteEmailCipher(env.INVITE_EMAIL_ENCRYPTION_KEY!, env.INVITE_EMAIL_ENCRYPTION_KEY_ID!)
+            : undefined,
+          env.INVITE_EMAIL_FROM,
         ),
       }
     : {}),
