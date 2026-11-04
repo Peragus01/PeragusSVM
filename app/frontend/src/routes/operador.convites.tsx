@@ -19,7 +19,28 @@ type Invite = {
   expires_at: string;
   reason: string;
   target_user_id: string | null;
+  email_delivery?: {
+    state: "pending" | "sending" | "uncertain" | "accepted" | "delivered" | "failed" | "cancelled";
+    retry_blocked: boolean;
+    accepted_at: string | null;
+    delivered_at: string | null;
+    last_error: string | null;
+  } | null;
 };
+function deliveryLabel(delivery: Invite["email_delivery"]) {
+  if (!delivery) return "Sem envio automático registrado";
+  if (delivery.state === "uncertain" && delivery.retry_blocked)
+    return "Resultado incerto · repetição automática bloqueada; consulte o suporte";
+  return {
+    pending: "E-mail na fila · ainda não enviado",
+    sending: "Envio em andamento · aceitação ainda não confirmada",
+    uncertain: "Resultado incerto · verificação pendente",
+    accepted: "Aceito pelo Resend · entrega ainda não confirmada",
+    delivered: "Entrega confirmada pelo provedor",
+    failed: "Falha no envio ou na entrega",
+    cancelled: "Envio cancelado",
+  }[delivery.state];
+}
 type IssueResponse = { data: Invite; code: string | null; meta: { idempotent_replay: boolean } };
 
 function OperatorInvitesPage() {
@@ -183,7 +204,7 @@ export function InviteConsole({
         reason: reason.trim(),
       };
       pending.current = request;
-      // Issue response is deliberately the only place where the plaintext code appears.
+      // Automatic delivery never returns the code or recipient in invitation history.
       const response = await fetch("/api/v1/admin/pilot-invites", {
         method: "POST",
         credentials: "same-origin",
@@ -209,16 +230,19 @@ export function InviteConsole({
         throw new JourneyError(payload.error?.code ?? "UNAVAILABLE");
       }
       if (!payload.data) throw new JourneyError("INVALID_RESPONSE");
-      if (payload.code) {
+      if (payload.data.email_delivery) {
+        setCreated(null);
+        setInfo(
+          `Convite registrado. ${deliveryLabel(payload.data.email_delivery)}. O destinatário recebe o código e o link de cadastro por e-mail.`,
+        );
+      } else if (payload.code) {
         setCreated({ code: payload.code, record: payload.data });
         setInfo(
           "Convite gerado. Copie o código agora: por segurança ele não poderá ser recuperado depois.",
         );
       } else {
         setCreated(null);
-        setInfo(
-          "Solicitação já processada. O código não pode ser recuperado. Revogue o convite anterior e gere outro, se necessário.",
-        );
+        setInfo("Solicitação já processada. Consulte o histórico para acompanhar o convite.");
       }
       pending.current = null;
       setTargetEmail("");
@@ -367,6 +391,8 @@ export function InviteConsole({
               ID: {item.id}
               <br />
               Validade: {new Date(item.expires_at).toLocaleString("pt-BR")}
+              <br />
+              <strong>{deliveryLabel(item.email_delivery)}</strong>
               <br />
               {item.reason}
             </span>
