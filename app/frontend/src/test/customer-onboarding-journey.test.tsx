@@ -1,6 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CustomerOnboarding } from "@/components/peragus/customer-onboarding";
+import type { ReactNode } from "react";
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  Link: ({ to, children }: { to: string; children: ReactNode }) => <a href={to}>{children}</a>,
+}));
 vi.mock("@/lib/peragus/customer-session", () => ({
   useCustomerSession: () => ({
     accessToken: "synthetic.token",

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   ClipboardList,
+  FileText,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -105,6 +106,7 @@ const NAV = [
   { path: "/app/carteira" as const, label: "Minha carteira", icon: Wallet, group: "" },
   { path: "/app/operacoes" as const, label: "Histórico", icon: ClipboardList, group: "" },
   { path: "/app/minha-conta" as const, label: "Minha conta", icon: UserRound, group: "" },
+  { path: "/app/documentos" as const, label: "Documentos", icon: FileText, group: "" },
 ];
 export function CustomerLayout() {
   useReveal();
@@ -227,7 +229,7 @@ export function CustomerLayout() {
         </div>
       </aside>
       <nav className="customer-bottom-nav" inert={mobile && open} aria-label="Atalhos no celular">
-        {NAV.map(({ path, label, icon: Icon }) => (
+        {NAV.filter(({ path }) => path !== "/app/documentos").map(({ path, label, icon: Icon }) => (
           <Link
             key={path}
             to={path}

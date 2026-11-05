@@ -21,6 +21,7 @@ import { Route as AppIndexRouteImport } from './routes/app.index'
 import { Route as AppAuditoriaRouteImport } from './routes/app.auditoria'
 import { Route as AppCarteiraRouteImport } from './routes/app.carteira'
 import { Route as AppComprarUsdtRouteImport } from './routes/app.comprar-usdt'
+import { Route as AppDocumentosRouteImport } from './routes/app.documentos'
 import { Route as AppMinhaContaRouteImport } from './routes/app.minha-conta'
 import { Route as AppOperacoesRouteImport } from './routes/app.operacoes'
 import { Route as OperadorConvitesRouteImport } from './routes/operador.convites'
@@ -88,6 +89,11 @@ const AppComprarUsdtRoute = AppComprarUsdtRouteImport.update({
   path: '/comprar-usdt',
   getParentRoute: () => AppRoute,
 } as any)
+const AppDocumentosRoute = AppDocumentosRouteImport.update({
+  id: '/documentos',
+  path: '/documentos',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppMinhaContaRoute = AppMinhaContaRouteImport.update({
   id: '/minha-conta',
   path: '/minha-conta',
@@ -131,6 +137,7 @@ export interface FileRoutesByFullPath {
   '/app/auditoria': typeof AppAuditoriaRoute
   '/app/carteira': typeof AppCarteiraRoute
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
+  '/app/documentos': typeof AppDocumentosRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
   '/app/operacoes': typeof AppOperacoesRouteWithChildren
   '/operador/convites': typeof OperadorConvitesRoute
@@ -150,6 +157,7 @@ export interface FileRoutesByTo {
   '/app/auditoria': typeof AppAuditoriaRoute
   '/app/carteira': typeof AppCarteiraRoute
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
+  '/app/documentos': typeof AppDocumentosRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
   '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
@@ -170,6 +178,7 @@ export interface FileRoutesById {
   '/app/auditoria': typeof AppAuditoriaRoute
   '/app/carteira': typeof AppCarteiraRoute
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
+  '/app/documentos': typeof AppDocumentosRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
   '/app/operacoes': typeof AppOperacoesRouteWithChildren
   '/operador/convites': typeof OperadorConvitesRoute
@@ -192,6 +201,7 @@ export interface FileRouteTypes {
     | '/app/auditoria'
     | '/app/carteira'
     | '/app/comprar-usdt'
+    | '/app/documentos'
     | '/app/minha-conta'
     | '/app/operacoes'
     | '/operador/convites'
@@ -211,6 +221,7 @@ export interface FileRouteTypes {
     | '/app/auditoria'
     | '/app/carteira'
     | '/app/comprar-usdt'
+    | '/app/documentos'
     | '/app/minha-conta'
     | '/operador/convites'
     | '/operador/estornos'
@@ -230,6 +241,7 @@ export interface FileRouteTypes {
     | '/app/auditoria'
     | '/app/carteira'
     | '/app/comprar-usdt'
+    | '/app/documentos'
     | '/app/minha-conta'
     | '/app/operacoes'
     | '/operador/convites'
@@ -338,6 +350,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppComprarUsdtRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/documentos': {
+      id: '/app/documentos'
+      path: '/documentos'
+      fullPath: '/app/documentos'
+      preLoaderRoute: typeof AppDocumentosRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/minha-conta': {
       id: '/app/minha-conta'
       path: '/minha-conta'
@@ -401,6 +420,7 @@ interface AppRouteChildren {
   AppAuditoriaRoute: typeof AppAuditoriaRoute
   AppCarteiraRoute: typeof AppCarteiraRoute
   AppComprarUsdtRoute: typeof AppComprarUsdtRoute
+  AppDocumentosRoute: typeof AppDocumentosRoute
   AppMinhaContaRoute: typeof AppMinhaContaRoute
   AppOperacoesRoute: typeof AppOperacoesRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
@@ -410,6 +430,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAuditoriaRoute: AppAuditoriaRoute,
   AppCarteiraRoute: AppCarteiraRoute,
   AppComprarUsdtRoute: AppComprarUsdtRoute,
+  AppDocumentosRoute: AppDocumentosRoute,
   AppMinhaContaRoute: AppMinhaContaRoute,
   AppOperacoesRoute: AppOperacoesRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
