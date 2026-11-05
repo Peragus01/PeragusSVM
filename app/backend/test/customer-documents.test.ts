@@ -275,6 +275,7 @@ describe("private PF document uploads", () => {
     const s = await setup();
     const first = await s.service.send(s.customer, s.input, jpeg());
     expect(first.data).toMatchObject({
+      request_id: s.input.request_id,
       state: "received",
       identity_verified: false,
       operations_enabled: false,
@@ -305,6 +306,12 @@ describe("private PF document uploads", () => {
     expect((await s.service.list(s.customer)).map((row) => row.id)).toContain(
       first.data.id,
     );
+    expect(await s.service.list(s.customer)).toContainEqual(
+      expect.objectContaining({ id: first.data.id, request_id: s.input.request_id }),
+    );
+    expect(await s.service.read(s.customer, first.data.id)).toMatchObject({
+      request_id: s.input.request_id,
+    });
     expect(await s.service.list(randomUUID())).toEqual([]);
     expect(
       (await s.service.requirements(s.customer)).required_documents,
