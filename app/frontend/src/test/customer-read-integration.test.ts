@@ -20,7 +20,12 @@ afterEach(() => {
 
 describe("customer read bridge", () => {
   it("allows only exact customer read resources", () => {
-    for (const path of ["v1/me", "v1/me/operations", `v1/me/withdrawal-requests/${id}/result`])
+    for (const path of [
+      "v1/me",
+      "v1/me/onboarding/status",
+      "v1/me/operations",
+      `v1/me/withdrawal-requests/${id}/result`,
+    ])
       expect(isCustomerReadPath(path)).toBe(true);
     for (const path of [
       "v1/admin/withdrawal-requests/" + id + "/execution",
@@ -99,7 +104,7 @@ describe("customer read client", () => {
       expect.objectContaining({
         method: "GET",
         cache: "no-store",
-        credentials: "omit",
+        credentials: "same-origin",
         headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
       }),
     );

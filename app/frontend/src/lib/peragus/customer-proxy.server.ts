@@ -2,7 +2,12 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const resultPath = new RegExp(`^v1/me/withdrawal-requests/${UUID}/result$`, "i");
 
 export function isCustomerReadPath(path: string) {
-  return path === "v1/me" || path === "v1/me/operations" || resultPath.test(path);
+  return (
+    path === "v1/me/onboarding/status" ||
+    path === "v1/me" ||
+    path === "v1/me/operations" ||
+    resultPath.test(path)
+  );
 }
 
 const headers = () => new Headers({ "Cache-Control": "no-store", Vary: "Authorization" });
