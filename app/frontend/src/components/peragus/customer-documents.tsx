@@ -169,7 +169,15 @@ function DocumentForm({ token }: { token: string }) {
   return (
     <div className="customer-documents-page">
       <CustomerKycOverview
-        state={profileRequired ? "profile_required" : ready ? "documents" : error ? "unavailable" : "checking"}
+        state={
+          profileRequired
+            ? "profile_required"
+            : ready
+              ? "documents"
+              : error
+                ? "unavailable"
+                : "checking"
+        }
         received={rows.filter((row) => row.state === "received").length}
         pending={rows.filter((row) => !["received", "rejected"].includes(row.state)).length}
         canUpload={!!requirements?.required_documents?.some((row) => row.supported_for_upload)}
