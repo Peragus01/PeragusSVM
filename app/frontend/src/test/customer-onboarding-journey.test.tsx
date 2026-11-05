@@ -53,9 +53,15 @@ describe("individual draft field errors", () => {
     mockDraft(() => Response.json({ data: null }));
     render(<CustomerOnboarding />);
     await screen.findByLabelText("Nome completo");
-    expect(screen.getByRole("group", { name: "1. Informações pessoais" })).toContainElement(screen.getByLabelText("CPF"));
-    expect(screen.getByRole("group", { name: "2. Endereço residencial" })).toContainElement(screen.getByLabelText("CEP"));
-    expect(screen.getByRole("group", { name: "3. Perfil e origem dos recursos" })).toContainElement(screen.getByLabelText("Renda mensal em USD"));
+    expect(screen.getByRole("group", { name: "1. Informações pessoais" })).toContainElement(
+      screen.getByLabelText("CPF"),
+    );
+    expect(screen.getByRole("group", { name: "2. Endereço residencial" })).toContainElement(
+      screen.getByLabelText("CEP"),
+    );
+    expect(screen.getByRole("group", { name: "3. Perfil e origem dos recursos" })).toContainElement(
+      screen.getByLabelText("Renda mensal em USD"),
+    );
     expect(screen.getByRole("list", { name: "Etapas do cadastro" })).toBeInTheDocument();
   });
   it("connects backend errors to visible fields, focuses the first in form order and preserves values", async () => {
