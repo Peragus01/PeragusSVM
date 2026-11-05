@@ -1,4 +1,4 @@
-import { CustomerDocuments } from "./customer-documents";
+import { CustomerDocumentSummary } from "./customer-document-summary";
 import { OnboardingReceipt, type OnboardingReview } from "./onboarding-receipt";
 import { useEffect, useRef, useState } from "react";
 import { CustomerNotice, CustomerPanel } from "./customer-ui";
@@ -539,7 +539,7 @@ export function CustomerOnboarding() {
           {locked && (
             <>
               <OnboardingReceipt review={review} />
-              <CustomerDocuments />
+              <CustomerDocumentSummary />
               <CustomerPanel title="Verificação de identidade obrigatória">
                 <div className="customer-row">
                   <span>KYC</span>

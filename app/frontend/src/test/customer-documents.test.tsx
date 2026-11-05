@@ -1,7 +1,20 @@
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { CustomerDocuments } from "@/components/peragus/customer-documents";
-import { validateDocumentFile } from "@/lib/peragus/documents";
+import {
+  documentRequirementState,
+  validateDocumentFile,
+  type DocumentRecord,
+} from "@/lib/peragus/documents";
+import type { ReactNode } from "react";
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  Link: ({ to, children, className }: { to: string; children: ReactNode; className?: string }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  ),
+}));
 let account = "one";
 vi.mock("@/lib/peragus/customer-session", () => ({
   useCustomerSession: () => ({
@@ -45,6 +58,36 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("private document journey", () => {
+  it("distinguishes required, pending, received and rejected files without inferring identity approval", () => {
+    const received = record as DocumentRecord;
+    expect(documentRequirementState([], "identity_document").state).toBe("necessary");
+    expect(documentRequirementState([received], "identity_document").state).toBe("received");
+    expect(
+      documentRequirementState([{ ...received, state: "rejected" }, received], "identity_document")
+        .state,
+    ).toBe("rejected");
+    expect(
+      documentRequirementState(
+        [received, { ...received, side: "back", state: "uncertain" }],
+        "identity_document",
+      ).state,
+    ).toBe("pending");
+  });
+  it("does not label a definitive validation rejection as an uncertain upload", async () => {
+    mock(undefined, async () =>
+      Response.json({ error: { code: "DOCUMENT_VALIDATION_ERROR" } }, { status: 400 }),
+    );
+    render(<CustomerDocuments />);
+    const button = await screen.findByRole("button", { name: "Enviar arquivo de teste" });
+    fireEvent.change(screen.getByLabelText("Arquivo de teste"), {
+      target: { files: [new File(["synthetic"], "test.jpg", { type: "image/jpeg" })] },
+    });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(button);
+    await screen.findByText(/Confira o formato e o tamanho/);
+    expect(screen.queryByText(/O envio teve resultado incerto/)).toBeNull();
+    expect(screen.getByRole("checkbox").closest("fieldset")).not.toBeDisabled();
+  });
   it("loads without writes, requires synthetic confirmation, sends one raw file, never approves KYC", async () => {
     const fetcher = mock();
     render(<CustomerDocuments />);
@@ -166,6 +209,62 @@ describe("private document journey", () => {
     expect(writes).toHaveLength(1);
     expect(String(writes[0]?.[0])).toBe("/api/v1/me/onboarding/documents/" + id + "/refresh");
     expect(writes[0]?.[1]?.body).toBeUndefined();
+  });
+  it("clears an ambiguous upload warning only after the exact request has a confirmed receipt", async () => {
+    let attempted = false;
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url).endsWith("/requirements"))
+        return Response.json({
+          data: requirements([{ doc_type: "identity_document", supported_for_upload: true }]),
+        });
+      if (init?.method === "POST") {
+        attempted = true;
+        throw Error("timeout");
+      }
+      return Response.json({ data: attempted ? [{ ...record, request_id: id }] : [] });
+    });
+    render(<CustomerDocuments />);
+    const button = await screen.findByRole("button", { name: "Enviar arquivo de teste" });
+    fireEvent.change(screen.getByLabelText("Arquivo de teste"), {
+      target: { files: [new File(["synthetic"], "test.jpg", { type: "image/jpeg" })] },
+    });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(button);
+    await screen.findByText(/O envio teve resultado incerto/);
+    fireEvent.click(screen.getByRole("button", { name: "Atualizar envios" }));
+    await screen.findAllByText("Arquivo recebido — análise pendente");
+    await waitFor(() => expect(screen.queryByText(/O envio teve resultado incerto/)).toBeNull());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("checkbox").closest("fieldset")).not.toBeDisabled();
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+  it("does not resolve an ambiguous attempt from a different request, even when its type and side match", async () => {
+    let attempted = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url).endsWith("/requirements"))
+        return Response.json({
+          data: requirements([{ doc_type: "identity_document", supported_for_upload: true }]),
+        });
+      if (init?.method === "POST") {
+        attempted = true;
+        throw Error("timeout");
+      }
+      return Response.json({
+        data: attempted ? [{ ...record, request_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }] : [],
+      });
+    });
+    render(<CustomerDocuments />);
+    const button = await screen.findByRole("button", { name: "Enviar arquivo de teste" });
+    fireEvent.change(screen.getByLabelText("Arquivo de teste"), {
+      target: { files: [new File(["synthetic"], "test.jpg", { type: "image/jpeg" })] },
+    });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(button);
+    await screen.findByText(/O envio teve resultado incerto/);
+    fireEvent.click(screen.getByRole("button", { name: "Atualizar envios" }));
+    await screen.findAllByText("Arquivo recebido — análise pendente");
+    expect(screen.getByText(/O envio teve resultado incerto/)).toBeInTheDocument();
+    expect(button).toBeDisabled();
   });
   it("rejects oversized and inappropriate files before writes", () => {
     expect(

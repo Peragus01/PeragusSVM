@@ -5,6 +5,7 @@ export type DocumentState =
   "declaring" | "uploading" | "pending_confirmation" | "received" | "rejected" | "uncertain";
 export interface DocumentRecord {
   id: string;
+  request_id?: string;
   doc_type: DocumentType;
   side: DocumentSide;
   state: DocumentState;
@@ -34,6 +35,32 @@ export class DocumentClientError extends Error {
     super(code);
   }
 }
+export function documentOutcomeUncertain(error: unknown) {
+  return !(
+    error instanceof DocumentClientError &&
+    [
+      "DOCUMENT_VALIDATION_ERROR",
+      "DOCUMENT_TOO_LARGE",
+      "CUSTOMER_DOCUMENTS_DISABLED",
+      "AUTH_REQUIRED",
+      "AUTH_INVALID",
+      "EMAIL_NOT_CONFIRMED",
+      "INDIVIDUAL_PROFILE_REQUIRED",
+      "DOCUMENT_CUSTOMER_REQUIRED",
+      "DOCUMENT_CAPABILITY_REQUIRED",
+      "DOCUMENT_UPLOAD_BUSY",
+    ].includes(error.code)
+  );
+}
+export function documentRequirementState(rows: DocumentRecord[], type: string) {
+  const matches = rows.filter((row) => row.doc_type === type);
+  if (matches.some((row) => !["received", "rejected"].includes(row.state)))
+    return { state: "pending", label: "Recebimento pendente" };
+  const latest = matches[0];
+  return latest
+    ? { state: latest.state, label: documentStates[latest.state] }
+    : { state: "necessary", label: "Documento necessário" };
+}
 const record = (x: unknown): x is Record<string, unknown> =>
   !!x && typeof x === "object" && !Array.isArray(x);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -42,6 +69,8 @@ function parseDocument(x: unknown): DocumentRecord {
     !record(x) ||
     typeof x["id"] !== "string" ||
     !uuid.test(x["id"]) ||
+    (x["request_id"] !== undefined &&
+      (typeof x["request_id"] !== "string" || !uuid.test(x["request_id"]))) ||
     !Object.hasOwn(documentLabels, String(x["doc_type"])) ||
     !Object.hasOwn(documentStates, String(x["state"])) ||
     !(x["doc_type"] === "identity_document"
@@ -54,6 +83,7 @@ function parseDocument(x: unknown): DocumentRecord {
     throw new DocumentClientError("DOCUMENT_RESPONSE_INVALID");
   return {
     id: x["id"],
+    ...(typeof x["request_id"] === "string" ? { request_id: x["request_id"] } : {}),
     doc_type: x["doc_type"] as DocumentType,
     side: x["side"] as DocumentSide,
     state: x["state"] as DocumentState,
@@ -189,6 +219,8 @@ export function documentMessage(e: unknown) {
   const code = e instanceof DocumentClientError ? e.code : "";
   if (code === "CUSTOMER_DOCUMENTS_DISABLED")
     return "O envio de arquivos ainda não está disponível neste ambiente.";
+  if (code === "DOCUMENT_CUSTOMER_REQUIRED")
+    return "Conclua o envio dos dados cadastrais em Minha conta para consultar os documentos solicitados.";
   if (code === "AUTH_REQUIRED" || code === "AUTH_INVALID" || code === "EMAIL_NOT_CONFIRMED")
     return "Entre novamente para consultar seus documentos.";
   if (code === "DOCUMENT_VALIDATION_ERROR" || code === "DOCUMENT_TOO_LARGE")
