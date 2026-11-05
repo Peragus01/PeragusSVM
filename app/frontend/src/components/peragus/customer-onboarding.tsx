@@ -406,32 +406,31 @@ export function CustomerOnboarding() {
                   <legend>2. Endereço residencial</legend>
                   <p>Informe o endereço vinculado ao seu cadastro.</p>
                   <div className="journey-fields">
-                    {(["line1", "number", "neighborhood", "city", "state", "postal_code"] as const).map(
-                      (key, i) => (
-                        <div className="customer-field" key={key}>
-                          <label htmlFor={`individual.residential_address.${key}`}>
-                            {["Endereço", "Número", "Bairro", "Cidade", "UF", "CEP"][i]}
-                          </label>
-                          <input
-                            {...inputProps(`individual.residential_address.${key}`)}
-                            required
-                            disabled={locked || busy}
-                            value={individual.residential_address[key]}
-                            onChange={(e) =>
-                              setIndividual({
-                                ...individual,
-                                residential_address: {
-                                  ...individual.residential_address,
-                                  [key]:
-                                    key === "state" ? e.target.value.toUpperCase() : e.target.value,
-                                },
-                              })
-                            }
-                          />
-                          {fieldError(`individual.residential_address.${key}`)}
-                        </div>
-                      ),
-                    )}
+                    {(
+                      ["line1", "number", "neighborhood", "city", "state", "postal_code"] as const
+                    ).map((key, i) => (
+                      <div className="customer-field" key={key}>
+                        <label htmlFor={`individual.residential_address.${key}`}>
+                          {["Endereço", "Número", "Bairro", "Cidade", "UF", "CEP"][i]}
+                        </label>
+                        <input
+                          {...inputProps(`individual.residential_address.${key}`)}
+                          required
+                          disabled={locked || busy}
+                          value={individual.residential_address[key]}
+                          onChange={(e) =>
+                            setIndividual({
+                              ...individual,
+                              residential_address: {
+                                ...individual.residential_address,
+                                [key]: key === "state" ? e.target.value.toUpperCase() : e.target.value,
+                              },
+                            })
+                          }
+                        />
+                        {fieldError(`individual.residential_address.${key}`)}
+                      </div>
+                    ))}
                   </div>
                 </fieldset>
                 <fieldset className="customer-kyc-fieldset">
@@ -441,7 +440,11 @@ export function CustomerOnboarding() {
                     {field("occupation", "Ocupação")}
                     {field("source_of_funds", "Origem dos recursos")}
                     {field("monthly_income_usd", "Renda mensal em USD", "number")}
-                    {field("expected_monthly_volume_usd", "Volume mensal esperado em USD", "number")}
+                    {field(
+                      "expected_monthly_volume_usd",
+                      "Volume mensal esperado em USD",
+                      "number",
+                    )}
                   </div>
                 </fieldset>
               </div>
