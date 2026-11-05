@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import { CustomerNotice, CustomerPanel } from "./customer-ui";
 import { Link } from "@tanstack/react-router";
+import { CustomerKycOverview } from "./customer-kyc-overview";
 import {
+  DocumentClientError,
   documentLabels,
   documentStates,
   documentMessage,
@@ -30,6 +32,7 @@ function DocumentForm({ token }: { token: string }) {
   const [rows, setRows] = useState<DocumentRecord[]>([]);
   const [requirements, setRequirements] = useState<DocumentRequirements | null>(null);
   const [ready, setReady] = useState(false);
+  const [profileRequired, setProfileRequired] = useState(false);
   const [type, setType] = useState<DocumentType>("identity_document");
   const [side, setSide] = useState<DocumentSide>("front");
   const [file, setFile] = useState<File | null>(null);
@@ -47,6 +50,7 @@ function DocumentForm({ token }: { token: string }) {
     lock.current = false;
     setBusy(false);
     setReady(false);
+    setProfileRequired(false);
     setRows([]);
     setRequirements(null);
     setFile(null);
@@ -71,7 +75,11 @@ function DocumentForm({ token }: { token: string }) {
         }
       })
       .catch((e) => {
-        if (!controller.signal.aborted) setError(documentMessage(e));
+        if (!controller.signal.aborted) {
+          if (e instanceof DocumentClientError && e.code === "DOCUMENT_CUSTOMER_REQUIRED")
+            setProfileRequired(true);
+          else setError(documentMessage(e));
+        }
       });
     return () => {
       mounted.current = false;
@@ -113,6 +121,7 @@ function DocumentForm({ token }: { token: string }) {
           setRows(list);
           setRequirements(required);
           setReady(true);
+          setProfileRequired(false);
           if (
             list.some(
               (row) => row.request_id === unknown && ["received", "rejected"].includes(row.state),
@@ -140,7 +149,10 @@ function DocumentForm({ token }: { token: string }) {
       }
     } catch (e) {
       if (mounted.current && !controller.signal.aborted) {
-        setError(documentMessage(e));
+        if (e instanceof DocumentClientError && e.code === "DOCUMENT_CUSTOMER_REQUIRED") {
+          setProfileRequired(true);
+          setReady(false);
+        } else setError(documentMessage(e));
         if (kind === "send" && requestId && documentOutcomeUncertain(e)) {
           setUnknown(requestId!);
           resetFile();
@@ -156,6 +168,13 @@ function DocumentForm({ token }: { token: string }) {
   const required = requirements?.required_documents;
   return (
     <div className="customer-documents-page">
+      <CustomerKycOverview
+        state={profileRequired ? "profile_required" : ready ? "documents" : error ? "unavailable" : "checking"}
+        received={rows.filter((row) => row.state === "received").length}
+        pending={rows.filter((row) => !["received", "rejected"].includes(row.state)).length}
+        canUpload={!!requirements?.required_documents?.some((row) => row.supported_for_upload)}
+        hasHistory={rows.length > 0}
+      />
       <div className="customer-documents-intro">
         <p>O recebimento dos arquivos não conclui a análise de identidade nem libera operações.</p>
         <CustomerNotice>
@@ -168,16 +187,19 @@ function DocumentForm({ token }: { token: string }) {
         </div>
       )}
       {message && <p role="status">{message}</p>}
-      <button
-        type="button"
-        className="customer-button-secondary"
-        disabled={busy}
-        onClick={() => void act("list")}
-      >
-        Atualizar envios
-      </button>
+      {!profileRequired && (
+        <button
+          type="button"
+          className="customer-button-secondary customer-document-refresh"
+          disabled={busy}
+          onClick={() => void act("list")}
+        >
+          Atualizar envios
+        </button>
+      )}
       {ready && (
         <>
+          <div id="documentos-solicitados" className="customer-kyc-anchor" />
           <CustomerPanel title="Documentos solicitados">
             <p>
               {required === null
@@ -211,6 +233,7 @@ function DocumentForm({ token }: { token: string }) {
             )}
           </CustomerPanel>
           {!!required?.some((r) => r.supported_for_upload) && (
+            <div id="enviar-documento" className="customer-kyc-anchor">
             <CustomerPanel title="Enviar documento">
               <form
                 onSubmit={(e) => {
@@ -317,6 +340,7 @@ function DocumentForm({ token }: { token: string }) {
                 </fieldset>
               </form>
             </CustomerPanel>
+            </div>
           )}
         </>
       )}
@@ -327,6 +351,7 @@ function DocumentForm({ token }: { token: string }) {
         </p>
       )}
       {!!rows.length && (
+        <div id="historico-documentos" className="customer-kyc-anchor">
         <CustomerPanel title="Acompanhe seus envios">
           <ul className="customer-document-history" aria-label="Envios de documentos">
             {rows.map((r) => (
@@ -352,6 +377,7 @@ function DocumentForm({ token }: { token: string }) {
             ))}
           </ul>
         </CustomerPanel>
+        </div>
       )}
       {ready && !rows.length && (
         <p className="customer-muted">Você ainda não enviou arquivos por esta conta.</p>

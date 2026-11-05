@@ -294,15 +294,24 @@ export function CustomerOnboarding() {
               ? "Pendente de verificação"
               : "Não iniciado";
   return (
-    <div className="journey-onboarding">
+    <div className="journey-onboarding" id="dados-cadastrais">
       <CustomerNotice kind="warning">
         Cadastro e KYC obrigatórios · ambiente de testes. Use apenas dados sintéticos. Não envie
         documentos reais neste ambiente.
       </CustomerNotice>
-      <ol className="journey-step-list">
-        <li>1. Conta e convite</li>
-        <li>2. Dados e consentimento</li>
-        <li>3. Verificação de identidade</li>
+      <ol className="journey-step-list customer-kyc-stepper" aria-label="Etapas do cadastro">
+        <li data-complete="true">
+          <span aria-hidden="true">01</span>
+          <div><strong>Conta e convite</strong><small>Seu acesso à Peragus</small></div>
+        </li>
+        <li aria-current={!locked ? "step" : undefined} data-complete={locked || undefined}>
+          <span aria-hidden="true">02</span>
+          <div><strong>Dados cadastrais</strong><small>Identificação e endereço</small></div>
+        </li>
+        <li aria-current={locked ? "step" : undefined}>
+          <span aria-hidden="true">03</span>
+          <div><strong>Verificação de identidade</strong><small>Documentos e acompanhamento</small></div>
+        </li>
       </ol>
       {error && (
         <div role="alert">
@@ -356,15 +365,15 @@ export function CustomerOnboarding() {
               }}
               aria-busy={busy}
             >
-              <div className="journey-fields">
-                {field("legal_name", "Nome completo")}
-                {field("cpf", "CPF")}
-                {field("date_of_birth", "Data de nascimento", "date")}
-                {field("nationality", "Nacionalidade (código de duas letras)")}
-                {field("occupation", "Ocupação")}
-                {field("source_of_funds", "Origem dos recursos")}
-                {field("monthly_income_usd", "Renda mensal em USD", "number")}
-                {field("expected_monthly_volume_usd", "Volume mensal esperado em USD", "number")}
+              <div className="customer-kyc-form-groups">
+                <fieldset className="customer-kyc-fieldset">
+                  <legend>1. Informações pessoais</legend>
+                  <p>Preencha os dados de identificação e o telefone de contato.</p>
+                  <div className="journey-fields">
+                    {field("legal_name", "Nome completo")}
+                    {field("cpf", "CPF")}
+                    {field("date_of_birth", "Data de nascimento", "date")}
+                    {field("nationality", "Nacionalidade (código de duas letras)")}
                 <div className="customer-field">
                   <label htmlFor="individual.phone.number">Telefone (DDD e número)</label>
                   <input
@@ -382,6 +391,12 @@ export function CustomerOnboarding() {
                   />
                   {fieldError("individual.phone.number")}
                 </div>
+                  </div>
+                </fieldset>
+                <fieldset className="customer-kyc-fieldset">
+                  <legend>2. Endereço residencial</legend>
+                  <p>Informe o endereço vinculado ao seu cadastro.</p>
+                  <div className="journey-fields">
                 {(["line1", "number", "neighborhood", "city", "state", "postal_code"] as const).map(
                   (key, i) => (
                     <div className="customer-field" key={key}>
@@ -408,6 +423,18 @@ export function CustomerOnboarding() {
                     </div>
                   ),
                 )}
+                  </div>
+                </fieldset>
+                <fieldset className="customer-kyc-fieldset">
+                  <legend>3. Perfil e origem dos recursos</legend>
+                  <p>Estas informações fazem parte da análise cadastral.</p>
+                  <div className="journey-fields">
+                    {field("occupation", "Ocupação")}
+                    {field("source_of_funds", "Origem dos recursos")}
+                    {field("monthly_income_usd", "Renda mensal em USD", "number")}
+                    {field("expected_monthly_volume_usd", "Volume mensal esperado em USD", "number")}
+                  </div>
+                </fieldset>
               </div>
               {!locked && (
                 <button className="customer-button" disabled={busy} type="submit">
