@@ -226,8 +226,17 @@
   box-shadow: 0 0 0 3px #397bff18;
   outline: 0;
 }
-.customer-field input:user-invalid {
+.customer-field input:user-invalid,
+.journey-onboarding .customer-field input[aria-invalid="true"] {
   border-color: #ff9ba5;
+}
+.journey-onboarding .customer-field input[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px #ff9ba524;
+}
+.customer-field-error {
+  color: #ffb1b9;
+  font-size: 0.875rem;
+  line-height: 1.4;
 }
 .customer-muted {
   color: #a0aabd;

@@ -3,7 +3,7 @@ import { OnboardingReceipt, type OnboardingReview } from "./onboarding-receipt";
 import { useEffect, useRef, useState } from "react";
 import { CustomerNotice, CustomerPanel } from "./customer-ui";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
-import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
+import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
 
 type Draft = { version: number; individual: Individual };
 type Individual = {
@@ -23,8 +23,8 @@ type Individual = {
     complement?: string;
   };
   source_of_funds: string;
-  monthly_income_usd: number;
-  expected_monthly_volume_usd: number;
+  monthly_income_usd: number | "";
+  expected_monthly_volume_usd: number | "";
   occupation?: string;
 };
 type Terms = {
@@ -60,6 +60,27 @@ const empty: Individual = {
   monthly_income_usd: 0,
   expected_monthly_volume_usd: 0,
 };
+const fieldMessages: Record<string, string> = {
+  "individual.legal_name": "Informe o nome completo, entre 2 e 160 caracteres.",
+  "individual.cpf": "Informe um CPF válido, com 11 dígitos.",
+  "individual.date_of_birth": "Informe uma data válida. A idade deve ser entre 18 e 120 anos.",
+  "individual.nationality": "Use o código de duas letras maiúsculas do país, como BR.",
+  "individual.occupation": "Use até 160 caracteres para a ocupação.",
+  "individual.source_of_funds": "Informe a origem dos recursos, com até 160 caracteres.",
+  "individual.monthly_income_usd":
+    "Informe um valor entre 0 e 1.000.000.000 USD, com até duas casas decimais.",
+  "individual.expected_monthly_volume_usd":
+    "Informe um valor entre 0 e 1.000.000.000 USD, com até duas casas decimais.",
+  "individual.phone.number":
+    "Informe o DDD e o telefone usando apenas números, entre 5 e 18 dígitos.",
+  "individual.residential_address.line1": "Informe o endereço, com até 160 caracteres.",
+  "individual.residential_address.number": "Informe o número, com até 20 caracteres.",
+  "individual.residential_address.neighborhood": "Informe o bairro, com até 100 caracteres.",
+  "individual.residential_address.city": "Informe a cidade, com até 100 caracteres.",
+  "individual.residential_address.state": "Informe uma UF brasileira válida, como SP.",
+  "individual.residential_address.postal_code": "Informe um CEP com 8 dígitos.",
+};
+const fieldSummary = "Corrija os campos destacados para continuar.";
 export function CustomerOnboarding() {
   const { accessToken, identity } = useCustomerSession();
   const [individual, setIndividual] = useState<Individual>(empty);
@@ -70,12 +91,23 @@ export function CustomerOnboarding() {
   const [screening, setScreening] = useState<{ status: string; result: string } | null>(null);
   const [review, setReview] = useState<OnboardingReview | null>(null);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [accepted, setAccepted] = useState(false);
   const [synthetic, setSynthetic] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const lock = useRef(false);
   const epoch = useRef(0);
+  const formRef = useRef<HTMLFormElement>(null);
+  const focusError = useRef(false);
+  useEffect(() => {
+    if (!focusError.current || busy) return;
+    const input = formRef.current?.querySelector<HTMLInputElement>('[aria-invalid="true"]');
+    if (!input) return;
+    focusError.current = false;
+    input.focus({ preventScroll: true });
+    input.scrollIntoView?.({ block: "center", behavior: "instant" });
+  }, [fieldErrors, busy]);
   const userId = identity?.user.id;
   useEffect(() => {
     epoch.current++;
@@ -92,6 +124,8 @@ export function CustomerOnboarding() {
     setAccepted(false);
     setSynthetic(false);
     setError("");
+    setFieldErrors({});
+    focusError.current = false;
     if (!accessToken || !identity?.customer) return;
     void Promise.allSettled([
       journeyRequest<Draft>(
@@ -158,6 +192,7 @@ export function CustomerOnboarding() {
     lock.current = true;
     setBusy(true);
     setError("");
+    if (path === "onboarding/individual") setFieldErrors({});
     const turn = epoch.current;
     try {
       const result = await journeyRequest<unknown>(accessToken, `v1/me/${path}`, method, body);
@@ -183,7 +218,28 @@ export function CustomerOnboarding() {
         }
       }
     } catch (e) {
-      if (epoch.current === turn) setError(journeyMessage(e));
+      if (epoch.current === turn) {
+        const errors: Record<string, string> = {};
+        if (
+          path === "onboarding/individual" &&
+          e instanceof JourneyError &&
+          e.code === "VALIDATION_ERROR"
+        ) {
+          for (const field of e.fields) {
+            const visibleField =
+              field === "individual.phone" || field === "individual.phone.country_code"
+                ? "individual.phone.number"
+                : field;
+            if (Object.hasOwn(fieldMessages, visibleField))
+              errors[visibleField] = fieldMessages[visibleField]!;
+          }
+        }
+        if (Object.keys(errors).length) {
+          focusError.current = true;
+          setFieldErrors(errors);
+          setError(fieldSummary);
+        } else setError(journeyMessage(e));
+      }
     } finally {
       if (epoch.current === turn) {
         lock.current = false;
@@ -192,10 +248,23 @@ export function CustomerOnboarding() {
     }
   }
   const locked = registration?.state === "linked";
+  const inputProps = (path: string) => ({
+    id: path,
+    name: path,
+    "aria-invalid": fieldErrors[path] ? true : undefined,
+    "aria-describedby": fieldErrors[path] ? `${path}-error` : undefined,
+  });
+  const fieldError = (path: string) =>
+    fieldErrors[path] ? (
+      <span className="customer-field-error" id={`${path}-error`}>
+        {fieldErrors[path]}
+      </span>
+    ) : null;
   const field = (key: keyof Individual, label: string, type = "text") => (
-    <label key={key} className="customer-field">
-      {label}
+    <div key={key} className="customer-field">
+      <label htmlFor={`individual.${key}`}>{label}</label>
       <input
+        {...inputProps(`individual.${key}`)}
         required={key !== "occupation"}
         type={type}
         value={String(individual[key] ?? "")}
@@ -203,12 +272,14 @@ export function CustomerOnboarding() {
         onChange={(e) =>
           setIndividual({
             ...individual,
-            [key]: type === "number" ? Number(e.target.value) : e.target.value,
+            [key]:
+              type === "number" && e.target.value !== "" ? Number(e.target.value) : e.target.value,
           })
         }
-        {...(type === "number" ? { min: 0, step: "0.01" } : {})}
+        {...(type === "number" ? { min: 0, max: 1_000_000_000, step: "0.01" } : {})}
       />
-    </label>
+      {fieldError(`individual.${key}`)}
+    </div>
   );
   const stateLabel =
     verification?.identity_outcome === "approved"
@@ -248,8 +319,35 @@ export function CustomerOnboarding() {
               são salvos neste navegador.
             </p>
             <form
+              ref={formRef}
+              noValidate
+              onChange={(e) => {
+                if (!(e.target instanceof HTMLInputElement)) return;
+                const name = e.target.name;
+                if (!fieldErrors[name]) return;
+                if (Object.keys(fieldErrors).length === 1 && error === fieldSummary) setError("");
+                setFieldErrors((previous) => {
+                  const next = { ...previous };
+                  delete next[name];
+                  return next;
+                });
+              }}
               onSubmit={(e) => {
                 e.preventDefault();
+                if (busy || locked) return;
+                const errors: Record<string, string> = {};
+                for (const input of e.currentTarget.querySelectorAll<HTMLInputElement>("input")) {
+                  if (!input.validity.valid)
+                    errors[input.name] = input.validity.valueMissing
+                      ? "Preencha este campo."
+                      : (fieldMessages[input.name] ?? "Confira este campo.");
+                }
+                if (Object.keys(errors).length) {
+                  focusError.current = true;
+                  setFieldErrors(errors);
+                  setError(fieldSummary);
+                  return;
+                }
                 void act(
                   "onboarding/individual",
                   { expected_version: draft?.version ?? 0, individual },
@@ -267,9 +365,10 @@ export function CustomerOnboarding() {
                 {field("source_of_funds", "Origem dos recursos")}
                 {field("monthly_income_usd", "Renda mensal em USD", "number")}
                 {field("expected_monthly_volume_usd", "Volume mensal esperado em USD", "number")}
-                <label className="customer-field">
-                  Telefone (DDD e número)
+                <div className="customer-field">
+                  <label htmlFor="individual.phone.number">Telefone (DDD e número)</label>
                   <input
+                    {...inputProps("individual.phone.number")}
                     required
                     inputMode="tel"
                     disabled={locked || busy}
@@ -281,12 +380,16 @@ export function CustomerOnboarding() {
                       })
                     }
                   />
-                </label>
+                  {fieldError("individual.phone.number")}
+                </div>
                 {(["line1", "number", "neighborhood", "city", "state", "postal_code"] as const).map(
                   (key, i) => (
-                    <label className="customer-field" key={key}>
-                      {["Endereço", "Número", "Bairro", "Cidade", "UF", "CEP"][i]}
+                    <div className="customer-field" key={key}>
+                      <label htmlFor={`individual.residential_address.${key}`}>
+                        {["Endereço", "Número", "Bairro", "Cidade", "UF", "CEP"][i]}
+                      </label>
                       <input
+                        {...inputProps(`individual.residential_address.${key}`)}
                         required
                         disabled={locked || busy}
                         value={individual.residential_address[key]}
@@ -301,7 +404,8 @@ export function CustomerOnboarding() {
                           })
                         }
                       />
-                    </label>
+                      {fieldError(`individual.residential_address.${key}`)}
+                    </div>
                   ),
                 )}
               </div>

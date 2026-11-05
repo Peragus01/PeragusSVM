@@ -1,5 +1,8 @@
 export class JourneyError extends Error {
-  constructor(public code: string) {
+  constructor(
+    public code: string,
+    public fields: string[] = [],
+  ) {
     super(code);
   }
 }
@@ -40,6 +43,14 @@ export async function journeyRequest<T = Record<string, unknown>>(
   if (!response.ok)
     throw new JourneyError(
       typeof value?.error?.code === "string" ? value.error.code : "UNAVAILABLE",
+      Array.isArray(value?.error?.fields)
+        ? value.error.fields
+            .filter(
+              (field: unknown): field is string =>
+                typeof field === "string" && /^[a-z_]+(?:\.[a-z_]+)*$/.test(field),
+            )
+            .slice(0, 32)
+        : [],
     );
   return value.data as T;
 }
