@@ -31,7 +31,9 @@ export function CustomerKycOverview({ state, received, pending, canUpload, hasHi
             Complete seus dados, envie os documentos solicitados e acompanhe a análise da sua
             identidade.
           </p>
-          <span className="customer-kyc-status" role="status">{status}</span>
+          <span className="customer-kyc-status" role="status">
+            {status}
+          </span>
         </div>
         <div className="customer-kyc-emblem" aria-hidden="true">
           <ShieldCheck size={72} strokeWidth={1.25} />
@@ -45,7 +47,9 @@ export function CustomerKycOverview({ state, received, pending, canUpload, hasHi
           </div>
           <h3>Dados cadastrais</h3>
           <p>Identificação, endereço e informações sobre seu perfil.</p>
-          <strong>{linked ? "Dados vinculados" : profileRequired ? "Comece por aqui" : "A consultar"}</strong>
+          <strong>
+            {linked ? "Dados vinculados" : profileRequired ? "Comece por aqui" : "A consultar"}
+          </strong>
         </li>
         <li data-current={linked || undefined}>
           <div className="customer-kyc-card-heading">
@@ -91,7 +95,13 @@ export function CustomerKycOverview({ state, received, pending, canUpload, hasHi
           </Link>
         ) : linked ? (
           <a
-            href={canUpload ? "#enviar-documento" : hasHistory ? "#historico-documentos" : "#documentos-solicitados"}
+            href={
+              canUpload
+                ? "#enviar-documento"
+                : hasHistory
+                  ? "#historico-documentos"
+                  : "#documentos-solicitados"
+            }
             className="customer-button"
           >
             {canUpload ? "Enviar documento" : "Acompanhar documentos"}
