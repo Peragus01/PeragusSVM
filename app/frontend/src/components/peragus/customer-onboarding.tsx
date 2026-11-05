@@ -302,15 +302,24 @@ export function CustomerOnboarding() {
       <ol className="journey-step-list customer-kyc-stepper" aria-label="Etapas do cadastro">
         <li data-complete="true">
           <span aria-hidden="true">01</span>
-          <div><strong>Conta e convite</strong><small>Seu acesso à Peragus</small></div>
+          <div>
+            <strong>Conta e convite</strong>
+            <small>Seu acesso à Peragus</small>
+          </div>
         </li>
         <li aria-current={!locked ? "step" : undefined} data-complete={locked || undefined}>
           <span aria-hidden="true">02</span>
-          <div><strong>Dados cadastrais</strong><small>Identificação e endereço</small></div>
+          <div>
+            <strong>Dados cadastrais</strong>
+            <small>Identificação e endereço</small>
+          </div>
         </li>
         <li aria-current={locked ? "step" : undefined}>
           <span aria-hidden="true">03</span>
-          <div><strong>Verificação de identidade</strong><small>Documentos e acompanhamento</small></div>
+          <div>
+            <strong>Verificação de identidade</strong>
+            <small>Documentos e acompanhamento</small>
+          </div>
         </li>
       </ol>
       {error && (
@@ -374,55 +383,55 @@ export function CustomerOnboarding() {
                     {field("cpf", "CPF")}
                     {field("date_of_birth", "Data de nascimento", "date")}
                     {field("nationality", "Nacionalidade (código de duas letras)")}
-                <div className="customer-field">
-                  <label htmlFor="individual.phone.number">Telefone (DDD e número)</label>
-                  <input
-                    {...inputProps("individual.phone.number")}
-                    required
-                    inputMode="tel"
-                    disabled={locked || busy}
-                    value={individual.phone.number}
-                    onChange={(e) =>
-                      setIndividual({
-                        ...individual,
-                        phone: { country_code: "+55", number: e.target.value },
-                      })
-                    }
-                  />
-                  {fieldError("individual.phone.number")}
-                </div>
+                    <div className="customer-field">
+                      <label htmlFor="individual.phone.number">Telefone (DDD e número)</label>
+                      <input
+                        {...inputProps("individual.phone.number")}
+                        required
+                        inputMode="tel"
+                        disabled={locked || busy}
+                        value={individual.phone.number}
+                        onChange={(e) =>
+                          setIndividual({
+                            ...individual,
+                            phone: { country_code: "+55", number: e.target.value },
+                          })
+                        }
+                      />
+                      {fieldError("individual.phone.number")}
+                    </div>
                   </div>
                 </fieldset>
                 <fieldset className="customer-kyc-fieldset">
                   <legend>2. Endereço residencial</legend>
                   <p>Informe o endereço vinculado ao seu cadastro.</p>
                   <div className="journey-fields">
-                {(["line1", "number", "neighborhood", "city", "state", "postal_code"] as const).map(
-                  (key, i) => (
-                    <div className="customer-field" key={key}>
-                      <label htmlFor={`individual.residential_address.${key}`}>
-                        {["Endereço", "Número", "Bairro", "Cidade", "UF", "CEP"][i]}
-                      </label>
-                      <input
-                        {...inputProps(`individual.residential_address.${key}`)}
-                        required
-                        disabled={locked || busy}
-                        value={individual.residential_address[key]}
-                        onChange={(e) =>
-                          setIndividual({
-                            ...individual,
-                            residential_address: {
-                              ...individual.residential_address,
-                              [key]:
-                                key === "state" ? e.target.value.toUpperCase() : e.target.value,
-                            },
-                          })
-                        }
-                      />
-                      {fieldError(`individual.residential_address.${key}`)}
-                    </div>
-                  ),
-                )}
+                    {(["line1", "number", "neighborhood", "city", "state", "postal_code"] as const).map(
+                      (key, i) => (
+                        <div className="customer-field" key={key}>
+                          <label htmlFor={`individual.residential_address.${key}`}>
+                            {["Endereço", "Número", "Bairro", "Cidade", "UF", "CEP"][i]}
+                          </label>
+                          <input
+                            {...inputProps(`individual.residential_address.${key}`)}
+                            required
+                            disabled={locked || busy}
+                            value={individual.residential_address[key]}
+                            onChange={(e) =>
+                              setIndividual({
+                                ...individual,
+                                residential_address: {
+                                  ...individual.residential_address,
+                                  [key]:
+                                    key === "state" ? e.target.value.toUpperCase() : e.target.value,
+                                },
+                              })
+                            }
+                          />
+                          {fieldError(`individual.residential_address.${key}`)}
+                        </div>
+                      ),
+                    )}
                   </div>
                 </fieldset>
                 <fieldset className="customer-kyc-fieldset">

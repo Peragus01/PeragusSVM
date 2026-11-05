@@ -59,7 +59,7 @@ afterEach(() => {
 });
 describe("private document journey", () => {
   it("turns a missing linked profile into an actionable verification step without an upload form", async () => {
-    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json({ error: { code: "DOCUMENT_CUSTOMER_REQUIRED" } }, { status: 409 }),
     );
     render(<CustomerDocuments />);

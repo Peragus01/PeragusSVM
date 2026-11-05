@@ -199,147 +199,148 @@ function DocumentForm({ token }: { token: string }) {
       )}
       {ready && (
         <>
-          <div id="documentos-solicitados" className="customer-kyc-anchor" />
-          <CustomerPanel title="Documentos solicitados">
-            <p>
-              {required === null
-                ? "A lista de documentos necessários está indisponível. Consulte o suporte antes de enviar."
-                : required?.length === 0
-                  ? "Nenhum arquivo pendente foi informado. A análise de identidade pode continuar pendente."
-                  : "Documentos solicitados:"}
-            </p>
-            {!!required?.length && (
-              <ul className="customer-document-requirements" aria-label="Documentos solicitados">
-                {required.map((r) => {
-                  const progress = documentRequirementState(rows, r.doc_type);
-                  return (
-                    <li key={r.doc_type}>
-                      <strong>
-                        {Object.hasOwn(documentLabels, r.doc_type)
-                          ? documentLabels[r.doc_type as DocumentType]
-                          : r.doc_type === "liveness"
-                            ? "Prova de vida"
-                            : "Verificação adicional"}
-                      </strong>
-                      <span className="customer-document-state" data-state={progress.state}>
-                        {!r.supported_for_upload
-                          ? "Requer outra etapa; consulte o suporte."
-                          : progress.label}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </CustomerPanel>
+          <div id="documentos-solicitados" className="customer-kyc-anchor">
+            <CustomerPanel title="Documentos solicitados">
+              <p>
+                {required === null
+                  ? "A lista de documentos necessários está indisponível. Consulte o suporte antes de enviar."
+                  : required?.length === 0
+                    ? "Nenhum arquivo pendente foi informado. A análise de identidade pode continuar pendente."
+                    : "Documentos solicitados:"}
+              </p>
+              {!!required?.length && (
+                <ul className="customer-document-requirements" aria-label="Documentos solicitados">
+                  {required.map((r) => {
+                    const progress = documentRequirementState(rows, r.doc_type);
+                    return (
+                      <li key={r.doc_type}>
+                        <strong>
+                          {Object.hasOwn(documentLabels, r.doc_type)
+                            ? documentLabels[r.doc_type as DocumentType]
+                            : r.doc_type === "liveness"
+                              ? "Prova de vida"
+                              : "Verificação adicional"}
+                        </strong>
+                        <span className="customer-document-state" data-state={progress.state}>
+                          {!r.supported_for_upload
+                            ? "Requer outra etapa; consulte o suporte."
+                            : progress.label}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </CustomerPanel>
+          </div>
           {!!required?.some((r) => r.supported_for_upload) && (
             <div id="enviar-documento" className="customer-kyc-anchor">
-            <CustomerPanel title="Enviar documento">
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void act("send");
-                }}
-              >
-                <fieldset className="customer-document-fields" disabled={busy || !!unknown}>
-                  <legend>Enviar arquivo de teste</legend>
-                  <label className="customer-field">
-                    Tipo de documento
-                    <select
-                      aria-label="Tipo de documento"
-                      value={type}
-                      onChange={(e) => {
-                        setType(e.target.value as DocumentType);
-                        setSide("front");
-                        resetFile();
-                        setError("");
-                      }}
-                    >
-                      {Object.entries(documentLabels)
-                        .filter(([key]) =>
-                          required.some((r) => r.doc_type === key && r.supported_for_upload),
-                        )
-                        .map(([key, label]) => (
-                          <option key={key} value={key}>
-                            {label}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  {type === "identity_document" && (
+              <CustomerPanel title="Enviar documento">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void act("send");
+                  }}
+                >
+                  <fieldset className="customer-document-fields" disabled={busy || !!unknown}>
+                    <legend>Enviar arquivo de teste</legend>
                     <label className="customer-field">
-                      Lado
+                      Tipo de documento
                       <select
-                        aria-label="Lado do documento"
-                        value={side}
+                        aria-label="Tipo de documento"
+                        value={type}
                         onChange={(e) => {
-                          setSide(e.target.value as DocumentSide);
+                          setType(e.target.value as DocumentType);
+                          setSide("front");
                           resetFile();
+                          setError("");
                         }}
                       >
-                        <option value="front">Frente</option>
-                        <option value="back">Verso</option>
-                        <option value="single">Documento em uma única imagem</option>
+                        {Object.entries(documentLabels)
+                          .filter(([key]) =>
+                            required.some((r) => r.doc_type === key && r.supported_for_upload),
+                          )
+                          .map(([key, label]) => (
+                            <option key={key} value={key}>
+                              {label}
+                            </option>
+                          ))}
                       </select>
                     </label>
-                  )}
-                  <label className="customer-field customer-document-file">
-                    Arquivo (até 4 MiB)
-                    <input
-                      ref={input}
-                      aria-label="Arquivo de teste"
-                      type="file"
-                      accept={
-                        ["proof_of_address", "bank_statement"].includes(type)
-                          ? "image/jpeg,image/png,application/pdf"
-                          : "image/jpeg,image/png"
-                      }
-                      onChange={(e) => {
-                        const next = e.target.files?.[0] ?? null;
-                        setSynthetic(false);
-                        setFile(null);
-                        if (!next) return;
-                        const invalid = validateDocumentFile(next, type);
-                        if (invalid) {
-                          setError(invalid);
-                          e.target.value = "";
-                        } else {
-                          setError("");
-                          setFile(next);
+                    {type === "identity_document" && (
+                      <label className="customer-field">
+                        Lado
+                        <select
+                          aria-label="Lado do documento"
+                          value={side}
+                          onChange={(e) => {
+                            setSide(e.target.value as DocumentSide);
+                            resetFile();
+                          }}
+                        >
+                          <option value="front">Frente</option>
+                          <option value="back">Verso</option>
+                          <option value="single">Documento em uma única imagem</option>
+                        </select>
+                      </label>
+                    )}
+                    <label className="customer-field customer-document-file">
+                      Arquivo (até 4 MiB)
+                      <input
+                        ref={input}
+                        aria-label="Arquivo de teste"
+                        type="file"
+                        accept={
+                          ["proof_of_address", "bank_statement"].includes(type)
+                            ? "image/jpeg,image/png,application/pdf"
+                            : "image/jpeg,image/png"
                         }
-                      }}
-                    />
-                  </label>
-                  <label className="customer-document-synthetic">
-                    <input
-                      type="checkbox"
-                      className="customer-document-consent"
-                      checked={synthetic}
-                      onChange={(e) => setSynthetic(e.target.checked)}
-                    />
-                    Confirmo que este arquivo é sintético e não contém documentos reais.
-                  </label>
-                  {blocked && (
-                    <p>
-                      Há um envio sem confirmação para este documento. Atualize o estado antes de
-                      enviar outro arquivo.
-                    </p>
-                  )}
-                  <button
-                    className="customer-button"
-                    type="submit"
-                    disabled={
-                      !file ||
-                      !synthetic ||
-                      blocked ||
-                      !required.some((r) => r.doc_type === type && r.supported_for_upload)
-                    }
-                  >
-                    {busy ? "Enviando…" : "Enviar arquivo de teste"}
-                  </button>
-                </fieldset>
-              </form>
-            </CustomerPanel>
+                        onChange={(e) => {
+                          const next = e.target.files?.[0] ?? null;
+                          setSynthetic(false);
+                          setFile(null);
+                          if (!next) return;
+                          const invalid = validateDocumentFile(next, type);
+                          if (invalid) {
+                            setError(invalid);
+                            e.target.value = "";
+                          } else {
+                            setError("");
+                            setFile(next);
+                          }
+                        }}
+                      />
+                    </label>
+                    <label className="customer-document-synthetic">
+                      <input
+                        type="checkbox"
+                        className="customer-document-consent"
+                        checked={synthetic}
+                        onChange={(e) => setSynthetic(e.target.checked)}
+                      />
+                      Confirmo que este arquivo é sintético e não contém documentos reais.
+                    </label>
+                    {blocked && (
+                      <p>
+                        Há um envio sem confirmação para este documento. Atualize o estado antes de
+                        enviar outro arquivo.
+                      </p>
+                    )}
+                    <button
+                      className="customer-button"
+                      type="submit"
+                      disabled={
+                        !file ||
+                        !synthetic ||
+                        blocked ||
+                        !required.some((r) => r.doc_type === type && r.supported_for_upload)
+                      }
+                    >
+                      {busy ? "Enviando…" : "Enviar arquivo de teste"}
+                    </button>
+                  </fieldset>
+                </form>
+              </CustomerPanel>
             </div>
           )}
         </>
@@ -352,31 +353,31 @@ function DocumentForm({ token }: { token: string }) {
       )}
       {!!rows.length && (
         <div id="historico-documentos" className="customer-kyc-anchor">
-        <CustomerPanel title="Acompanhe seus envios">
-          <ul className="customer-document-history" aria-label="Envios de documentos">
-            {rows.map((r) => (
-              <li key={r.id}>
-                <strong>
-                  {documentLabels[r.doc_type]}
-                  {r.side === "front" ? " — frente" : r.side === "back" ? " — verso" : ""}
-                </strong>
-                <p className="customer-document-state" data-state={r.state}>
-                  {documentStates[r.state]}
-                </p>
-                {!["received", "rejected"].includes(r.state) && (
-                  <button
-                    type="button"
-                    className="customer-button-secondary"
-                    disabled={busy}
-                    onClick={() => void act("refresh", r.id)}
-                  >
-                    Consultar recebimento
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </CustomerPanel>
+          <CustomerPanel title="Acompanhe seus envios">
+            <ul className="customer-document-history" aria-label="Envios de documentos">
+              {rows.map((r) => (
+                <li key={r.id}>
+                  <strong>
+                    {documentLabels[r.doc_type]}
+                    {r.side === "front" ? " — frente" : r.side === "back" ? " — verso" : ""}
+                  </strong>
+                  <p className="customer-document-state" data-state={r.state}>
+                    {documentStates[r.state]}
+                  </p>
+                  {!["received", "rejected"].includes(r.state) && (
+                    <button
+                      type="button"
+                      className="customer-button-secondary"
+                      disabled={busy}
+                      onClick={() => void act("refresh", r.id)}
+                    >
+                      Consultar recebimento
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CustomerPanel>
         </div>
       )}
       {ready && !rows.length && (
