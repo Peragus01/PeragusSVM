@@ -1,3 +1,63 @@
+import { registerInviteDeliveryRoute, type InviteDeliveryOptions } from "./routes/invite-email-delivery.js";
+import { registerCustomerDocumentRoutes } from "./routes/customer-documents.js";
+import type { CustomerDocumentService } from "./onboarding/customer-documents.js";
+import { registerPilotInviteRoutes } from "./routes/pilot-invites.js";
+import type { PilotInviteService } from "./invites/pilot-invites.js";
+import { registerCustomerReconciliationStatusRoutes } from "./routes/customer-reconciliation-status.js";
+import type { CustomerReconciliationStatusService } from "./jobs/customer-reconciliation.js";
+import { registerManualRefundRoutes } from "./routes/manual-refunds.js";
+import type { ManualRefundService } from "./refunds/manual-refunds.js";
+import type { SandboxWithdrawalRecoveryService } from "./withdrawals/sandbox-recovery.js";
+import { registerOperatorWithdrawalAuditRoutes } from "./routes/operator-withdrawal-audit.js";
+import type { OperatorWithdrawalAuditService } from "./withdrawals/operator-withdrawal-audit.js";
+import { registerOperatorWithdrawalQueueRoutes } from "./routes/operator-withdrawal-queue.js";
+import type { OperatorWithdrawalQueueService } from "./withdrawals/operator-withdrawal-queue.js";
+import { registerCustomerOperationHistoryRoutes } from "./routes/customer-operation-history.js";
+import type { CustomerOperationHistoryService } from "./purchases/customer-operation-history.js";
+import { registerCustomerWithdrawalResultRoutes } from "./routes/customer-withdrawal-results.js";
+import type { CustomerWithdrawalResultService } from "./withdrawals/customer-withdrawal-results.js";
+import { registerSandboxWithdrawalExecutionRoutes } from "./routes/sandbox-withdrawal-execution.js";
+import type { SandboxWithdrawalExecutionService } from "./withdrawals/sandbox-execution.js";
+import { registerWithdrawalOperatorApprovalRoutes } from "./routes/withdrawal-operator-approvals.js";
+import type { WithdrawalOperatorApprovalService } from "./withdrawals/operator-approvals.js";
+import { registerCustomerWithdrawalRequestRoutes } from "./routes/customer-withdrawal-requests.js";
+import type { CustomerWithdrawalRequestService } from "./withdrawals/customer-withdrawal-requests.js";
+import { registerCustomerSandboxPixRoutes } from "./routes/customer-sandbox-pix.js";
+import type { CustomerSandboxPixService } from "./purchases/customer-sandbox-pix.js";
+import { registerCustomerPurchaseIntentRoutes } from "./routes/customer-purchase-intents.js";
+import type { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
+import { registerCustomerQuoteRoutes } from "./routes/customer-quotes.js";
+import type { CustomerQuoteService } from "./quotes/customer-quotes.js";
+import { registerCustomerWalletRoutes } from "./routes/customer-wallet.js";
+import type { CustomerWalletService } from "./wallets/customer-wallet.js";
+import { registerCustomerOnboardingOverviewRoute } from "./routes/customer-onboarding-overview.js";
+import type { CustomerOnboardingOverview } from "./onboarding/customer-onboarding-overview.js";
+import { registerCustomerScreeningRoutes } from "./routes/customer-screening.js";
+import type { CustomerScreeningService } from "./onboarding/customer-screening-service.js";
+import { registerCustomerVerificationRoutes } from "./routes/customer-verification.js";
+import type { CustomerVerificationService } from "./onboarding/customer-verification-service.js";
+import { registerCustomerSubmissionRoutes } from "./routes/customer-submission.js";
+import type { CustomerSubmissionService } from "./onboarding/customer-submission-service.js";
+import { registerCustomerTermsRoutes } from "./routes/customer-terms.js";
+import type { CustomerTermsService } from "./onboarding/customer-terms-service.js";
+import { registerIndividualOnboardingRoutes } from "./routes/individual-onboarding.js";
+import type { IndividualDraftService } from "./onboarding/individual-draft-service.js";
+import {
+  registerCustomerWebhookRoutes,
+  type CustomerWebhookOptions,
+} from "./routes/customer-webhooks.js";
+import { registerOzavSandboxCustomerRoutes } from "./routes/ozav-sandbox-customer.js";
+import type { OzavSandboxCustomerService } from "./application/ozav-sandbox-customer.js";
+import { registerSettlementDraftRoutes } from "./routes/settlement-drafts.js";
+import {
+  registerCustomerAccess,
+  type CustomerAccess,
+} from "./auth/customer-access.js";
+import type { ApiRateLimiter } from "./auth/api-rate-limits.js";
+import type { OperatorAlertService } from "./operations/operator-alerts.js";
+import { registerOperatorAlertRoutes } from "./routes/operator-alerts.js";
+import type { SandboxClosureService } from "./withdrawals/sandbox-closure.js";
+import { registerSandboxClosureRoutes } from "./routes/sandbox-withdrawal-closure.js";
 import sensible from "@fastify/sensible";
 import Fastify, {
   type FastifyInstance,
@@ -26,32 +86,51 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  inviteDelivery?: InviteDeliveryOptions;
+  manualRefundService?: ManualRefundService;
+  sandboxWithdrawalRecoveryService?: SandboxWithdrawalRecoveryService;
+  operatorWithdrawalAuditService?: OperatorWithdrawalAuditService;
+  operatorWithdrawalQueueService?: OperatorWithdrawalQueueService;
+  customerOperationHistoryService?: CustomerOperationHistoryService;
+  customerReconciliationStatusService?: CustomerReconciliationStatusService;
+  customerWithdrawalResultService?: CustomerWithdrawalResultService;
+  sandboxWithdrawalExecutionService?: SandboxWithdrawalExecutionService;
+  withdrawalOperatorApprovalService?: WithdrawalOperatorApprovalService;
+  customerWithdrawalRequestService?: CustomerWithdrawalRequestService;
+  customerSandboxPixService?: CustomerSandboxPixService;
+  customerSandboxPixSimulationEnabled?: boolean;
+  customerPurchaseIntentService?: CustomerPurchaseIntentService;
+  customerQuoteService?: CustomerQuoteService;
+  customerWalletService?: CustomerWalletService;
+  customerOnboardingOverview?: CustomerOnboardingOverview;
+  customerScreeningService?: CustomerScreeningService;
+  customerDocumentService?: CustomerDocumentService;
+  customerVerificationService?: CustomerVerificationService;
+  verificationSimulationEnabled?: boolean;
+  customerSubmissionService?: CustomerSubmissionService;
+  customerTermsService?: CustomerTermsService;
+  individualDraftService?: IndividualDraftService;
+  customerWebhooks?: CustomerWebhookOptions;
+  customerAccess?: CustomerAccess;
+  apiRateLimiter?: ApiRateLimiter;
+  operatorAlertService?: OperatorAlertService;
+  sandboxClosureService?: SandboxClosureService;
+  pilotInviteService?: PilotInviteService;
+  ozavSandboxCustomerService?: OzavSandboxCustomerService;
+  customerDraftRepository?: (customerId: string) => SettlementRepository;
   logger?: FastifyServerOptions["logger"];
   settlementRepository?: SettlementRepository;
   settlementJobPublisher?: SettlementJobPublisher;
   demoWalletFunder?: DemoWalletFunder | undefined;
   ozavOnrampReader?: OzavOnrampReader | undefined;
-  sandboxPixPaymentSimulator?:
-    | SandboxPixPaymentSimulator
-    | undefined;
-  settlementAuditReader?:
-    | SettlementAuditReader
-    | undefined;
-  ozavOfframpInitiator?:
-    | OzavOfframpInitiator
-    | undefined;
+  sandboxPixPaymentSimulator?: SandboxPixPaymentSimulator | undefined;
+  settlementAuditReader?: SettlementAuditReader | undefined;
+  ozavOfframpInitiator?: OzavOfframpInitiator | undefined;
   ozavOfframpReconciliationScheduler?:
-    | OzavOfframpReconciliationScheduler
-    | undefined;
-  solanaSettlementPreparer?:
-    | SolanaSettlementPreparer
-    | undefined;
-  solanaRollbackDemoPreparer?:
-    | SolanaRollbackDemoPreparer
-    | undefined;
-  solanaSettlementConfirmer?:
-    | SolanaSettlementConfirmer
-    | undefined;
+    OzavOfframpReconciliationScheduler | undefined;
+  solanaSettlementPreparer?: SolanaSettlementPreparer | undefined;
+  solanaRollbackDemoPreparer?: SolanaRollbackDemoPreparer | undefined;
+  solanaSettlementConfirmer?: SolanaSettlementConfirmer | undefined;
   now?: () => Date;
 }
 
@@ -64,6 +143,147 @@ export async function buildApp(
   });
 
   await app.register(sensible);
+  await registerInviteDeliveryRoute(app, options.inviteDelivery);
+  await registerCustomerWebhookRoutes(app, options.customerWebhooks);
+
+  if (options.apiRateLimiter && !options.customerAccess)
+    throw new Error("API rate limits require verified authentication");
+  if (options.customerAccess)
+    registerCustomerAccess(
+      app,
+      options.customerAccess,
+      Boolean(options.pilotInviteService),
+      options.apiRateLimiter,
+    );
+
+  app.get("/v1/me/purchase-capabilities", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    if (!request.authenticatedUser || !request.authenticatedCustomer)
+      return reply.code(401).send({ error: { code: "AUTH_REQUIRED" } });
+    return {
+      data: {
+        environment: "test",
+        operations_enabled: false,
+        real_purchase: false,
+        required_costs_complete: false,
+        quote: Boolean(options.customerQuoteService),
+        record: Boolean(options.customerPurchaseIntentService),
+        pix: Boolean(options.customerSandboxPixService),
+        network: "solana:devnet",
+      },
+    };
+  });
+  await registerSandboxClosureRoutes(
+    app,
+    options.customerAccess ? options.sandboxClosureService : undefined,
+  );
+  await registerOperatorAlertRoutes(
+    app,
+    options.customerAccess ? options.operatorAlertService : undefined,
+  );
+  await registerPilotInviteRoutes(
+    app,
+    options.customerAccess ? options.pilotInviteService : undefined,
+  );
+  await registerSandboxWithdrawalExecutionRoutes(
+    app,
+    options.customerAccess
+      ? options.sandboxWithdrawalExecutionService
+      : undefined,
+    options.customerAccess
+      ? options.sandboxWithdrawalRecoveryService
+      : undefined,
+  );
+  await registerWithdrawalOperatorApprovalRoutes(
+    app,
+    options.customerAccess
+      ? options.withdrawalOperatorApprovalService
+      : undefined,
+  );
+  await registerManualRefundRoutes(
+    app,
+    options.customerAccess ? options.manualRefundService : undefined,
+  );
+  await registerOperatorWithdrawalAuditRoutes(
+    app,
+    options.customerAccess ? options.operatorWithdrawalAuditService : undefined,
+  );
+  await registerOperatorWithdrawalQueueRoutes(
+    app,
+    options.customerAccess ? options.operatorWithdrawalQueueService : undefined,
+  );
+  await registerCustomerReconciliationStatusRoutes(
+    app,
+    options.customerAccess
+      ? options.customerReconciliationStatusService
+      : undefined,
+  );
+  await registerCustomerOperationHistoryRoutes(
+    app,
+    options.customerAccess
+      ? options.customerOperationHistoryService
+      : undefined,
+  );
+  await registerCustomerWithdrawalResultRoutes(
+    app,
+    options.customerAccess
+      ? options.customerWithdrawalResultService
+      : undefined,
+  );
+  await registerCustomerWithdrawalRequestRoutes(
+    app,
+    options.customerAccess
+      ? options.customerWithdrawalRequestService
+      : undefined,
+  );
+  await registerCustomerSandboxPixRoutes(
+    app,
+    options.customerAccess ? options.customerSandboxPixService : undefined,
+    options.customerSandboxPixSimulationEnabled ?? false,
+  );
+  await registerCustomerPurchaseIntentRoutes(
+    app,
+    options.customerAccess ? options.customerPurchaseIntentService : undefined,
+  );
+  await registerCustomerQuoteRoutes(
+    app,
+    options.customerAccess ? options.customerQuoteService : undefined,
+  );
+  await registerCustomerWalletRoutes(
+    app,
+    options.customerAccess ? options.customerWalletService : undefined,
+  );
+  await registerCustomerOnboardingOverviewRoute(
+    app,
+    options.customerAccess ? options.customerOnboardingOverview : undefined,
+  );
+  await registerCustomerScreeningRoutes(
+    app,
+    options.customerAccess ? options.customerScreeningService : undefined,
+  );
+  await registerCustomerDocumentRoutes(app, options.customerAccess, options.customerDocumentService);
+  await registerCustomerVerificationRoutes(
+    app,
+    options.customerAccess ? options.customerVerificationService : undefined,
+    options.verificationSimulationEnabled,
+  );
+  await registerCustomerSubmissionRoutes(
+    app,
+    options.customerAccess ? options.customerSubmissionService : undefined,
+  );
+  await registerCustomerTermsRoutes(
+    app,
+    options.customerAccess ? options.customerTermsService : undefined,
+  );
+  await registerIndividualOnboardingRoutes(
+    app,
+    options.customerAccess ? options.individualDraftService : undefined,
+  );
+
+  registerOzavSandboxCustomerRoutes(
+    app,
+    options.customerAccess ? options.ozavSandboxCustomerService : undefined,
+  );
 
   app.get("/health", async () => ({
     status: "ok",
@@ -73,21 +293,25 @@ export async function buildApp(
     uptimeSeconds: Math.floor(process.uptime()),
   }));
 
+  await registerSettlementDraftRoutes(app, {
+    repositoryForCustomer: options.customerAccess
+      ? options.customerDraftRepository
+      : undefined,
+    now: options.now ?? (() => new Date()),
+  });
+
   await registerSettlementRoutes(app, {
     repository:
-      options.settlementRepository
-      ?? new InMemorySettlementRepository(),
+      options.settlementRepository ?? new InMemorySettlementRepository(),
     settlementJobPublisher:
-      options.settlementJobPublisher
-      ?? new NoopSettlementJobPublisher(),
+      options.settlementJobPublisher ?? new NoopSettlementJobPublisher(),
     demoWalletFunder: options.demoWalletFunder,
     now: options.now ?? (() => new Date()),
   });
 
   await registerOzavOnrampRoutes(app, {
     reader: options.ozavOnrampReader,
-    sandboxPaymentSimulator:
-      options.sandboxPixPaymentSimulator,
+    sandboxPaymentSimulator: options.sandboxPixPaymentSimulator,
     now: options.now ?? (() => new Date()),
   });
 
@@ -97,14 +321,12 @@ export async function buildApp(
 
   await registerOzavOfframpRoutes(app, {
     initiator: options.ozavOfframpInitiator,
-    reconciliationScheduler:
-      options.ozavOfframpReconciliationScheduler,
+    reconciliationScheduler: options.ozavOfframpReconciliationScheduler,
   });
 
   await registerSolanaSettlementRoutes(app, {
     preparer: options.solanaSettlementPreparer,
-    rollbackDemoPreparer:
-      options.solanaRollbackDemoPreparer,
+    rollbackDemoPreparer: options.solanaRollbackDemoPreparer,
     confirmer: options.solanaSettlementConfirmer,
   });
 

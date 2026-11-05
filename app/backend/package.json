@@ -19,7 +19,9 @@
     "demo:offramp": "node scripts/ozav-pix-expiry-demo.mjs offramp",
     "demo:audit": "node scripts/settlement-audit-demo.mjs",
     "dev:worker": "tsx watch src/worker.ts",
-    "start:worker": "node dist/worker.js"
+    "start:worker": "node dist/worker.js",
+    "start:onboarding-emails": "node dist/onboarding-email-worker.js",
+    "start:invite-emails": "node dist/invite-email-worker.js"
   },
   "keywords": [],
   "author": "",
@@ -27,16 +29,17 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "@coral-xyz/anchor": "^0.32.1",
     "@fastify/sensible": "^6.0.6",
     "@solana/web3.js": "^1.99.0",
+    "@supabase/supabase-js": "2.118.0",
     "dotenv": "^18.0.5",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.7",
     "pg": "^8.23.1",
     "pg-boss": "^12.37.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.10",
     "@types/node": "^26.6.4",
     "@types/pg": "^8.23.1",
     "tsx": "^4.23.15",

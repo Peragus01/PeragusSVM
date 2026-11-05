@@ -1,0 +1,464 @@
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import type { Pool } from "pg";
+import type { InviteEmailCipher } from "./invite-email-cipher.js";
+import { invitationMessage } from "./invite-email-template.js";
+import type { AuthenticatedUser } from "../auth/customer-access.js";
+import { authorizeWithdrawalOperator } from "../withdrawals/operator-approvals.js";
+export class PilotInviteError extends Error {
+  constructor(public readonly code: string) {
+    super(code);
+  }
+}
+interface InviteRow {
+  id: string;
+  slot: number;
+  target_user_id: string | null;
+  target_email_hash?: string | null;
+  operator_user_id: string;
+  request_id: string;
+  reason: string;
+  duration_hours: number;
+  state: "issued" | "redeemed" | "revoked" | "expired";
+  created_at: Date | string;
+  expires_at: Date | string;
+  redeemed_by: string | null;
+  redemption_request_id: string | null;
+  redeemed_at: Date | string | null;
+  revoked_by: string | null;
+  revocation_request_id: string | null;
+  revocation_reason: string | null;
+  revoked_at: Date | string | null;
+  email_delivery?: {
+    state: string;
+    accepted_at: string | null;
+    delivered_at: string | null;
+    retry_blocked: boolean;
+    last_error: string | null;
+  } | null;
+}
+interface ProfileRow {
+  id: string;
+  customer_type: "pf" | "pj";
+  display_name: string;
+  verification_status: string;
+  suspended: boolean;
+}
+const hash = (code: string) => createHash("sha256").update(code).digest("hex");
+const iso = (date: Date | string | null) =>
+  date ? new Date(date).toISOString() : null;
+const view = (r: InviteRow) => ({
+  id: r.id,
+  slot: r.slot,
+  target_user_id: r.target_user_id,
+  state:
+    r.state === "issued" && new Date(r.expires_at).getTime() <= Date.now()
+      ? "expired"
+      : r.state,
+  expires_at: iso(r.expires_at),
+  created_at: iso(r.created_at),
+  reason: r.reason,
+  redeemed_at: iso(r.redeemed_at),
+  revoked_at: iso(r.revoked_at),
+  environment: "test",
+  email_delivery: r.email_delivery ?? null,
+});
+const profile = (r: ProfileRow) => ({
+  id: r.id,
+  type: r.customer_type,
+  display_name: r.display_name,
+  verification_status: r.verification_status,
+  suspended: r.suspended,
+  operations_enabled: false,
+});
+const duplicate = (error: unknown) =>
+  !!error &&
+  typeof error === "object" &&
+  "code" in error &&
+  error.code === "23505";
+function fail(code: string): never {
+  throw new PilotInviteError(code);
+}
+
+export class PilotInviteService {
+  constructor(
+    private readonly pool: Pick<Pool, "query">,
+    private readonly operators: ReadonlySet<string>,
+    private readonly enabled = false,
+    private readonly emailKey?: string,
+    private readonly inviteEmailCipher?: InviteEmailCipher,
+    private readonly inviteEmailFrom?: string,
+  ) {}
+  authorize(user: AuthenticatedUser) {
+    authorizeWithdrawalOperator(user, this.operators);
+  }
+  private writable() {
+    if (!this.enabled) fail("PILOT_INVITES_DISABLED");
+  }
+  private async throttle(
+    userId: string,
+    action: "issue" | "redeem" | "revoke" | "validate",
+  ) {
+    const r = await this.pool.query<{ hits: number }>(
+      `insert into peragus_pilot_invite_rate_limits(actor_user_id,action,hits) values($1,$2,1)
+   on conflict(actor_user_id,action) do update set
+    hits=case when peragus_pilot_invite_rate_limits.window_start<=now()-interval '15 minutes' then 1 else least(peragus_pilot_invite_rate_limits.hits+1,11) end,
+    window_start=case when peragus_pilot_invite_rate_limits.window_start<=now()-interval '15 minutes' then now() else peragus_pilot_invite_rate_limits.window_start end
+   returning hits`,
+      [userId, action],
+    );
+    if (Number(r.rows[0]?.hits ?? 11) > 10) fail("PILOT_INVITE_RATE_LIMITED");
+  }
+  private async find(where: string, args: unknown[]) {
+    const r = await this.pool.query<InviteRow>(
+      `select i.* ${this.inviteEmailCipher ? ", (select jsonb_build_object('state',o.state,'accepted_at',o.accepted_at,'delivered_at',o.delivered_at,'retry_blocked',o.retry_blocked_at is not null,'last_error',o.last_error) from peragus_invite_email_outbox o where o.invite_id=i.id) as email_delivery" : ""} from peragus_pilot_invites i where environment='test' and ${where}`,
+      args,
+    );
+    return r.rows[0] ?? null;
+  }
+  private replayIssue(
+    row: InviteRow,
+    target: string | null,
+    hours: number,
+    reason: string,
+    emailHash: string | null = null,
+  ) {
+    if (
+      (emailHash === null && row.target_user_id !== target) ||
+      row.duration_hours !== hours ||
+      row.reason !== reason ||
+      (row.target_email_hash ?? null) !== emailHash
+    )
+      fail("PILOT_INVITE_IDEMPOTENCY_CONFLICT");
+    return { data: view(row), code: null, replayed: true };
+  }
+  private emailHash(email: string) {
+    if (!this.emailKey || !/^[a-f0-9]{64}$/i.test(this.emailKey))
+      fail("PILOT_EMAIL_INVITES_DISABLED");
+    return createHmac("sha256", Buffer.from(this.emailKey, "hex"))
+      .update(email.trim().toLowerCase())
+      .digest("hex");
+  }
+  async check(code: string, email: string, clientIp: string) {
+    this.writable();
+    const digest = hash("registration:" + clientIp);
+    const actor = [
+      digest.slice(0, 8),
+      digest.slice(8, 12),
+      digest.slice(12, 16),
+      digest.slice(16, 20),
+      digest.slice(20, 32),
+    ].join("-");
+    await this.throttle(actor, "validate");
+    const emailHash = this.emailHash(email);
+    const row = await this.find("code_hash=$1 and target_email_hash=$2", [
+      hash(code),
+      emailHash,
+    ]);
+    if (
+      !row ||
+      row.state !== "issued" ||
+      Date.parse(String(row.expires_at)) <= Date.now()
+    )
+      fail("PILOT_INVITE_NOT_AVAILABLE");
+    return {
+      valid: true,
+      environment: "test",
+      email_confirmation_required: true,
+    };
+  }
+  async issue(
+    user: AuthenticatedUser,
+    requestId: string,
+    target: string,
+    hours: number,
+    reason: string,
+  ) {
+    return this.issueTarget(
+      user,
+      requestId,
+      target.toLowerCase(),
+      hours,
+      reason,
+      null,
+    );
+  }
+  async issueEmail(
+    user: AuthenticatedUser,
+    requestId: string,
+    email: string,
+    hours: number,
+    reason: string,
+  ) {
+    this.authorize(user);
+    this.writable();
+    return this.issueTarget(
+      user,
+      requestId,
+      null,
+      hours,
+      reason,
+      this.emailHash(email),
+      email.trim().toLowerCase(),
+    );
+  }
+  private async issueTarget(
+    user: AuthenticatedUser,
+    requestId: string,
+    target: string | null,
+    hours: number,
+    reason: string,
+    emailHash: string | null,
+    email: string | null = null,
+  ) {
+    this.authorize(user);
+    this.writable();
+    const old = await this.find("operator_user_id=$1 and request_id=$2", [
+      user.id,
+      requestId,
+    ]);
+    if (old) return this.replayIssue(old, target, hours, reason, emailHash);
+    await this.throttle(user.id, "issue");
+    if (target && this.operators.has(target.toLowerCase()))
+      fail("PILOT_OPERATOR_NOT_ELIGIBLE");
+    const customer = await this.pool.query(
+      "select id from peragus_customers where owner_user_id=$1",
+      [target],
+    );
+    if (customer.rows.length) fail("PILOT_CUSTOMER_ALREADY_EXISTS");
+    await this.pool.query(
+      "update peragus_pilot_invites set state='expired' where state='issued' and expires_at<=now()",
+    );
+    const code = "pginv_" + randomBytes(32).toString("base64url"),
+      id = randomUUID();
+    if (email && this.inviteEmailCipher && !this.inviteEmailFrom)
+      fail("PILOT_EMAIL_INVITES_DISABLED");
+    const sealed =
+      email && this.inviteEmailCipher
+        ? this.inviteEmailCipher.seal(id, {
+            email,
+            code,
+            message: invitationMessage(email, code, this.inviteEmailFrom!),
+          })
+        : null;
+    try {
+      const inserted = await this.pool.query<InviteRow>(
+        `with available as (
+    select s.slot,s.current_invite_id from peragus_pilot_invite_slots s
+    left join peragus_pilot_invites i on i.id=s.current_invite_id
+    where s.admitted_user_id is null and (s.current_invite_id is null or i.state in ('revoked','expired'))
+     and not exists(select 1 from peragus_customers where owner_user_id=$3 or owner_user_id=$2)
+    order by s.slot limit 1 for update of s skip locked
+   ), allocated as (
+    insert into peragus_pilot_invite_slots(slot,current_invite_id)
+    select nextval('public.peragus_pilot_invite_slot_sequence')::integer,$1
+    where not exists(select 1 from available)
+    returning slot
+   ), claimed as (
+    update peragus_pilot_invite_slots s set current_invite_id=$1 from available a
+    where s.slot=a.slot and s.admitted_user_id is null and s.current_invite_id is not distinct from a.current_invite_id returning s.slot
+   ), assigned as (
+    select slot from allocated union all select slot from claimed
+   ), issued as (
+    insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,code_hash,duration_hours,reason,expires_at,target_email_hash)
+    select $1,slot,$3,$2,$4,$5,$6,$7,now()+($6::int*interval '1 hour'),$8 from assigned returning *
+   ) ${
+     sealed
+       ? `, queued as (
+    insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload)
+    select id,'peragus-invitation-test/'||id::text,$9::jsonb from issued returning invite_id
+   )`
+       : ""
+   } select * from issued`,
+        [
+          id,
+          user.id,
+          target,
+          requestId,
+          hash(code),
+          hours,
+          reason,
+          emailHash,
+          ...(sealed ? [JSON.stringify(sealed)] : []),
+        ],
+      );
+      const row = inserted.rows[0];
+      if (!row) fail("PILOT_CAPACITY_UNAVAILABLE");
+      return {
+        data: view(
+          sealed
+            ? {
+                ...row,
+                email_delivery: {
+                  state: "pending",
+                  accepted_at: null,
+                  delivered_at: null,
+                  retry_blocked: false,
+                  last_error: null,
+                },
+              }
+            : row,
+        ),
+        code: sealed ? null : code,
+        replayed: false,
+      };
+    } catch (error) {
+      if (!duplicate(error)) throw error;
+      const winner = await this.find("operator_user_id=$1 and request_id=$2", [
+        user.id,
+        requestId,
+      ]);
+      if (winner)
+        return this.replayIssue(winner, target, hours, reason, emailHash);
+      fail("PILOT_USER_ALREADY_INVITED");
+    }
+  }
+  async list(user: AuthenticatedUser) {
+    this.authorize(user);
+    const rows = await this.pool.query<InviteRow>(
+      `select i.* ${this.inviteEmailCipher ? ", (select jsonb_build_object('state',o.state,'accepted_at',o.accepted_at,'delivered_at',o.delivered_at,'retry_blocked',o.retry_blocked_at is not null,'last_error',o.last_error) from peragus_invite_email_outbox o where o.invite_id=i.id) as email_delivery" : ""} from peragus_pilot_invites i where environment='test' order by created_at desc,id desc limit 50`,
+    );
+    // Raw codes and email hashes are never persisted in or returned by the list API.
+    return rows.rows.map(view);
+  }
+  async read(user: AuthenticatedUser, id: string) {
+    this.authorize(user);
+    const row = await this.find("id=$1", [id]);
+    if (!row) fail("PILOT_INVITE_NOT_FOUND");
+    return view(row);
+  }
+  async revoke(
+    user: AuthenticatedUser,
+    id: string,
+    requestId: string,
+    reason: string,
+  ) {
+    this.authorize(user);
+    this.writable();
+    const prior = await this.find(
+      "revoked_by=$1 and revocation_request_id=$2",
+      [user.id, requestId],
+    );
+    if (prior) {
+      if (prior.id !== id || prior.revocation_reason !== reason)
+        fail("PILOT_INVITE_IDEMPOTENCY_CONFLICT");
+      return { data: view(prior), replayed: true };
+    }
+    await this.throttle(user.id, "revoke");
+    try {
+      const result = await this.pool.query<InviteRow>(
+        `update peragus_pilot_invites set state='revoked',revoked_by=$2,revocation_request_id=$3,revocation_reason=$4,revoked_at=now()
+    where id=$1 and state='issued' and environment='test' and not exists(select 1 from peragus_customers where owner_user_id=$2) returning *`,
+        [id, user.id, requestId, reason],
+      );
+      if (result.rows[0])
+        return { data: view(result.rows[0]), replayed: false };
+    } catch (error) {
+      if (!duplicate(error)) throw error;
+      fail("PILOT_INVITE_IDEMPOTENCY_CONFLICT");
+    }
+    const current = await this.find("id=$1", [id]);
+    if (!current) fail("PILOT_INVITE_NOT_FOUND");
+    if (
+      current.revoked_by === user.id &&
+      current.revocation_request_id === requestId
+    ) {
+      if (current.revocation_reason !== reason)
+        fail("PILOT_INVITE_IDEMPOTENCY_CONFLICT");
+      return { data: view(current), replayed: true };
+    }
+    fail("PILOT_INVITE_TERMINAL");
+  }
+  private async replayRedemption(
+    user: AuthenticatedUser,
+    row: InviteRow,
+    requestId: string,
+    name: string,
+  ) {
+    if (row.redemption_request_id !== requestId)
+      fail("PILOT_INVITE_ALREADY_REDEEMED");
+    const result = await this.pool.query<ProfileRow>(
+      "select * from peragus_customers where owner_user_id=$1",
+      [user.id],
+    );
+    const customer = result.rows[0];
+    if (
+      !customer ||
+      customer.customer_type !== "pf" ||
+      customer.display_name !== name
+    )
+      fail("PILOT_INVITE_IDEMPOTENCY_CONFLICT");
+    return {
+      data: {
+        invite_id: row.id,
+        customer: profile(customer),
+        environment: "test",
+      },
+      replayed: true,
+    };
+  }
+  async redeem(
+    user: AuthenticatedUser,
+    requestId: string,
+    code: string,
+    name: string,
+  ) {
+    this.writable();
+    if (this.operators.has(user.id.toLowerCase()))
+      fail("PILOT_OPERATOR_NOT_ELIGIBLE");
+    await this.throttle(user.id, "redeem");
+    const digest = hash(code);
+    const candidate = await this.find("code_hash=$1", [digest]);
+    const emailHash = candidate?.target_email_hash
+      ? this.emailHash(user.email)
+      : null;
+    const prior =
+      candidate &&
+      (candidate.target_user_id === user.id ||
+        (candidate.target_user_id === null &&
+          candidate.target_email_hash === emailHash))
+        ? candidate
+        : null;
+    // Wrong code and wrong account have the same public response.
+    if (!prior) fail("PILOT_INVITE_NOT_AVAILABLE");
+    if (prior.state === "redeemed")
+      return this.replayRedemption(user, prior, requestId, name);
+    try {
+      const result = await this.pool.query<ProfileRow>(
+        `with eligible as (
+    select i.id,i.slot from peragus_pilot_invites i join peragus_pilot_invite_slots s on s.slot=i.slot and s.current_invite_id=i.id
+    where i.code_hash=$1 and (i.target_user_id=$2 or (i.target_user_id is null and i.target_email_hash=$6)) and i.state='issued' and i.expires_at>now() and i.environment='test'
+     and s.admitted_user_id is null and not exists(select 1 from peragus_customers where owner_user_id=$2)
+    for update of i,s
+   ), customer as (
+    insert into peragus_customers(id,owner_user_id,customer_type,display_name)
+    select $3,$2,'pf',$4 from eligible returning *
+   ), redeemed as (
+    update peragus_pilot_invites i set state='redeemed',target_user_id=$2,redeemed_by=$2,redemption_request_id=$5,redeemed_at=now()
+    from eligible e,customer c where i.id=e.id returning i.id,i.slot
+   ), admitted as (
+    update peragus_pilot_invite_slots s set admitted_user_id=$2 from redeemed r
+    where s.slot=r.slot and s.current_invite_id=r.id and s.admitted_user_id is null returning s.slot
+   ) select c.* from customer c,admitted`,
+        [digest, user.id, randomUUID(), name, requestId, emailHash],
+      );
+      if (result.rows[0])
+        return {
+          data: {
+            invite_id: prior.id,
+            customer: profile(result.rows[0]),
+            environment: "test",
+          },
+          replayed: false,
+        };
+    } catch (error) {
+      if (!duplicate(error)) throw error;
+    }
+    const current = await this.find("code_hash=$1 and target_user_id=$2", [
+      digest,
+      user.id,
+    ]);
+    if (current?.state === "redeemed")
+      return this.replayRedemption(user, current, requestId, name);
+    fail("PILOT_INVITE_NOT_AVAILABLE");
+  }
+}

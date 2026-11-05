@@ -76,6 +76,10 @@ export class SettlementOrchestrationHandler {
       );
     }
 
+    if (settlement.recordOnly) {
+      throw new Error("RECORD_ONLY_SETTLEMENT: diagnostic records cannot be orchestrated");
+    }
+
     if (settlement.requestId !== job.requestId) {
       throw new Error(
         `Settlement ${job.settlementId} has an unexpected request_id`,

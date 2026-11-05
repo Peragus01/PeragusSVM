@@ -1,0 +1,3 @@
+# Captured staging function configuration; deploy explicitly, never from backend startup.
+[functions.process-welcome-email]
+verify_jwt = true
