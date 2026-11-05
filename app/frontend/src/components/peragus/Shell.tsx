@@ -11,7 +11,6 @@ import {
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "./CopyButton";
-import { useConnection } from "./connection-context";
 import { ConnectionProvider } from "./connection";
 import { WalletProvider } from "./Wallet";
 import { PROGRAM_ID, explorerAddress, short } from "@/lib/peragus/config";
@@ -28,7 +27,6 @@ export function BrandMark() {
   );
 }
 function Header() {
-  const { backend, ping } = useConnection();
   const [menu, setMenu] = useState(false);
   return (
     <>
@@ -41,21 +39,6 @@ function Header() {
         <span className="header-caption">
           SETTLEMENT CONTROL ROOM<span>LATAM SVM INFRASTRUCTURE</span>
         </span>
-        <div className="header-status">
-          <span className="network-badge">
-            <span className={ping !== null ? "status-dot" : "status-dot pending-dot"} />
-            Solana Devnet
-            <span className="network-ping">{ping !== null ? `${ping} ms` : "RPC unavailable"}</span>
-          </span>
-          <span className={`backend-badge ${backend === "online" ? "is-live" : ""}`}>
-            <span className={backend === "online" ? "status-dot" : "status-dot pending-dot"} />
-            {backend === "online"
-              ? "Backend online"
-              : backend === "checking"
-                ? "Checking backend…"
-                : "Backend offline"}
-          </span>
-        </div>
         <div className="wallet-space" />
         <Button
           variant="ghost"
