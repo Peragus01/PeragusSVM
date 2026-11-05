@@ -37,3 +37,9 @@ Vite was updated to 8.3.6 and compatible lockfile updates resolved the reported 
 The Railway OAuth connector exposes variable names, not values. Therefore existing DATABASE_URL targets, shared encryption material and financial flag values cannot be inferred from names or successful deployments. They require verified configuration or runtime guards before enabling production processing. Production has no Auth user available for login/logout/MFA or onboarding email E2E. Do not manufacture operator JWTs, bypass MFA, or use a staging user as production evidence.
 
 The GitHub connection has no ruleset/branch-protection mutation capability. A main ruleset still requires repository administration access: PR required, Frontend + Backend checks, deletion/force-push blocked, administrator emergency bypass with audit.
+
+## Additional isolation found during validation
+
+The API, invite worker, environment parser and invitation template also pinned staging. `PERAGUS_DEPLOYMENT_ENV` now selects the known database/Auth pair for controlled synthetic onboarding in either location. Production API startup fails closed on a cross-environment connection; this must be validated before switching its release. Invitation messages freeze the origin selected at issuance (production uses www.peragus.com.br), without rewriting existing queued bodies. No new live-provider operations are introduced.
+
+`getEnv` reports only rejected field names through a typed sanitized configuration error. The disabled onboarding worker audits configuration without making provider/database calls and stays in explicit non-sending standby. Its diagnostic is distinct from operational processing readiness. This enables verification of connection configuration without reading secret values through the connector.

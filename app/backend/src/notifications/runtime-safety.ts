@@ -71,8 +71,23 @@ export function notificationFailure(
     error && typeof error === "object" && "code" in error
       ? String(error.code)
       : "";
+  const fields =
+    error &&
+    typeof error === "object" &&
+    "fields" in error &&
+    Array.isArray(error.fields)
+      ? error.fields
+          .filter(
+            (field: unknown) =>
+              typeof field === "string" && /^[A-Z0-9_]+$/.test(field),
+          )
+          .slice(0, 20)
+      : undefined;
   const internal =
-    error instanceof Error && /^ONBOARDING_[A-Z_]+$/.test(error.message)
+    error instanceof Error &&
+    /^(ONBOARDING_[A-Z_]+|ENVIRONMENT_CONFIGURATION_INVALID)$/.test(
+      error.message,
+    )
       ? error.message
       : undefined;
   const databaseCode =
@@ -102,5 +117,6 @@ export function notificationFailure(
     code: internal ?? databaseCode ?? transport ?? "PROCESSING_UNCONFIRMED",
     retry: !internal && !["42P01", "42703", "42501", "28P01"].includes(code),
     result: "unconfirmed",
+    ...(fields ? { fields } : {}),
   };
 }

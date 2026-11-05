@@ -21,9 +21,29 @@ import { RegistrationSnapshotService } from "./onboarding/customer-submission-se
 import { OzavClient } from "./providers/ozav-client.js";
 
 async function main() {
-  const config = notificationConfig(),
-    env = getEnv();
+  const config = notificationConfig();
   if (!config.enabled) {
+    try {
+      assertNotificationEnvironment(getEnv(), process.env);
+      console.info(
+        JSON.stringify({
+          event: "onboarding_email_configuration_verified",
+          environment: process.env.ONBOARDING_EMAIL_DEPLOYMENT_ENV,
+          sending_enabled: false,
+        }),
+      );
+    } catch (error) {
+      console.error(
+        JSON.stringify(
+          notificationFailure(
+            error,
+            "disabled_configuration_audit",
+            process.env.ONBOARDING_EMAIL_DEPLOYMENT_ENV ?? "unconfigured",
+            randomUUID(),
+          ),
+        ),
+      );
+    }
     console.info(
       JSON.stringify({
         event: "onboarding_email_worker_disabled",
@@ -43,6 +63,7 @@ async function main() {
     });
     return;
   }
+  const env = getEnv();
   const environment = assertNotificationEnvironment(env, process.env);
   const pool = createDatabasePool(env.DATABASE_URL!, env.DATABASE_SSL);
   const customers = new PostgresCustomerRepository(pool),

@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { getEnv } from "./config/env.js";
-import { assertSmokeTestSafety } from "./jobs/worker-smoke-test.js";
+import { assertNotificationEnvironment } from "./notifications/runtime-safety.js";
 import { createDatabasePool } from "./database/pool.js";
 import { InviteEmailCipher } from "./invites/invite-email-cipher.js";
 import { InviteEmailProvider } from "./invites/invite-email-provider.js";
@@ -11,13 +11,20 @@ if (
   !process.env.RESEND_API_KEY?.match(/^re_[A-Za-z0-9_]+$/)
 )
   throw Error("INVITE_EMAIL_WORKER_CONFIG_REQUIRED");
-assertSmokeTestSafety(env);
+assertNotificationEnvironment(env, {
+  ...process.env,
+  ONBOARDING_EMAIL_DEPLOYMENT_ENV: env.PERAGUS_DEPLOYMENT_ENV,
+});
 const pool = createDatabasePool(env.DATABASE_URL!, env.DATABASE_SSL);
 const cipher = new InviteEmailCipher(
   env.INVITE_EMAIL_ENCRYPTION_KEY!,
   env.INVITE_EMAIL_ENCRYPTION_KEY_ID!,
 );
-const provider = new InviteEmailProvider(process.env.RESEND_API_KEY, fetch, false);
+const provider = new InviteEmailProvider(
+  process.env.RESEND_API_KEY,
+  fetch,
+  false,
+);
 let stopping = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.once(signal, () => {

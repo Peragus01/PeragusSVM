@@ -78,3 +78,13 @@ describe("notification deployment isolation", () => {
     expect(JSON.stringify(log)).not.toContain(secret);
   });
 });
+
+it("reports configuration field names without rejected values", () => {
+  const error = Object.assign(new Error("ENVIRONMENT_CONFIGURATION_INVALID"), {
+    fields: ["OZAV_API_KEY", "private@example.com", "DATABASE_URL"],
+  });
+  const log = notificationFailure(error, "bootstrap", "staging", "synthetic");
+  expect(log.category).toBe("configuration");
+  expect(log.retry).toBe(false);
+  expect(log.fields).toEqual(["OZAV_API_KEY", "DATABASE_URL"]);
+});

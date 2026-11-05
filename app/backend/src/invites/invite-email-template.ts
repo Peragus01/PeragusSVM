@@ -1,8 +1,15 @@
 export const INVITE_STAGING_ORIGIN =
   "https://peragus-svm-git-feat-frontend-mvp-integration-peragus.vercel.app";
-export function invitationMessage(email: string, code: string, from: string) {
+export function invitationMessage(
+  email: string,
+  code: string,
+  from: string,
+  origin = INVITE_STAGING_ORIGIN,
+) {
   // The code is deliberately absent from the URL (including analytics/referrer data).
-  const url = INVITE_STAGING_ORIGIN + "/cadastro";
+  if (![INVITE_STAGING_ORIGIN, "https://www.peragus.com.br"].includes(origin))
+    throw Error("INVITE_FRONTEND_ORIGIN_INVALID");
+  const url = origin + "/cadastro";
   const subject = "[TESTES] Seu convite para a Peragus";
   const text = `Você recebeu um convite para a Peragus.\n\nAMBIENTE DE TESTES — sem dinheiro real.\n\nSeu código de convite:\n${code}\n\nCriar minha conta: ${url}\nUse o e-mail que recebeu este convite. Confirme seu e-mail e use o mesmo código para concluir o cadastro. O código é pessoal e pode ser consumido uma única vez, até a validade informada pelo operador.\n\nSe não esperava este convite, ignore esta mensagem. Não responda a este e-mail. Suporte: contato@peragus.com.br`;
   const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${subject}</title></head><body style="margin:0;background:#f4f6fa;font-family:Arial,sans-serif;color:#fff"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 12px"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="width:100%;max-width:600px;background:#101827;border-radius:16px"><tr><td style="padding:32px"><img src="https://www.peragus.com.br/logo-peragus.png" width="156" alt="Peragus" style="display:block;margin-bottom:24px"><p style="color:#93c5fd;font-size:13px">AMBIENTE DE TESTES · SEM DINHEIRO REAL</p><h1 style="font-size:28px;color:#fff">Seu convite para a Peragus</h1><p style="color:#dbe5f5;line-height:1.6">Você está convidado a criar sua conta. Use o e-mail que recebeu esta mensagem.</p><p style="color:#dbe5f5">Seu código pessoal de convite:</p><p style="padding:20px;background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;font-family:monospace;font-size:17px;word-break:break-all;color:#fff">${code}</p><p style="padding:16px 0"><a href="${url}" style="display:inline-block;padding:16px 24px;background:#2563eb;border-radius:8px;color:#fff;font-weight:bold;text-decoration:none">Criar minha conta</a></p><p style="font-size:14px;color:#dbe5f5;line-height:1.6">Confirme seu e-mail e use este mesmo código para concluir o cadastro. Ele é pessoal, tem a validade informada pelo operador e só pode ser consumido uma vez.</p><p style="font-size:12px;color:#c0ccdf;line-height:1.6">Se não esperava este convite, ignore esta mensagem. Não responda a este e-mail.<br>Suporte: contato@peragus.com.br</p></td></tr></table></td></tr></table></body></html>`;
