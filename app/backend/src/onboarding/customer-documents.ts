@@ -207,6 +207,7 @@ export function uploadGrant(
 }
 const view = (row: DocumentRow) => ({
   id: row.id,
+  request_id: row.request_id,
   doc_type: row.doc_type,
   side: row.side,
   state: row.state,
