@@ -58,6 +58,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("private document journey", () => {
+  it("turns a missing linked profile into an actionable verification step without an upload form", async () => {
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ error: { code: "DOCUMENT_CUSTOMER_REQUIRED" } }, { status: 409 }),
+    );
+    render(<CustomerDocuments />);
+    const next = await screen.findByRole("link", { name: "Continuar cadastro →" });
+    expect(next).toHaveAttribute("href", "/app/minha-conta");
+    expect(screen.getByRole("heading", { name: "Dados cadastrais" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Documentos" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Análise de identidade" })).toBeInTheDocument();
+    expect(screen.getByText("Cadastro pendente")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByLabelText("Arquivo de teste")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Atualizar envios" })).toBeNull();
+    expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+  });
+  it("offers the upload section only after the backend confirms the document prerequisites", async () => {
+    mock();
+    render(<CustomerDocuments />);
+    const next = await screen.findByRole("link", { name: "Enviar documento" });
+    expect(next).toHaveAttribute("href", "#enviar-documento");
+    expect(screen.queryByRole("link", { name: "Continuar cadastro →" })).toBeNull();
+    expect(screen.getByText("Dados vinculados")).toBeInTheDocument();
+    expect(screen.getByText("Resultado em Minha conta")).toBeInTheDocument();
+    expect(screen.queryByText("Identidade aprovada")).toBeNull();
+  });
+  it("keeps unavailable provider data distinct from an incomplete profile", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(Error("private provider detail"));
+    render(<CustomerDocuments />);
+    await screen.findByRole("alert");
+    expect(screen.getByText("Consulta indisponível")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Continuar cadastro →" })).toBeNull();
+    expect(screen.queryByLabelText("Arquivo de teste")).toBeNull();
+    expect(screen.queryByText(/private provider detail/)).toBeNull();
+  });
   it("distinguishes required, pending, received and rejected files without inferring identity approval", () => {
     const received = record as DocumentRecord;
     expect(documentRequirementState([], "identity_document").state).toBe("necessary");

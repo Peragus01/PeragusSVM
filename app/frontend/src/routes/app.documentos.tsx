@@ -8,8 +8,8 @@ export function DocumentsPage() {
     <>
       <SectionTitle
         eyebrow="CADASTRO E VERIFICAÇÃO"
-        title="Seus documentos"
-        description="Consulte o que foi solicitado, envie seus arquivos e acompanhe o recebimento."
+        title="Verificação de identidade"
+        description="Seu cadastro, seus documentos e o acompanhamento da sua verificação em um só lugar."
       />
       <CustomerDocuments />
     </>
