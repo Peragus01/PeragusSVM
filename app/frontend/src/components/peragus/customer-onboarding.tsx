@@ -423,7 +423,8 @@ export function CustomerOnboarding() {
                               ...individual,
                               residential_address: {
                                 ...individual.residential_address,
-                                [key]: key === "state" ? e.target.value.toUpperCase() : e.target.value,
+                                [key]:
+                                  key === "state" ? e.target.value.toUpperCase() : e.target.value,
                               },
                             })
                           }
