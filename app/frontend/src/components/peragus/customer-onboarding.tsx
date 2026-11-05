@@ -109,8 +109,10 @@ export function CustomerOnboarding() {
     input.scrollIntoView?.({ block: "center", behavior: "instant" });
   }, [fieldErrors, busy]);
   const userId = identity?.user.id;
+  const customerId = identity?.customer?.id;
   useEffect(() => {
-    epoch.current++;
+    const generation = epoch;
+    generation.current++;
     lock.current = false;
     setBusy(false);
     const abort = new AbortController();
@@ -126,7 +128,7 @@ export function CustomerOnboarding() {
     setError("");
     setFieldErrors({});
     focusError.current = false;
-    if (!accessToken || !identity?.customer) return;
+    if (!accessToken || !customerId) return;
     void Promise.allSettled([
       journeyRequest<Draft>(
         accessToken,
@@ -183,10 +185,10 @@ export function CustomerOnboarding() {
       setLoaded(true);
     });
     return () => {
-      epoch.current++;
+      generation.current++;
       abort.abort();
     };
-  }, [accessToken, userId, identity?.customer?.id]);
+  }, [accessToken, userId, customerId]);
   async function act(path: string, body?: object, method = "POST") {
     if (lock.current || !accessToken) return;
     lock.current = true;

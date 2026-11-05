@@ -39,14 +39,15 @@ export function CustomerPix({
   const epoch = useRef(0);
   const storageKey = `peragus-pix-v1:${purchaseId}`;
   useEffect(() => {
-    epoch.current++;
+    const generation = epoch;
+    generation.current++;
     lock.current = false;
     setBusy(false);
     setPix(null);
     setError("");
     const timer = setInterval(() => setClock(Date.now()), 1000);
     return () => {
-      epoch.current++;
+      generation.current++;
       clearInterval(timer);
     };
   }, [token, purchaseId]);

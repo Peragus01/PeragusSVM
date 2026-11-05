@@ -12,14 +12,15 @@ export function CustomerProfileEditor() {
   const lock = useRef(false);
   const epoch = useRef(0);
   useEffect(() => {
-    epoch.current++;
+    const generation = epoch;
+    generation.current++;
     lock.current = false;
     setBusy(false);
     setName(current);
     setSaved(false);
     setError("");
     return () => {
-      epoch.current++;
+      generation.current++;
     };
     // Auth generations invalidate pending requests; a nickname reload does not.
     // eslint-disable-next-line react-hooks/exhaustive-deps

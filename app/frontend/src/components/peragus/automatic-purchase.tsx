@@ -5,7 +5,8 @@ import { Link } from "@tanstack/react-router";
 import { ArrowDown, ArrowRight, ShieldCheck } from "lucide-react";
 import { CustomerNotice } from "./customer-ui";
 import { usePeragusWallet } from "./wallet-context";
-import { CustomerWalletLink, useLinkedWallet } from "./customer-wallet-link";
+import { CustomerWalletLink } from "./customer-wallet-link";
+import { useLinkedWallet } from "./use-linked-wallet";
 import { formatAmount } from "./customer-operations";
 import {
   normalizePurchaseAmount,
@@ -30,7 +31,7 @@ type Receipt = {
   sourceAmount?: string;
   purchaseAttempted?: boolean;
 };
-export function normalizeTarget(input: string) {
+function normalizeTarget(input: string) {
   const text = input.trim().replace(",", ".");
   if (!/^(0|[1-9]\d{0,5})(\.\d{1,6})?$/.test(text)) return null;
   const [w, f = ""] = text.split(".");
@@ -108,7 +109,8 @@ export function AutomaticPurchaseForm({
   const currentInput = useRef(input);
   currentInput.current = input;
   useEffect(() => {
-    epoch.current++;
+    const generation = epoch;
+    generation.current++;
     setQuote(null);
     setRecord(null);
     setInput(null);
@@ -138,7 +140,7 @@ export function AutomaticPurchaseForm({
       );
     }
     return () => {
-      epoch.current++;
+      generation.current++;
     };
   }, [customerId, token]);
   useEffect(() => {
