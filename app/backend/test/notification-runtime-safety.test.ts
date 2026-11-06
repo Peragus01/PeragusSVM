@@ -1,7 +1,9 @@
+import { OzavClientError } from "../src/providers/ozav-client.js";
 import { describe, it, expect } from "vitest";
 import {
   assertNotificationEnvironment,
   notificationFailure,
+  notificationStep,
 } from "../src/notifications/runtime-safety.js";
 const fixture = (project = "lybdkqkbwlfwvmmvstzi") => ({
   DATABASE_URL: `postgresql://postgres.${project}:synthetic@aws-1-sa-east-1.pooler.supabase.com:5432/postgres`,
@@ -87,4 +89,26 @@ it("reports configuration field names without rejected values", () => {
   expect(log.category).toBe("configuration");
   expect(log.retry).toBe(false);
   expect(log.fields).toEqual(["OZAV_API_KEY", "DATABASE_URL"]);
+});
+
+it("records the failing provider stage and HTTP category without its body", async () => {
+  try {
+    await notificationStep("provider_registration", async () => {
+      throw new OzavClientError("private@example.com token=secret", false, 401);
+    });
+  } catch (error) {
+    const log = notificationFailure(
+      error,
+      "customer_cycle",
+      "staging",
+      "synthetic",
+    );
+    expect(log.stage).toBe("provider_registration");
+    expect(log.category).toBe("provider");
+    expect(log.code).toBe("OZAV_HTTP_401");
+    expect(log.retry).toBe(false);
+    expect(JSON.stringify(log)).not.toContain("secret");
+    return;
+  }
+  throw Error("Expected provider error");
 });

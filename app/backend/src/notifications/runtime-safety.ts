@@ -1,3 +1,4 @@
+import { OzavClientError } from "../providers/ozav-client.js";
 // Deployment location and provider mode are separate: both locations run only
 // controlled synthetic onboarding until a separately reviewed live integration.
 const projects = {
@@ -61,12 +62,43 @@ export function assertNotificationEnvironment(
     throw Error("ONBOARDING_UNSAFE_FLAGS");
   return mode;
 }
+export class NotificationStageError extends Error {
+  constructor(
+    public readonly stage: string,
+    cause: unknown,
+  ) {
+    super("ONBOARDING_STEP_UNCONFIRMED", { cause });
+  }
+}
+export async function notificationStep<T>(
+  stage: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await task();
+  } catch (error) {
+    throw new NotificationStageError(stage, error);
+  }
+}
 export function notificationFailure(
   error: unknown,
   stage: string,
   environment: string,
   correlationId: string,
 ) {
+  if (error instanceof NotificationStageError)
+    return notificationFailure(
+      error.cause,
+      error.stage,
+      environment,
+      correlationId,
+    );
+  const provider = error instanceof OzavClientError;
+  const providerCode = provider
+    ? error.statusCode && error.statusCode >= 100 && error.statusCode <= 599
+      ? `OZAV_HTTP_${error.statusCode}`
+      : "OZAV_TRANSPORT_OR_RESPONSE"
+    : undefined;
   const code =
     error && typeof error === "object" && "code" in error
       ? String(error.code)
@@ -82,6 +114,12 @@ export function notificationFailure(
               typeof field === "string" && /^[A-Z0-9_]+$/.test(field),
           )
           .slice(0, 20)
+      : undefined;
+  const domainCode =
+    /^(VERIFICATION|SCREENING)_(CUSTOMER_REQUIRED|FULL_MODE_REQUIRED|CAPABILITY_REQUIRED|PROCESSING|RECOVERY_REQUIRED|NOT_STARTED|CONFLICT|OUTCOME_MISMATCH|RECONCILIATION_REQUIRED)$/.test(
+      code,
+    )
+      ? code
       : undefined;
   const internal =
     error instanceof Error &&
@@ -107,15 +145,29 @@ export function notificationFailure(
     stage,
     environment,
     correlation_id: correlationId,
-    category: internal
-      ? "configuration"
-      : databaseCode
-        ? "database"
-        : transport
-          ? "transport"
-          : "processing",
-    code: internal ?? databaseCode ?? transport ?? "PROCESSING_UNCONFIRMED",
-    retry: !internal && !["42P01", "42703", "42501", "28P01"].includes(code),
+    category: provider
+      ? "provider"
+      : domainCode
+        ? "onboarding_state"
+        : internal
+          ? "configuration"
+          : databaseCode
+            ? "database"
+            : transport
+              ? "transport"
+              : "processing",
+    code:
+      providerCode ??
+      domainCode ??
+      internal ??
+      databaseCode ??
+      transport ??
+      "PROCESSING_UNCONFIRMED",
+    retry: provider
+      ? error.retryable
+      : !internal &&
+        !domainCode &&
+        !["42P01", "42703", "42501", "28P01"].includes(code),
     result: "unconfirmed",
     ...(fields ? { fields } : {}),
   };

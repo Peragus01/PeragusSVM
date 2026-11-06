@@ -3,6 +3,7 @@ import { getEnv } from "./config/env.js";
 import {
   assertNotificationEnvironment,
   notificationFailure,
+  notificationStep,
 } from "./notifications/runtime-safety.js";
 import { randomUUID } from "node:crypto";
 import { createDatabasePool } from "./database/pool.js";
@@ -83,15 +84,22 @@ async function main() {
     ),
     screening = new CustomerScreeningService(screenings, submissions, provider);
   async function fresh(customer: Customer) {
-    await new RegistrationSnapshotService(submissions, provider).refresh(
-      customer.id,
+    await notificationStep("provider_registration", () =>
+      new RegistrationSnapshotService(submissions, provider).refresh(
+        customer.id,
+      ),
     );
     if ((await verifications.find(customer.id))?.verificationId)
-      await verification.refresh(customer.id);
+      await notificationStep("provider_verification", () =>
+        verification.refresh(customer.id),
+      );
     if ((await screenings.find(customer.id))?.screeningId)
-      await screening.refresh(customer.id);
-    return facts.read(customer.id);
+      await notificationStep("provider_screening", () =>
+        screening.refresh(customer.id),
+      );
+    return notificationStep("stored_overview", () => facts.read(customer.id));
   }
+
   let stopping = false;
   for (const signal of ["SIGINT", "SIGTERM"] as const)
     process.once(signal, () => {
