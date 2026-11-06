@@ -64,7 +64,7 @@ async function main() {
     });
     return;
   }
-  const env = getEnv();
+  const env = await notificationStep("configuration", async () => getEnv());
   const environment = assertNotificationEnvironment(env, process.env);
   const pool = createDatabasePool(env.DATABASE_URL!, env.DATABASE_SSL);
   const customers = new PostgresCustomerRepository(pool),
@@ -179,9 +179,11 @@ async function main() {
       "peragus_customer_screenings",
       "peragus_customer_wallets",
     ];
-    const schema = await pool.query(
-      "select bool_and(to_regclass('public.' || name) is not null) as ready from unnest($1::text[]) as name",
-      [required],
+    const schema = await notificationStep("schema_readiness", () =>
+      pool.query(
+        "select bool_and(to_regclass('public.' || name) is not null) as ready from unnest($1::text[]) as name",
+        [required],
+      ),
     );
     if (!schema.rows[0]?.ready) throw new Error("ONBOARDING_SCHEMA_REQUIRED");
     console.info(

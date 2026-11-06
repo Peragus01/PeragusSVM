@@ -128,20 +128,34 @@ export function notificationFailure(
     )
       ? error.message
       : undefined;
-  const databaseCode =
-    /^(42P01|42703|42501|28P01|08001|08006|53300|57P01|40001|40P01)$/.test(code)
-      ? code
-      : undefined;
+  const databaseCode = /^[0-9A-Z]{5}$/.test(code) ? code : undefined;
   const transport = [
     "ECONNREFUSED",
     "ETIMEDOUT",
     "ENOTFOUND",
     "ECONNRESET",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
   ].includes(code)
     ? code
     : undefined;
   return {
     event: "onboarding_email_failure",
+    error_type:
+      error instanceof Error &&
+      [
+        "Error",
+        "TypeError",
+        "ReferenceError",
+        "SyntaxError",
+        "RangeError",
+        "AggregateError",
+      ].includes(error.name)
+        ? error.name
+        : "Unknown",
     stage,
     environment,
     correlation_id: correlationId,
