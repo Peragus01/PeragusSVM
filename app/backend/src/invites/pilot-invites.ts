@@ -87,6 +87,7 @@ export class PilotInviteService {
     private readonly emailKey?: string,
     private readonly inviteEmailCipher?: InviteEmailCipher,
     private readonly inviteEmailFrom?: string,
+    private readonly inviteFrontendOrigin?: string,
   ) {}
   authorize(user: AuthenticatedUser) {
     authorizeWithdrawalOperator(user, this.operators);
@@ -237,7 +238,12 @@ export class PilotInviteService {
         ? this.inviteEmailCipher.seal(id, {
             email,
             code,
-            message: invitationMessage(email, code, this.inviteEmailFrom!),
+            message: invitationMessage(
+              email,
+              code,
+              this.inviteEmailFrom!,
+              this.inviteFrontendOrigin,
+            ),
           })
         : null;
     try {

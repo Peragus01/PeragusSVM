@@ -5,6 +5,9 @@ import { z } from "zod";
 
 const envSchema = z
   .object({
+    PERAGUS_DEPLOYMENT_ENV: z
+      .enum(["staging", "production"])
+      .default("staging"),
     SANDBOX_WITHDRAWAL_CLOSURE_ENABLED: z
       .enum(["true", "false"])
       .default("false")
@@ -19,7 +22,10 @@ const envSchema = z
       .transform((value) => value === "true"),
     INVITE_EMAIL_ENCRYPTION_KEY: z.string().optional(),
     INVITE_EMAIL_FROM: z.email().optional(),
-    INVITE_EMAIL_WEBHOOK_SECRET: z.string().regex(/^whsec_[A-Za-z0-9+/=_-]{16,256}$/).optional(),
+    INVITE_EMAIL_WEBHOOK_SECRET: z
+      .string()
+      .regex(/^whsec_[A-Za-z0-9+/=_-]{16,256}$/)
+      .optional(),
     INVITE_EMAIL_ENCRYPTION_KEY_ID: z
       .string()
       .regex(/^[A-Za-z0-9_-]{1,32}$/)
@@ -101,7 +107,10 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
-    CUSTOMER_DOCUMENTS_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
+    CUSTOMER_DOCUMENTS_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
     CUSTOMER_DOCUMENT_UPLOAD_ORIGINS: z.string().default(""),
     CUSTOMER_VERIFICATIONS_ENABLED: z
       .enum(["true", "false"])
@@ -249,7 +258,10 @@ const envSchema = z
         !env.INVITE_EMAIL_FROM?.endsWith("@peragus.com.br") ||
         !env.PILOT_INVITE_EMAIL_HASH_KEY ||
         !env.DATABASE_URL ||
-        env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co" ||
+        env.SUPABASE_URL !==
+          (env.PERAGUS_DEPLOYMENT_ENV === "production"
+            ? "https://athwkklyvnaetotmancy.supabase.co"
+            : "https://lybdkqkbwlfwvmmvstzi.supabase.co") ||
         env.OZAV_ONRAMP_WRITES_ENABLED ||
         env.OZAV_OFFRAMP_WRITES_ENABLED ||
         env.SOLANA_COSIGNING_ENABLED ||
@@ -260,7 +272,7 @@ const envSchema = z
           code: "custom",
           path: ["INVITE_EMAIL_OUTBOX_ENABLED"],
           message:
-            "Invitation outbox requires staging and valid encryption configuration",
+            "Invitation outbox requires the selected Auth project and valid encryption configuration",
         });
       }
     }
@@ -416,11 +428,17 @@ export function getEnv(): Env {
   const result = envSchema.safeParse(process.env);
 
   if (!result.success) {
-    const issues = result.error.issues
-      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
-      .join("; ");
-
-    throw new Error(`Invalid environment configuration: ${issues}`);
+    const fields = [
+      ...new Set(
+        result.error.issues
+          .map((issue) => String(issue.path[0] ?? "UNKNOWN"))
+          .filter((field) => /^[A-Z0-9_]+$/.test(field)),
+      ),
+    ];
+    throw Object.assign(new Error("ENVIRONMENT_CONFIGURATION_INVALID"), {
+      code: "ENVIRONMENT_CONFIGURATION_INVALID",
+      fields,
+    });
   }
 
   cachedEnv = result.data;

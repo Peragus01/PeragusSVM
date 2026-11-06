@@ -1,3 +1,4 @@
+import { useLinkedWallet } from "./use-linked-wallet";
 import { useEffect, useRef, useState } from "react";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import { usePeragusWallet } from "./wallet-context";
@@ -20,46 +21,6 @@ type WalletChallenge = {
   challenge_id: string;
 };
 type WalletConfirmation = { environment: string; network: "solana:devnet"; wallet_address: string };
-export function useLinkedWallet() {
-  const { accessToken, identity } = useCustomerSession();
-  const [linked, setLinked] = useState<LinkedWallet | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    const controller = new AbortController();
-    setLinked(null);
-    setError("");
-    if (!accessToken || !identity?.customer) return;
-    void journeyRequest<WalletStatus>(
-      accessToken,
-      "v1/me/onboarding/status",
-      "GET",
-      undefined,
-      controller.signal,
-    )
-      .then((data) => {
-        if (controller.signal.aborted) return;
-        if (
-          data.environment !== "test" ||
-          data.customer?.id !== identity.customer?.id ||
-          data.operations_enabled !== false
-        )
-          throw Error();
-        const w = data.wallet;
-        if (
-          w &&
-          w.network === "solana:devnet" &&
-          /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w.wallet_address)
-        )
-          setLinked(w);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted)
-          setError("Não foi possível confirmar a carteira vinculada.");
-      });
-    return () => controller.abort();
-  }, [accessToken, identity?.customer?.id]);
-  return { linked, setLinked, error };
-}
 export function CustomerWalletLink({
   onLinked,
 }: { onLinked?: (wallet: LinkedWallet) => void } = {}) {
@@ -71,11 +32,12 @@ export function CustomerWalletLink({
   const lock = useRef(false);
   const epoch = useRef(0);
   useEffect(() => {
-    epoch.current++;
+    const generation = epoch;
+    generation.current++;
     lock.current = false;
     setBusy(false);
     return () => {
-      epoch.current++;
+      generation.current++;
     };
   }, [accessToken]);
   async function prove() {

@@ -131,9 +131,10 @@ export function CustomerLayout() {
     if (session.status === "unauthenticated") void navigate({ to: "/login", replace: true });
     if (session.status === "authenticated" && session.identity && !session.identity.customer)
       void navigate({ to: "/cadastro", replace: true });
-  }, [session.status, session.identity?.customer, navigate]);
+  }, [session.status, session.identity, navigate]);
   useEffect(() => {
     if (!open) return;
+    const returnFocus = menuButton.current;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const links = () =>
@@ -160,7 +161,7 @@ export function CustomerLayout() {
     return () => {
       document.removeEventListener("keydown", close);
       document.body.style.overflow = previousOverflow;
-      menuButton.current?.focus();
+      returnFocus?.focus();
     };
   }, [open]);
   if (session.status !== "authenticated" || !session.identity) {

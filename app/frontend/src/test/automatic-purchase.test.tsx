@@ -5,7 +5,8 @@ const customer = "8877827c-3a86-4eeb-9545-465244a2c0a5",
   qid = "91e9eeb3-1878-4fe7-ba62-9c387c3df45e",
   pid = "d57d1d93-d02c-4141-a278-834bc0dec6e3";
 const address = "8BRSnNBGszJCxYJ1xhqsacBVsfM2tr6UdaoBKv52YnxB";
-vi.mock("@/components/peragus/customer-wallet-link", () => ({
+vi.mock("@/components/peragus/customer-wallet-link", () => ({ CustomerWalletLink: () => null }));
+vi.mock("@/components/peragus/use-linked-wallet", () => ({
   CustomerWalletLink: () => null,
   useLinkedWallet: () => ({
     linked: {
