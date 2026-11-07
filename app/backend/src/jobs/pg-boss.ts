@@ -29,6 +29,20 @@ import {
 
 const QUEUE_POLICY = "standard";
 
+// pg-boss can emit a registration failure while start() resolves. Continuing
+// after that failure leaves its heartbeat with a null started_on indefinitely.
+export async function startJobQueue(boss: Pick<PgBoss, "on" | "off" | "start">): Promise<void> {
+  let failure: unknown;
+  const capture = (error: unknown) => { failure ??= error; };
+  boss.on("error", capture);
+  try {
+    await boss.start();
+    if (failure) throw failure;
+  } finally {
+    boss.off("error", capture);
+  }
+}
+
 export function createJobQueue(
   connectionString: string,
   useSsl: boolean,
@@ -36,7 +50,9 @@ export function createJobQueue(
   const baseOptions = {
     connectionString,
     schema: "pgboss",
-    max: 5,
+    max: 2,
+    connectionTimeoutMillis: 5_000,
+    idleTimeoutMillis: 30_000,
   };
 
   return new PgBoss(
