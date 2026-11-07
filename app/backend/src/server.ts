@@ -51,7 +51,9 @@ import { PostgresIndividualDraftRepository } from "./repositories/postgres-indiv
 import { PostgresCustomerWebhookProcessor } from "./repositories/postgres-customer-webhook.js";
 import { OzavSandboxCustomerService } from "./application/ozav-sandbox-customer.js";
 import { PostgresSandboxCustomerLinkRepository } from "./repositories/postgres-sandbox-customer-link.js";
-import { assertNotificationEnvironment } from "./notifications/runtime-safety.js";
+import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
+import { verifyDatabaseConnection } from "./database/readiness.js";
+import { randomUUID } from "node:crypto";
 import { INVITE_STAGING_ORIGIN } from "./invites/invite-email-template.js";
 import { createSupabaseAuthenticator } from "./auth/supabase-authenticator.js";
 import { PostgresCustomerRepository } from "./repositories/postgres-customer-repository.js";
@@ -101,6 +103,7 @@ import {
   PgBossOzavOfframpReconciliationScheduler,
   PgBossOzavReconciliationScheduler,
   PgBossSettlementJobPublisher,
+  startJobQueue,
 } from "./jobs/pg-boss.js";
 import type { OzavOfframpReconciliationScheduler } from "./jobs/ozav-offramp-reconciliation.js";
 import {
@@ -119,6 +122,7 @@ import { PostgresSolanaSettlementConfirmationRepository } from "./repositories/s
 import { PostgresSolanaSettlementPreparationRepository } from "./repositories/solana-settlement-preparation-repository.js";
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
 
+console.info(JSON.stringify(deploymentConfigurationAudit()));
 const env = getEnv();
 const onboardingEmailConfig = notificationConfig();
 if (process.env.RAILWAY_ENVIRONMENT_NAME === "production" || env.PERAGUS_DEPLOYMENT_ENV === "production") {
@@ -269,11 +273,12 @@ if (env.DATABASE_URL) {
   const jobQueue = createJobQueue(env.DATABASE_URL, env.DATABASE_SSL);
 
   jobQueue.on("error", (error) => {
-    console.error("PG-BOSS ERROR:", error);
+    console.error(JSON.stringify({...notificationFailure(error, "queue", env.PERAGUS_DEPLOYMENT_ENV, randomUUID()), event: "job_queue_failure"}));
   });
 
   try {
-    await jobQueue.start();
+    if (process.env.RAILWAY_ENVIRONMENT_NAME) await verifyDatabaseConnection(databasePool);
+    await startJobQueue(jobQueue);
     await ensureSettlementQueues(jobQueue);
   } catch (error) {
     await jobQueue.stop().catch(() => undefined);

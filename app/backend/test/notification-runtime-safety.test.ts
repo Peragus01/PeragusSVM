@@ -4,6 +4,8 @@ import {
   assertNotificationEnvironment,
   notificationFailure,
   notificationStep,
+  deploymentConfigurationAudit,
+  assertDeploymentDatabase,
 } from "../src/notifications/runtime-safety.js";
 const fixture = (project = "lybdkqkbwlfwvmmvstzi") => ({
   DATABASE_URL: `postgresql://postgres.${project}:synthetic@aws-1-sa-east-1.pooler.supabase.com:5432/postgres`,
@@ -16,6 +18,89 @@ const fixture = (project = "lybdkqkbwlfwvmmvstzi") => ({
   PERAGUS_SANDBOX_DEMO_ENABLED: false,
   CUSTOMER_VERIFICATION_SIMULATION_ENABLED: false,
   CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED: false,
+});
+
+it("validates invitation database isolation independently of financial provider credentials", () => {
+  const env = {
+    DATABASE_URL: fixture().DATABASE_URL,
+    SUPABASE_URL: fixture().SUPABASE_URL,
+  };
+  expect(
+    assertDeploymentDatabase(
+      env,
+      { RAILWAY_ENVIRONMENT_NAME: "staging" },
+      "staging",
+    ),
+  ).toBe("staging");
+  expect(() =>
+    assertDeploymentDatabase(
+      env,
+      { RAILWAY_ENVIRONMENT_NAME: "production" },
+      "production",
+    ),
+  ).toThrow("DATABASE_MISMATCH");
+});
+
+it("identifies the failed database comparison without exposing configuration", () => {
+  try {
+    assertNotificationEnvironment(fixture(), {
+      ONBOARDING_EMAIL_DEPLOYMENT_ENV: "production",
+    });
+  } catch (error) {
+    const log = notificationFailure(
+      error,
+      "configuration",
+      "production",
+      "synthetic",
+    );
+    expect(log.fields).toEqual(["DATABASE_USER_PROJECT", "SUPABASE_URL"]);
+    expect(JSON.stringify(log)).not.toContain("synthetic@");
+    return;
+  }
+  throw Error("Expected rejection");
+});
+
+it("rejects transaction pooling, other databases and URL authority overrides", () => {
+  for (const url of [
+    fixture().DATABASE_URL.replace(":5432/", ":6543/"),
+    fixture().DATABASE_URL.replace("/postgres", "/other"),
+    fixture().DATABASE_URL + "?host=other",
+  ])
+    expect(() =>
+      assertNotificationEnvironment(
+        { ...fixture(), DATABASE_URL: url },
+        { ONBOARDING_EMAIL_DEPLOYMENT_ENV: "staging" },
+      ),
+    ).toThrow("DATABASE_MISMATCH");
+});
+
+it("classifies the session pool limit separately from a generic XX000", () => {
+  const error = Object.assign(
+    new Error("(EMAXCONNSESSION) private@example.com"),
+    { code: "XX000" },
+  );
+  const log = notificationFailure(error, "cycle", "staging", "synthetic");
+  expect(log.database_reason).toBe("EMAXCONNSESSION");
+  expect(log.retry).toBe(true);
+  expect(JSON.stringify(log)).not.toContain("private@example.com");
+});
+
+it("audits only known public identifiers and booleans", () => {
+  const result = deploymentConfigurationAudit({
+    ...fixture(),
+    DATABASE_SSL: "true",
+    RAILWAY_ENVIRONMENT_NAME: "production",
+  });
+  expect(result.database_project).toBe("lybdkqkbwlfwvmmvstzi");
+  expect(result.auth_project).toBe("lybdkqkbwlfwvmmvstzi");
+  expect(JSON.stringify(result)).not.toContain("synthetic");
+  expect(
+    JSON.stringify(
+      deploymentConfigurationAudit({
+        DATABASE_URL: "postgres://private:secret@private.example/secret",
+      }),
+    ),
+  ).not.toContain("secret");
 });
 describe("notification deployment isolation", () => {
   it("pins staging and production independently", () => {

@@ -2,11 +2,13 @@ import "dotenv/config";
 import { getEnv } from "./config/env.js";
 import {
   assertNotificationEnvironment,
+  deploymentConfigurationAudit,
   notificationFailure,
   notificationStep,
 } from "./notifications/runtime-safety.js";
 import { randomUUID } from "node:crypto";
 import { createDatabasePool } from "./database/pool.js";
+import { verifyDatabaseConnection } from "./database/readiness.js";
 import { notificationConfig } from "./notifications/config.js";
 import { OnboardingEmailProcessor } from "./notifications/onboarding-email.js";
 import { ResendSender } from "./notifications/resend.js";
@@ -22,6 +24,7 @@ import { RegistrationSnapshotService } from "./onboarding/customer-submission-se
 import { OzavClient } from "./providers/ozav-client.js";
 
 async function main() {
+  console.info(JSON.stringify(deploymentConfigurationAudit()));
   const config = notificationConfig();
   if (!config.enabled) {
     try {
@@ -167,6 +170,9 @@ async function main() {
     }
   }
   try {
+    await notificationStep("database_readiness", () =>
+      verifyDatabaseConnection(pool),
+    );
     // Fail before advertising readiness if the deployed schema is incomplete.
     const required = [
       "peragus_customers",
