@@ -20,6 +20,11 @@ export interface CustomerOperation {
     recovery_required: boolean;
     result_path: string;
   } | null;
+  refund_request?: {
+    id: string;
+    state: import("./refunds").RefundState;
+    request_path: string;
+  } | null;
   observation_freshness: "not_evaluated";
   onchain_delivery_verified: false;
   mainnet_execution: false;
@@ -71,14 +76,14 @@ const sandbox = (value: Record<string, unknown>) =>
   value["onchain_delivery_verified"] === false &&
   value["mainnet_execution"] === false;
 
-async function read(path: string, token: string, signal?: AbortSignal): Promise<unknown> {
+export async function read(path: string, token: string, signal?: AbortSignal): Promise<unknown> {
   if (!token || token.length > 8185 || !/^[A-Za-z0-9._-]+$/.test(token))
     throw new CustomerReadError("AUTH_REQUIRED", 401);
   try {
     const response = await fetch(`/api${path}`, {
       method: "GET",
       headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
-      credentials: "omit",
+      credentials: "same-origin",
       cache: "no-store",
       redirect: "error",
       ...(signal ? { signal } : {}),

@@ -51,7 +51,10 @@ import { PostgresIndividualDraftRepository } from "./repositories/postgres-indiv
 import { PostgresCustomerWebhookProcessor } from "./repositories/postgres-customer-webhook.js";
 import { OzavSandboxCustomerService } from "./application/ozav-sandbox-customer.js";
 import { PostgresSandboxCustomerLinkRepository } from "./repositories/postgres-sandbox-customer-link.js";
-import { assertSmokeTestSafety } from "./jobs/worker-smoke-test.js";
+import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
+import { verifyDatabaseConnection } from "./database/readiness.js";
+import { randomUUID } from "node:crypto";
+import { INVITE_STAGING_ORIGIN } from "./invites/invite-email-template.js";
 import { createSupabaseAuthenticator } from "./auth/supabase-authenticator.js";
 import { PostgresCustomerRepository } from "./repositories/postgres-customer-repository.js";
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -100,6 +103,7 @@ import {
   PgBossOzavOfframpReconciliationScheduler,
   PgBossOzavReconciliationScheduler,
   PgBossSettlementJobPublisher,
+  startJobQueue,
 } from "./jobs/pg-boss.js";
 import type { OzavOfframpReconciliationScheduler } from "./jobs/ozav-offramp-reconciliation.js";
 import {
@@ -118,8 +122,12 @@ import { PostgresSolanaSettlementConfirmationRepository } from "./repositories/s
 import { PostgresSolanaSettlementPreparationRepository } from "./repositories/solana-settlement-preparation-repository.js";
 import type { SettlementRepository } from "./repositories/settlement-repository.js";
 
+console.info(JSON.stringify(deploymentConfigurationAudit()));
 const env = getEnv();
 const onboardingEmailConfig = notificationConfig();
+if (process.env.RAILWAY_ENVIRONMENT_NAME === "production" || env.PERAGUS_DEPLOYMENT_ENV === "production") {
+  assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV});
+}
 
 // The executable API has no unauthenticated fallback. buildApp supports isolated
 // dependency-injected tests, but the deployed server must always enforce access.
@@ -161,12 +169,8 @@ if (
   env.PILOT_INVITES_ENABLED ||
   env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED
 ) {
-  assertSmokeTestSafety(env);
-  if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co") {
-    throw new Error(
-      "Settlement drafts require the pinned staging Auth project",
-    );
-  }
+  assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV});
+
 }
 if (
   (env.OZAV_SANDBOX_CUSTOMERS_ENABLED ||
@@ -193,8 +197,8 @@ if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
 }
 const documentOrigins = new Set(env.CUSTOMER_DOCUMENT_UPLOAD_ORIGINS.split(",").map(v=>v.trim()).filter(Boolean));
 if (env.CUSTOMER_DOCUMENTS_ENABLED) {
-  assertSmokeTestSafety(env);
-  if (env.SUPABASE_URL !== "https://lybdkqkbwlfwvmmvstzi.supabase.co" || !env.OZAV_API_KEY?.startsWith("ozav_sk_test_")
+  assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV});
+  if (!env.OZAV_API_KEY?.startsWith("ozav_sk_test_")
     || !env.CUSTOMER_SUBMISSION_ENABLED || !env.API_RATE_LIMITS_ENABLED || !documentOrigins.size)
     throw new Error("DOCUMENT_STAGING_CONFIGURATION_REQUIRED");
   for (const value of documentOrigins) {
@@ -269,11 +273,12 @@ if (env.DATABASE_URL) {
   const jobQueue = createJobQueue(env.DATABASE_URL, env.DATABASE_SSL);
 
   jobQueue.on("error", (error) => {
-    console.error("PG-BOSS ERROR:", error);
+    console.error(JSON.stringify({...notificationFailure(error, "queue", env.PERAGUS_DEPLOYMENT_ENV, randomUUID()), event: "job_queue_failure"}));
   });
 
   try {
-    await jobQueue.start();
+    if (process.env.RAILWAY_ENVIRONMENT_NAME) await verifyDatabaseConnection(databasePool);
+    await startJobQueue(jobQueue);
     await ensureSettlementQueues(jobQueue);
   } catch (error) {
     await jobQueue.stop().catch(() => undefined);
@@ -499,6 +504,7 @@ const app = await buildApp({
             ? new InviteEmailCipher(env.INVITE_EMAIL_ENCRYPTION_KEY!, env.INVITE_EMAIL_ENCRYPTION_KEY_ID!)
             : undefined,
           env.INVITE_EMAIL_FROM,
+          env.PERAGUS_DEPLOYMENT_ENV === "production" ? "https://www.peragus.com.br" : INVITE_STAGING_ORIGIN,
         ),
       }
     : {}),

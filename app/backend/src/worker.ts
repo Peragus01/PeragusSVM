@@ -22,9 +22,13 @@ import {
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
 import { createDatabasePool } from "./database/pool.js";
+import { verifyDatabaseConnection } from "./database/readiness.js";
+import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
+import { randomUUID } from "node:crypto";
 import {
   createJobQueue,
   ensureSettlementQueues,
+  startJobQueue,
   PgBossOzavOfframpReconciliationScheduler,
   PgBossOzavReconciliationScheduler,
 } from "./jobs/pg-boss.js";
@@ -52,7 +56,11 @@ import { PostgresOzavOnrampRepository } from "./repositories/postgres-ozav-onram
 import { PostgresSettlementRepository } from "./repositories/postgres-settlement-repository.js";
 import { PostgresSolanaContingencyReserveRepository } from "./repositories/solana-contingency-reserve-repository.js";
 
+console.info(JSON.stringify(deploymentConfigurationAudit()));
 const env = getEnv();
+if (process.env.RAILWAY_ENVIRONMENT_NAME) {
+  assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV: env.PERAGUS_DEPLOYMENT_ENV});
+}
 
 if (!env.DATABASE_URL) {
   throw new Error(
@@ -242,7 +250,7 @@ const ozavOfframpReconciliationScheduler =
   );
 
 boss.on("error", (error) => {
-  console.error("PG-BOSS ERROR:", error);
+  console.error(JSON.stringify({...notificationFailure(error, "queue", env.PERAGUS_DEPLOYMENT_ENV, randomUUID()), event: "job_queue_failure"}));
 });
 
 let shuttingDown = false;
@@ -281,7 +289,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
-  await boss.start();
+  if (process.env.RAILWAY_ENVIRONMENT_NAME) await verifyDatabaseConnection(pool);
+  await startJobQueue(boss);
   await ensureSettlementQueues(boss);
   if(env.CUSTOMER_RECONCILIATION_ENABLED){
     await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!)));
