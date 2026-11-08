@@ -6,6 +6,7 @@ import {
   CustomerPublicLayout,
 } from "@/components/peragus/customer-ui";
 import { CustomerSessionError, useCustomerSession } from "@/lib/peragus/customer-session";
+import type { OperatorMfaEnrollment } from "@/lib/peragus/customer-session-context";
 import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
 
 export const Route = createFileRoute("/operador/convites")({ component: OperatorInvitesPage });
@@ -111,7 +112,12 @@ function OperatorInvitesPage() {
                 Esta área exige uma conta separada de operador, sem perfil de cliente.
               </CustomerNotice>
             ) : (
-              <InviteConsole token={session.accessToken} verifyMfa={session.verifyOperatorMfa} />
+              <InviteConsole
+                token={session.accessToken}
+                verifyMfa={session.verifyOperatorMfa}
+                enrollMfa={session.enrollOperatorMfa}
+                verifyMfaEnrollment={session.verifyOperatorMfaEnrollment}
+              />
             )}
           </>
         )}
@@ -128,9 +134,13 @@ function OperatorInvitesPage() {
 export function InviteConsole({
   token,
   verifyMfa,
+  enrollMfa,
+  verifyMfaEnrollment,
 }: {
   token: string;
   verifyMfa: (code: string) => Promise<void>;
+  enrollMfa?: () => Promise<OperatorMfaEnrollment>;
+  verifyMfaEnrollment?: (factorId: string, code: string) => Promise<void>;
 }) {
   const [targetEmail, setTargetEmail] = useState("");
   const [hours, setHours] = useState(24);
@@ -141,6 +151,7 @@ export function InviteConsole({
   const [info, setInfo] = useState("");
   const [mfaNeeded, setMfaNeeded] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
+  const [mfaEnrollment, setMfaEnrollment] = useState<OperatorMfaEnrollment | null>(null);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const pending = useRef<{
@@ -176,15 +187,39 @@ export function InviteConsole({
     setBusy(true);
     setError("");
     try {
-      await verifyMfa(mfaCode);
+      if (mfaEnrollment) {
+        if (!verifyMfaEnrollment)
+          throw new CustomerSessionError("MFA_REQUIRED", "Cadastro indisponível.");
+        await verifyMfaEnrollment(mfaEnrollment.factorId, mfaCode);
+      } else {
+        await verifyMfa(mfaCode);
+      }
       setMfaNeeded(false);
       setMfaCode("");
+      setMfaEnrollment(null);
       setInfo("MFA confirmado. Você já pode gerar o convite ou atualizar o histórico.");
     } catch (err) {
       setError(
         err instanceof CustomerSessionError && err.code === "MFA_REQUIRED"
           ? err.message
           : "Não foi possível confirmar o MFA. Verifique o código e tente novamente.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function startMfaEnrollment() {
+    if (!enrollMfa || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      setMfaEnrollment(await enrollMfa());
+      setInfo("Escaneie o QR code e confirme o primeiro código antes de sair desta página.");
+    } catch (err) {
+      setError(
+        err instanceof CustomerSessionError
+          ? err.message
+          : "Não foi possível cadastrar o autenticador.",
       );
     } finally {
       setBusy(false);
@@ -279,6 +314,39 @@ export function InviteConsole({
       {info && <CustomerNotice>{info}</CustomerNotice>}
       {mfaNeeded && (
         <CustomerPanel title="Confirmar autenticação multifator">
+          {!mfaEnrollment && enrollMfa && (
+            <>
+              <p className="customer-muted">
+                Se esta é a primeira entrada desta conta de operador, cadastre um aplicativo
+                autenticador antes de informar o código.
+              </p>
+              <button
+                type="button"
+                className="customer-button-secondary"
+                disabled={busy}
+                onClick={() => void startMfaEnrollment()}
+              >
+                Configurar autenticador
+              </button>
+            </>
+          )}
+          {mfaEnrollment && (
+            <div className="customer-row">
+              <img
+                src={mfaEnrollment.qrCode}
+                width={220}
+                height={220}
+                alt="QR code para cadastrar o autenticador"
+              />
+              <span style={{ overflowWrap: "anywhere" }}>
+                Chave manual: <code>{mfaEnrollment.secret}</code>
+              </span>
+              <p className="customer-muted">
+                Esta chave é confidencial. Não envie, não registre em chamados e não salve em texto
+                aberto. Depois de escanear, informe abaixo o código de seis dígitos.
+              </p>
+            </div>
+          )}
           <form onSubmit={(event) => void verify(event)}>
             <label className="customer-field">
               Código do autenticador
@@ -293,7 +361,7 @@ export function InviteConsole({
               />
             </label>
             <button className="customer-button" disabled={busy}>
-              Confirmar MFA
+              {mfaEnrollment ? "Ativar MFA" : "Confirmar MFA"}
             </button>
           </form>
         </CustomerPanel>
