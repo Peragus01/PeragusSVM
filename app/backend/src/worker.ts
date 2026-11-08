@@ -283,7 +283,17 @@ async function shutdown(
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     void shutdown(signal).catch((error) => {
-      console.error("WORKER SHUTDOWN ERROR:", error);
+      console.error(
+        JSON.stringify({
+          ...notificationFailure(
+            error,
+            "shutdown",
+            env.PERAGUS_DEPLOYMENT_ENV,
+            randomUUID(),
+          ),
+          event: "worker_shutdown_failure",
+        }),
+      );
       process.exitCode = 1;
     });
   });
@@ -459,7 +469,17 @@ try {
     }),
   );
 } catch (error) {
-  console.error("WORKER STARTUP ERROR:", error);
+  console.error(
+    JSON.stringify({
+      ...notificationFailure(
+        error,
+        "startup",
+        env.PERAGUS_DEPLOYMENT_ENV,
+        randomUUID(),
+      ),
+      event: "worker_startup_failure",
+    }),
+  );
 
   await boss.stop().catch(() => undefined);
   await pool.end().catch(() => undefined);

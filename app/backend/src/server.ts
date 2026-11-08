@@ -283,7 +283,18 @@ if (env.DATABASE_URL) {
   } catch (error) {
     await jobQueue.stop().catch(() => undefined);
     await databasePool.end().catch(() => undefined);
-    throw error;
+    console.error(
+      JSON.stringify({
+        ...notificationFailure(
+          error,
+          "database_startup",
+          env.PERAGUS_DEPLOYMENT_ENV,
+          randomUUID(),
+        ),
+        event: "api_startup_failure",
+      }),
+    );
+    process.exit(1);
   }
 
   pool = databasePool;
@@ -899,7 +910,15 @@ try {
     port: env.PORT,
   });
 } catch (error) {
-  app.log.error(error);
+  app.log.error({
+    ...notificationFailure(
+      error,
+      "http_startup",
+      env.PERAGUS_DEPLOYMENT_ENV,
+      randomUUID(),
+    ),
+    event: "api_startup_failure",
+  });
   await app.close();
   process.exitCode = 1;
 }
