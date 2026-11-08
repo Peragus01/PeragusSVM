@@ -46,11 +46,12 @@ export async function startJobQueue(boss: Pick<PgBoss, "on" | "off" | "start">):
 export function createJobQueue(
   connectionString: string,
   useSsl: boolean,
+  maxConnections = 2,
 ): PgBoss {
   const baseOptions = {
     connectionString,
     schema: "pgboss",
-    max: 2,
+    max: maxConnections,
     connectionTimeoutMillis: 5_000,
     idleTimeoutMillis: 30_000,
   };

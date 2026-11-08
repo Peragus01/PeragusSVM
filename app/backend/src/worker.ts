@@ -233,6 +233,7 @@ const ozavInitiator =
 const boss = createJobQueue(
   env.DATABASE_URL,
   env.DATABASE_SSL,
+  4,
 );
 
 const ozavReconciliationScheduler =
