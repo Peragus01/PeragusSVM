@@ -3,6 +3,7 @@ import {
   Context,
   type AuthTokens,
   type CustomerIdentity,
+  type OperatorMfaEnrollment,
   type SessionState,
 } from "./customer-session-context";
 import {
@@ -66,6 +67,69 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
     if (!current) throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
     const who = await fetchIdentity(current.access_token, signal);
     if (tokensRef.current === current && !signal?.aborted) setIdentity(who);
+  }, []);
+  const enrollOperatorMfa = useCallback(async (): Promise<OperatorMfaEnrollment> => {
+    const current = tokensRef.current;
+    if (!current) throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
+    const result = await supabaseAuth(
+      "factors",
+      { factor_type: "totp", friendly_name: "Peragus Operador" },
+      "POST",
+      current.access_token,
+    );
+    const totp = result["totp"];
+    const factorId = result["id"];
+    const qrCode =
+      totp && typeof totp === "object" ? (totp as Record<string, unknown>)["qr_code"] : undefined;
+    const secret =
+      totp && typeof totp === "object" ? (totp as Record<string, unknown>)["secret"] : undefined;
+    if (
+      typeof factorId !== "string" ||
+      !/^[a-zA-Z0-9-]+$/.test(factorId) ||
+      typeof qrCode !== "string" ||
+      !qrCode.startsWith("data:image/svg+xml") ||
+      qrCode.length > 100_000 ||
+      typeof secret !== "string" ||
+      !/^[A-Z2-7]{16,128}$/.test(secret)
+    )
+      throw new CustomerSessionError(
+        "MFA_INVALID_RESPONSE",
+        "Não foi possível iniciar o cadastro do autenticador.",
+      );
+    return {
+      factorId,
+      qrCode,
+      secret,
+    };
+  }, []);
+  const verifyOperatorMfaEnrollment = useCallback(async (factorId: string, code: string) => {
+    const current = tokensRef.current;
+    const turn = generation.current;
+    if (!current || !/^[a-zA-Z0-9-]+$/.test(factorId) || !/^[0-9]{6}$/.test(code))
+      throw new CustomerSessionError("MFA_REQUIRED", "Informe os seis dígitos do autenticador.");
+    const challenge = await supabaseAuth(
+      `factors/${factorId}/challenge`,
+      {},
+      "POST",
+      current.access_token,
+    );
+    if (typeof challenge["id"] !== "string" || !/^[a-zA-Z0-9-]+$/.test(challenge["id"]))
+      throw new CustomerSessionError(
+        "MFA_INVALID_RESPONSE",
+        "Não foi possível iniciar a verificação.",
+      );
+    const next = parseTokens(
+      await supabaseAuth(
+        `factors/${factorId}/verify`,
+        { challenge_id: challenge["id"], code },
+        "POST",
+        current.access_token,
+      ),
+    );
+    if (turn !== generation.current || tokensRef.current !== current)
+      throw new CustomerSessionError("SESSION_CHANGED", "A sessão mudou. Entre novamente.");
+    tokensRef.current = next;
+    setTokens(next);
   }, []);
   const verifyOperatorMfa = useCallback(async (code: string) => {
     const current = tokensRef.current;
@@ -158,6 +222,8 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
         configured,
         login,
         logout,
+        enrollOperatorMfa,
+        verifyOperatorMfaEnrollment,
         verifyOperatorMfa,
         reloadIdentity,
       }}
