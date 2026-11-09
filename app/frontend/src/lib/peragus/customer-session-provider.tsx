@@ -19,8 +19,14 @@ const operatorMfaFriendlyName = "Peragus Operador";
 function totpQrCodeDataUrl(value: unknown) {
   if (typeof value !== "string" || value.length === 0 || value.length > 100_000) return null;
   if (value.startsWith("data:image/svg+xml")) return value;
-  const svg = value.trim();
-  if (!svg.startsWith("<svg") || !svg.endsWith("</svg>")) return null;
+  // GoTrue returns the generated SVG directly. Depending on the deployed SVG
+  // encoder version, it can include an XML declaration before the root node.
+  // Keep only the SVG document instead of rejecting a valid response or
+  // carrying arbitrary prefix/suffix bytes into the data URL.
+  const svgStart = value.indexOf("<svg");
+  const svgEnd = value.lastIndexOf("</svg>");
+  if (svgStart < 0 || svgEnd < svgStart) return null;
+  const svg = value.slice(svgStart, svgEnd + "</svg>".length);
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
