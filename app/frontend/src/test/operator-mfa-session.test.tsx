@@ -30,6 +30,15 @@ function Probe() {
       >
         MFA
       </button>
+      <button
+        onClick={() => {
+          void session.enrollOperatorMfa().then((value) => {
+            void session.verifyOperatorMfaEnrollment(value.factorId, "123456");
+          });
+        }}
+      >
+        Enroll MFA
+      </button>
       <button onClick={session.logout}>Logout</button>
       <output>{session.accessToken ?? "no-session"}</output>
     </>
@@ -49,6 +58,35 @@ async function login() {
   await screen.findByText("synthetic.aal1");
 }
 describe("operator MFA in existing memory-only session", () => {
+  it("enrolls a TOTP factor, verifies it and promotes the in-memory session", async () => {
+    const qrCode = "data:image/svg+xml;base64,PHN2Zy8+";
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(json(tokens("synthetic.aal1")))
+      .mockResolvedValueOnce(
+        json({ data: { user: { id, email: "operator@example.test" }, customer: null } }),
+      )
+      .mockResolvedValueOnce(
+        json({ id, type: "totp", totp: { qr_code: qrCode, secret: "JBSWY3DPEHPK3PXP" } }),
+      )
+      .mockResolvedValueOnce(json({ id: "enrollment-challenge" }))
+      .mockResolvedValueOnce(json(tokens("synthetic.aal2")));
+    await login();
+    fireEvent.click(screen.getByText("Enroll MFA"));
+    await screen.findByText("synthetic.aal2");
+    expect(fetcher.mock.calls[2]![0]).toBe("https://syntheticproject.supabase.co/auth/v1/factors");
+    expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toEqual({
+      factor_type: "totp",
+      friendly_name: "Peragus Operador",
+    });
+    expect(fetcher.mock.calls[3]![0]).toBe(
+      `https://syntheticproject.supabase.co/auth/v1/factors/${id}/challenge`,
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[4]![1]?.body))).toEqual({
+      challenge_id: "enrollment-challenge",
+      code: "123456",
+    });
+  });
   it("gets verified factors, challenges, verifies and replaces the session token", async () => {
     const fetcher = vi
       .spyOn(globalThis, "fetch")

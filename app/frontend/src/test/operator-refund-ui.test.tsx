@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
     login: vi.fn(),
     logout: vi.fn(),
     verifyOperatorMfa: vi.fn(),
+    enrollOperatorMfa: vi.fn(),
+    verifyOperatorMfaEnrollment: vi.fn(),
   },
 }));
 vi.mock("@/lib/peragus/customer-session", () => ({ useCustomerSession: () => mocks.session }));

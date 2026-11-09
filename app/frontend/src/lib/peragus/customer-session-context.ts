@@ -13,6 +13,11 @@ export interface CustomerIdentity {
   customer: CustomerProfile | null;
 }
 export type AuthTokens = { access_token: string; refresh_token: string; expires_at: number };
+export type OperatorMfaEnrollment = {
+  factorId: string;
+  qrCode: string;
+  secret: string;
+};
 export type SessionState = "unauthenticated" | "loading" | "authenticated";
 export type SessionContextValue = {
   status: SessionState;
@@ -20,6 +25,8 @@ export type SessionContextValue = {
   accessToken: string | null;
   configured: boolean;
   login: (email: string, password: string) => Promise<void>;
+  enrollOperatorMfa: () => Promise<OperatorMfaEnrollment>;
+  verifyOperatorMfaEnrollment: (factorId: string, code: string) => Promise<void>;
   verifyOperatorMfa: (code: string) => Promise<void>;
   logout: () => void;
   reloadIdentity: (signal?: AbortSignal) => Promise<void>;
