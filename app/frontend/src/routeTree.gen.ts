@@ -17,6 +17,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as RecuperarSenhaRouteImport } from './routes/recuperar-senha'
 import { Route as SettlementsRouteImport } from './routes/settlements'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as ApiRegistrationSignupRouteImport } from './routes/api/registration.signup'
 import { Route as AppIndexRouteImport } from './routes/app.index'
 import { Route as AppAuditoriaRouteImport } from './routes/app.auditoria'
 import { Route as AppCarteiraRouteImport } from './routes/app.carteira'
@@ -67,6 +68,11 @@ const SettlementsRoute = SettlementsRouteImport.update({
 const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
   path: '/api/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRegistrationSignupRoute = ApiRegistrationSignupRouteImport.update({
+  id: '/api/registration/signup',
+  path: '/api/registration/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
@@ -134,6 +140,7 @@ export interface FileRoutesByFullPath {
   '/recuperar-senha': typeof RecuperarSenhaRoute
   '/settlements': typeof SettlementsRoute
   '/api/$': typeof ApiSplatRoute
+  '/api/registration/signup': typeof ApiRegistrationSignupRoute
   '/app/auditoria': typeof AppAuditoriaRoute
   '/app/carteira': typeof AppCarteiraRoute
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
@@ -154,6 +161,7 @@ export interface FileRoutesByTo {
   '/recuperar-senha': typeof RecuperarSenhaRoute
   '/settlements': typeof SettlementsRoute
   '/api/$': typeof ApiSplatRoute
+  '/api/registration/signup': typeof ApiRegistrationSignupRoute
   '/app/auditoria': typeof AppAuditoriaRoute
   '/app/carteira': typeof AppCarteiraRoute
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
@@ -175,6 +183,7 @@ export interface FileRoutesById {
   '/recuperar-senha': typeof RecuperarSenhaRoute
   '/settlements': typeof SettlementsRoute
   '/api/$': typeof ApiSplatRoute
+  '/api/registration/signup': typeof ApiRegistrationSignupRoute
   '/app/auditoria': typeof AppAuditoriaRoute
   '/app/carteira': typeof AppCarteiraRoute
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
@@ -198,6 +207,7 @@ export interface FileRouteTypes {
     | '/recuperar-senha'
     | '/settlements'
     | '/api/$'
+    | '/api/registration/signup'
     | '/app/auditoria'
     | '/app/carteira'
     | '/app/comprar-usdt'
@@ -218,6 +228,7 @@ export interface FileRouteTypes {
     | '/recuperar-senha'
     | '/settlements'
     | '/api/$'
+    | '/api/registration/signup'
     | '/app/auditoria'
     | '/app/carteira'
     | '/app/comprar-usdt'
@@ -238,6 +249,7 @@ export interface FileRouteTypes {
     | '/recuperar-senha'
     | '/settlements'
     | '/api/$'
+    | '/api/registration/signup'
     | '/app/auditoria'
     | '/app/carteira'
     | '/app/comprar-usdt'
@@ -260,6 +272,7 @@ export interface RootRouteChildren {
   RecuperarSenhaRoute: typeof RecuperarSenhaRoute
   SettlementsRoute: typeof SettlementsRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  ApiRegistrationSignupRoute: typeof ApiRegistrationSignupRoute
   OperadorConvitesRoute: typeof OperadorConvitesRoute
   OperadorEstornosRoute: typeof OperadorEstornosRoute
 }
@@ -320,6 +333,13 @@ declare module '@tanstack/react-router' {
       path: '/api/$'
       fullPath: '/api/$'
       preLoaderRoute: typeof ApiSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/registration/signup': {
+      id: '/api/registration/signup'
+      path: '/api/registration/signup'
+      fullPath: '/api/registration/signup'
+      preLoaderRoute: typeof ApiRegistrationSignupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app/': {
@@ -447,6 +467,7 @@ const rootRouteChildren: RootRouteChildren = {
   RecuperarSenhaRoute: RecuperarSenhaRoute,
   SettlementsRoute: SettlementsRoute,
   ApiSplatRoute: ApiSplatRoute,
+  ApiRegistrationSignupRoute: ApiRegistrationSignupRoute,
   OperadorConvitesRoute: OperadorConvitesRoute,
   OperadorEstornosRoute: OperadorEstornosRoute,
 }
