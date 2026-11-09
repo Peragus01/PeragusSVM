@@ -59,13 +59,16 @@ async function login() {
 }
 describe("operator MFA in existing memory-only session", () => {
   it("enrolls a TOTP factor, verifies it and promotes the in-memory session", async () => {
-    const qrCode = "data:image/svg+xml;base64,PHN2Zy8+";
+    // The raw GoTrue endpoint returns SVG. supabase-js normally converts this
+    // to a data URL, but this application intentionally calls Auth directly.
+    const qrCode = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1z"/></svg>';
     const fetcher = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(json(tokens("synthetic.aal1")))
       .mockResolvedValueOnce(
         json({ data: { user: { id, email: "operator@example.test" }, customer: null } }),
       )
+      .mockResolvedValueOnce(json({ factors: [] }))
       .mockResolvedValueOnce(
         json({ id, type: "totp", totp: { qr_code: qrCode, secret: "JBSWY3DPEHPK3PXP" } }),
       )
@@ -74,18 +77,52 @@ describe("operator MFA in existing memory-only session", () => {
     await login();
     fireEvent.click(screen.getByText("Enroll MFA"));
     await screen.findByText("synthetic.aal2");
-    expect(fetcher.mock.calls[2]![0]).toBe("https://syntheticproject.supabase.co/auth/v1/factors");
-    expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toEqual({
+    expect(fetcher.mock.calls[2]![0]).toBe("https://syntheticproject.supabase.co/auth/v1/user");
+    expect(fetcher.mock.calls[3]![0]).toBe("https://syntheticproject.supabase.co/auth/v1/factors");
+    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toEqual({
       factor_type: "totp",
       friendly_name: "Peragus Operador",
     });
-    expect(fetcher.mock.calls[3]![0]).toBe(
+    expect(fetcher.mock.calls[4]![0]).toBe(
       `https://syntheticproject.supabase.co/auth/v1/factors/${id}/challenge`,
     );
-    expect(JSON.parse(String(fetcher.mock.calls[4]![1]?.body))).toEqual({
+    expect(JSON.parse(String(fetcher.mock.calls[5]![1]?.body))).toEqual({
       challenge_id: "enrollment-challenge",
       code: "123456",
     });
+  });
+  it("removes an incomplete TOTP factor before restarting enrollment", async () => {
+    const staleId = "22222222-2222-4222-8222-222222222222";
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(json(tokens("synthetic.aal1")))
+      .mockResolvedValueOnce(
+        json({ data: { user: { id, email: "operator@example.test" }, customer: null } }),
+      )
+      .mockResolvedValueOnce(
+        json({ factors: [{ id: staleId, factor_type: "totp", status: "unverified" }] }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        json({
+          id,
+          type: "totp",
+          totp: {
+            qr_code: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+            secret: "JBSWY3DPEHPK3PXP",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(json({ id: "enrollment-challenge" }))
+      .mockResolvedValueOnce(json(tokens("synthetic.aal2")));
+    await login();
+    fireEvent.click(screen.getByText("Enroll MFA"));
+    await screen.findByText("synthetic.aal2");
+    expect(fetcher.mock.calls[3]![0]).toBe(
+      `https://syntheticproject.supabase.co/auth/v1/factors/${staleId}`,
+    );
+    expect(fetcher.mock.calls[3]![1]?.method).toBe("DELETE");
+    expect(fetcher.mock.calls[3]![1]?.body).toBeUndefined();
   });
   it("gets verified factors, challenges, verifies and replaces the session token", async () => {
     const fetcher = vi
