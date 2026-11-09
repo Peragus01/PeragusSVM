@@ -31,7 +31,7 @@ export class CustomerSessionError extends Error {
 export async function supabaseAuth(
   path: string,
   body: object,
-  method: "POST" | "PUT" | "GET" = "POST",
+  method: "POST" | "PUT" | "GET" | "DELETE" = "POST",
   token?: string,
 ) {
   if (!origin || !configured)
@@ -52,7 +52,7 @@ export async function supabaseAuth(
         apikey: anonKey,
         ...(token ? { Authorization: "Bearer " + token } : {}),
       },
-      ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
+      ...(method === "POST" || method === "PUT" ? { body: JSON.stringify(body) } : {}),
     });
   } catch {
     throw new CustomerSessionError(

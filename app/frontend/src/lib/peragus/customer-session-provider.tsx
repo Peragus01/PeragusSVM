@@ -13,6 +13,17 @@ import {
   fetchIdentity,
   CustomerSessionError,
 } from "./customer-session-auth";
+
+const operatorMfaFriendlyName = "Peragus Operador";
+
+function totpQrCodeDataUrl(value: unknown) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 100_000) return null;
+  if (value.startsWith("data:image/svg+xml")) return value;
+  const svg = value.trim();
+  if (!svg.startsWith("<svg") || !svg.endsWith("</svg>")) return null;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 export function CustomerSessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionState>("unauthenticated");
   const [identity, setIdentity] = useState<CustomerIdentity | null>(null);
@@ -71,24 +82,54 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
   const enrollOperatorMfa = useCallback(async (): Promise<OperatorMfaEnrollment> => {
     const current = tokensRef.current;
     if (!current) throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
+
+    // Supabase keeps an enrollment as an unverified factor when the page is
+    // closed or the client rejects the one-time QR response. Starting over is
+    // intentional here: remove only incomplete TOTP factors and never touch a
+    // verified authenticator.
+    const user = await supabaseAuth("user", {}, "GET", current.access_token);
+    const factors = Array.isArray(user["factors"]) ? user["factors"] : [];
+    const verifiedTotp = factors.find(
+      (factor) =>
+        factor &&
+        typeof factor === "object" &&
+        (factor as Record<string, unknown>)["factor_type"] === "totp" &&
+        (factor as Record<string, unknown>)["status"] === "verified",
+    );
+    if (verifiedTotp)
+      throw new CustomerSessionError(
+        "MFA_ALREADY_ENROLLED",
+        "Este operador já possui um autenticador. Informe o código abaixo.",
+      );
+    for (const factor of factors) {
+      if (!factor || typeof factor !== "object") continue;
+      const item = factor as Record<string, unknown>;
+      if (
+        item["factor_type"] === "totp" &&
+        item["status"] === "unverified" &&
+        typeof item["id"] === "string" &&
+        /^[a-zA-Z0-9-]+$/.test(item["id"])
+      )
+        await supabaseAuth(`factors/${item["id"]}`, {}, "DELETE", current.access_token);
+    }
+
     const result = await supabaseAuth(
       "factors",
-      { factor_type: "totp", friendly_name: "Peragus Operador" },
+      { factor_type: "totp", friendly_name: operatorMfaFriendlyName },
       "POST",
       current.access_token,
     );
     const totp = result["totp"];
     const factorId = result["id"];
-    const qrCode =
-      totp && typeof totp === "object" ? (totp as Record<string, unknown>)["qr_code"] : undefined;
+    const qrCode = totpQrCodeDataUrl(
+      totp && typeof totp === "object" ? (totp as Record<string, unknown>)["qr_code"] : undefined,
+    );
     const secret =
       totp && typeof totp === "object" ? (totp as Record<string, unknown>)["secret"] : undefined;
     if (
       typeof factorId !== "string" ||
       !/^[a-zA-Z0-9-]+$/.test(factorId) ||
-      typeof qrCode !== "string" ||
-      !qrCode.startsWith("data:image/svg+xml") ||
-      qrCode.length > 100_000 ||
+      !qrCode ||
       typeof secret !== "string" ||
       !/^[A-Z2-7]{16,128}$/.test(secret)
     )
