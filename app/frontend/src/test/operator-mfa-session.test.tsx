@@ -61,8 +61,11 @@ describe("operator MFA in existing memory-only session", () => {
   it("enrolls a TOTP factor, verifies it and promotes the in-memory session", async () => {
     // The raw GoTrue endpoint returns SVG. supabase-js normally converts this
     // to a data URL, but this application intentionally calls Auth directly.
+    // Real QR SVGs with high error correction can exceed 100 kB.
     const qrCode =
-      '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1z"/></svg>\n';
+      '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg">' +
+      " ".repeat(110_000) +
+      '<path d="M0 0h1v1z"/></svg>\n';
     const fetcher = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(json(tokens("synthetic.aal1")))
