@@ -52,7 +52,10 @@ describe("operator invitation MFA flow", () => {
       "src",
       enrollment.qrCode,
     );
-    expect(screen.getByText(enrollment.secret)).toBeInTheDocument();
+    expect(screen.getByLabelText("Chave manual")).toHaveValue(enrollment.secret);
+    expect(screen.getByAltText("QR code para cadastrar o autenticador").parentElement).toHaveClass(
+      "customer-mfa-qr",
+    );
     fireEvent.change(screen.getByLabelText("Código do autenticador"), {
       target: { value: "123456" },
     });
