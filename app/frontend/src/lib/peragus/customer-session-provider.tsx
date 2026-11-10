@@ -15,6 +15,8 @@ import {
 } from "./customer-session-auth";
 
 const operatorMfaFriendlyName = "Peragus Operador";
+// GoTrue renders each QR module as SVG markup; keep a bounded limit that fits
+// production TOTP payloads without accepting arbitrarily large responses.
 const maxTotpQrResponseLength = 1_000_000;
 
 function totpQrCodeDataUrl(value: unknown) {
