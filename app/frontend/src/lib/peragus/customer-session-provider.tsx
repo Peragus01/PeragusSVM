@@ -15,9 +15,11 @@ import {
 } from "./customer-session-auth";
 
 const operatorMfaFriendlyName = "Peragus Operador";
+const maxTotpQrResponseLength = 1_000_000;
 
 function totpQrCodeDataUrl(value: unknown) {
-  if (typeof value !== "string" || value.length === 0 || value.length > 100_000) return null;
+  if (typeof value !== "string" || value.length === 0 || value.length > maxTotpQrResponseLength)
+    return null;
   if (value.startsWith("data:image/svg+xml")) return value;
   // GoTrue returns the generated SVG directly. Depending on the deployed SVG
   // encoder version, it can include an XML declaration before the root node.
@@ -28,6 +30,12 @@ function totpQrCodeDataUrl(value: unknown) {
   if (svgStart < 0 || svgEnd < svgStart) return null;
   const svg = value.slice(svgStart, svgEnd + "</svg>".length);
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function totpManualSecret(value: unknown) {
+  if (typeof value !== "string") return null;
+  const secret = value.trim().replace(/\s+/g, "").replace(/=+$/, "").toUpperCase();
+  return /^[A-Z2-7]{16,256}$/.test(secret) ? secret : null;
 }
 
 export function CustomerSessionProvider({ children }: { children: ReactNode }) {
@@ -130,18 +138,13 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
     const qrCode = totpQrCodeDataUrl(
       totp && typeof totp === "object" ? (totp as Record<string, unknown>)["qr_code"] : undefined,
     );
-    const secret =
-      totp && typeof totp === "object" ? (totp as Record<string, unknown>)["secret"] : undefined;
-    if (
-      typeof factorId !== "string" ||
-      !/^[a-zA-Z0-9-]+$/.test(factorId) ||
-      !qrCode ||
-      typeof secret !== "string" ||
-      !/^[A-Z2-7]{16,128}$/.test(secret)
-    )
+    const secret = totpManualSecret(
+      totp && typeof totp === "object" ? (totp as Record<string, unknown>)["secret"] : undefined,
+    );
+    if (typeof factorId !== "string" || !/^[a-zA-Z0-9-]+$/.test(factorId) || !qrCode)
       throw new CustomerSessionError(
-        "MFA_INVALID_RESPONSE",
-        "Não foi possível iniciar o cadastro do autenticador.",
+        "MFA_INVALID_QR_RESPONSE",
+        "O autenticador foi iniciado, mas o QR code retornado é inválido.",
       );
     return {
       factorId,
