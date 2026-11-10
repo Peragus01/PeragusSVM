@@ -401,6 +401,54 @@
   font-weight: 650;
   color: var(--ctext);
 }
+.customer-mfa-enrollment {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+  padding: 16px 0;
+}
+.customer-mfa-qr {
+  box-sizing: border-box;
+  width: min(312px, 100%);
+  padding: 16px;
+  border-radius: 12px;
+  background: #fff;
+}
+.customer-mfa-qr img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+.customer-mfa-secret {
+  display: grid;
+  gap: 8px;
+  width: min(560px, 100%);
+}
+.customer-mfa-secret > label {
+  color: var(--ctext);
+  font-weight: 650;
+}
+.customer-mfa-secret > div {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.customer-mfa-secret input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--cline);
+  border-radius: 10px;
+  background: #0c121c;
+  color: var(--ctext);
+  padding: 12px;
+  font: 600 14px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: 0.04em;
+}
+.customer-mfa-secret small {
+  color: var(--cmuted);
+}
 .customer-chip {
   display: inline-flex;
   align-items: center;

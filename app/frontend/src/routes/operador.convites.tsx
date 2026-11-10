@@ -152,6 +152,7 @@ export function InviteConsole({
   const [mfaNeeded, setMfaNeeded] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
   const [mfaEnrollment, setMfaEnrollment] = useState<OperatorMfaEnrollment | null>(null);
+  const [mfaSecretCopied, setMfaSecretCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const pending = useRef<{
@@ -212,6 +213,7 @@ export function InviteConsole({
     if (!enrollMfa || busy) return;
     setBusy(true);
     setError("");
+    setMfaSecretCopied(false);
     try {
       setMfaEnrollment(await enrollMfa());
       setInfo("Escaneie o QR code e confirme o primeiro código antes de sair desta página.");
@@ -331,17 +333,54 @@ export function InviteConsole({
             </>
           )}
           {mfaEnrollment && (
-            <div className="customer-row">
-              <img
-                src={mfaEnrollment.qrCode}
-                width={220}
-                height={220}
-                alt="QR code para cadastrar o autenticador"
-              />
+            <div className="customer-mfa-enrollment">
+              <div className="customer-mfa-qr">
+                <img
+                  src={mfaEnrollment.qrCode}
+                  width={280}
+                  height={280}
+                  alt="QR code para cadastrar o autenticador"
+                  draggable={false}
+                />
+              </div>
+              <p className="customer-muted">
+                No Microsoft Authenticator, escolha <b>Outra conta</b>. No Google Authenticator,
+                toque em <b>+</b> e depois em <b>Ler um QR code</b>.
+              </p>
               {mfaEnrollment.secret && (
-                <span style={{ overflowWrap: "anywhere" }}>
-                  Chave manual: <code>{mfaEnrollment.secret}</code>
-                </span>
+                <div className="customer-mfa-secret">
+                  <label htmlFor="operator-mfa-secret">Chave manual</label>
+                  <div>
+                    <input
+                      id="operator-mfa-secret"
+                      readOnly
+                      spellCheck={false}
+                      autoComplete="off"
+                      value={mfaEnrollment.secret}
+                      onFocus={(event) => event.currentTarget.select()}
+                    />
+                    <button
+                      type="button"
+                      className="customer-button-secondary"
+                      onClick={() => {
+                        if (!navigator.clipboard) {
+                          document.getElementById("operator-mfa-secret")?.focus();
+                          return;
+                        }
+                        void navigator.clipboard
+                          .writeText(mfaEnrollment.secret ?? "")
+                          .then(() => setMfaSecretCopied(true))
+                          .catch(() => {
+                            setMfaSecretCopied(false);
+                            document.getElementById("operator-mfa-secret")?.focus();
+                          });
+                      }}
+                    >
+                      {mfaSecretCopied ? "Chave copiada" : "Copiar chave"}
+                    </button>
+                  </div>
+                  <small>Use somente as letras e os números exibidos, sem espaços.</small>
+                </div>
               )}
               <p className="customer-muted">
                 Esta chave é confidencial. Não envie, não registre em chamados e não salve em texto
