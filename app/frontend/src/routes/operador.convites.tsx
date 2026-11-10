@@ -338,9 +338,11 @@ export function InviteConsole({
                 height={220}
                 alt="QR code para cadastrar o autenticador"
               />
-              <span style={{ overflowWrap: "anywhere" }}>
-                Chave manual: <code>{mfaEnrollment.secret}</code>
-              </span>
+              {mfaEnrollment.secret && (
+                <span style={{ overflowWrap: "anywhere" }}>
+                  Chave manual: <code>{mfaEnrollment.secret}</code>
+                </span>
+              )}
               <p className="customer-muted">
                 Esta chave é confidencial. Não envie, não registre em chamados e não salve em texto
                 aberto. Depois de escanear, informe abaixo o código de seis dígitos.
