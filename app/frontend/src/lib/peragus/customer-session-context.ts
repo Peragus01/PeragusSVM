@@ -16,7 +16,7 @@ export type AuthTokens = { access_token: string; refresh_token: string; expires_
 export type OperatorMfaEnrollment = {
   factorId: string;
   qrCode: string;
-  secret: string;
+  secret: string | null;
 };
 export type SessionState = "unauthenticated" | "loading" | "authenticated";
 export type SessionContextValue = {
