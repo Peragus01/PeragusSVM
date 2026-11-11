@@ -1,11 +1,11 @@
-import type { MoneyEnvironment } from "./money-environment.js";
+import { resolveMoneyEnvironment, type MoneyEnvironment, type MoneyMode } from "./money-environment.js";
 
 export interface MoneyEnvironmentProbes {
   ozavEnvironment(): Promise<string>;
   solanaGenesisHash(): Promise<string>;
 }
 
-type MismatchField = "ozav" | "solana_rpc";
+type MismatchField = "ozav" | "solana_rpc" | "deployment";
 
 const mismatch = (field: MismatchField): Error =>
   Object.assign(new Error("MONEY_ENVIRONMENT_MISMATCH"), {
@@ -42,16 +42,52 @@ export async function assertMoneyEnvironmentAtBoot(
 }
 
 export interface MoneyEnvironmentBootDeps {
-  ozavClient: { getCapabilities(): Promise<{ environment: string }> };
-  solanaConnection: { getGenesisHash(): Promise<string> };
+  ozavClient(apiKey: string, mode: MoneyMode): { getCapabilities(): Promise<{ environment: string }> };
+  solanaConnection(rpcUrl: string): { getGenesisHash(): Promise<string> };
 }
 
-/** Wires the real OZAV and Solana RPC probes into the boot assertion. */
-export const assertMoneyEnvironmentAtBootWith = (
-  money: MoneyEnvironment,
+export interface MoneyEnvironmentBootEnv {
+  PERAGUS_DEPLOYMENT_ENV: "staging" | "production";
+  SOLANA_USDT_MINT?: string | undefined;
+  SOLANA_RPC_URL?: string | undefined;
+  OZAV_API_KEY?: string | undefined;
+}
+
+/**
+ * Shared by the API and the worker. Skips only when the process is not
+ * deployed (no RAILWAY_ENVIRONMENT_NAME and not production). The Solana
+ * genesis probe always runs when deployed; the OZAV probe only with a key.
+ */
+export async function runMoneyEnvironmentBootChecks(
+  env: MoneyEnvironmentBootEnv,
   deps: MoneyEnvironmentBootDeps,
-): Promise<void> =>
-  assertMoneyEnvironmentAtBoot(money, {
-    ozavEnvironment: async () => (await deps.ozavClient.getCapabilities()).environment,
-    solanaGenesisHash: () => deps.solanaConnection.getGenesisHash(),
+  log: (entry: Record<string, unknown>) => void,
+  runtime: { RAILWAY_ENVIRONMENT_NAME?: string | undefined } = process.env,
+): Promise<void> {
+  const railway = runtime.RAILWAY_ENVIRONMENT_NAME;
+  const deployed = env.PERAGUS_DEPLOYMENT_ENV === "production" || Boolean(railway);
+  if (!deployed) {
+    log({ event: "money_environment_boot_checks_skipped" });
+    return;
+  }
+  if (
+    (railway === "production" && env.PERAGUS_DEPLOYMENT_ENV !== "production")
+    || (env.PERAGUS_DEPLOYMENT_ENV === "production" && railway !== undefined && railway !== "production")
+  ) {
+    throw mismatch("deployment");
+  }
+  const money = resolveMoneyEnvironment(env);
+  const probes: MoneyEnvironmentProbes = {
+    ozavEnvironment: env.OZAV_API_KEY
+      ? async () => (await deps.ozavClient(env.OZAV_API_KEY!, money.mode).getCapabilities()).environment
+      : async () => money.mode,
+    solanaGenesisHash: () => deps.solanaConnection(env.SOLANA_RPC_URL ?? "").getGenesisHash(),
+  };
+  await assertMoneyEnvironmentAtBoot(money, probes);
+  log({
+    event: "money_environment_verified",
+    money_mode: money.mode,
+    network: money.network,
+    ozav_probed: Boolean(env.OZAV_API_KEY),
   });
+}

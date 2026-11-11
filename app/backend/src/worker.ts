@@ -21,8 +21,8 @@ import {
 } from "./application/resolve-solana-contingency-reserve.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
-import { assertMoneyEnvironmentAtBootWith } from "./config/money-environment-boot.js";
-import { moneyModeFor, resolveMoneyEnvironment } from "./config/money-environment.js";
+import { runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
+import { moneyModeFor } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import { verifyDatabaseConnection } from "./database/readiness.js";
 import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
@@ -303,16 +303,14 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
-  if (env.OZAV_API_KEY && (env.PERAGUS_DEPLOYMENT_ENV === "production" || process.env.RAILWAY_ENVIRONMENT_NAME)) {
-    const money = resolveMoneyEnvironment(env);
-    await assertMoneyEnvironmentAtBootWith(money, {
-      ozavClient: new OzavClient({ apiKey: env.OZAV_API_KEY, mode: money.mode, attempts: 1, timeoutMs: 5000 }),
-      solanaConnection: new Connection(env.SOLANA_RPC_URL, "confirmed"),
-    });
-    console.info(JSON.stringify({ event: "money_environment_verified", money_mode: money.mode, network: money.network }));
-  } else {
-    console.info(JSON.stringify({ event: "money_environment_boot_checks_skipped" }));
-  }
+  await runMoneyEnvironmentBootChecks(
+    env,
+    {
+      ozavClient: (apiKey, mode) => new OzavClient({ apiKey, mode, attempts: 1, timeoutMs: 5000 }),
+      solanaConnection: (url) => new Connection(url, "confirmed"),
+    },
+    (e) => console.info(JSON.stringify(e)),
+  );
   if (process.env.RAILWAY_ENVIRONMENT_NAME) await verifyDatabaseConnection(pool);
   await startJobQueue(boss);
   await ensureSettlementQueues(boss);
