@@ -167,12 +167,13 @@ function OperationDetail() {
             </CustomerPanel>
             <CustomerPanel title="Pagamento e entrega">
               <CustomerNotice kind="warning">
-                Este registro é de teste, sem dinheiro real. O processamento finalizado não comprova
-                entrega na carteira.
+                {operation.environment === "test"
+                  ? "Este registro é de teste, sem dinheiro real. O processamento finalizado não comprova entrega na carteira."
+                  : "O processamento finalizado não comprova entrega na carteira."}
               </CustomerNotice>
               <div className="customer-row">
                 <span>Ambiente</span>
-                <b>Testes · Solana Devnet</b>
+                <b>{operation.environment === "test" ? "Testes · Solana Devnet" : "Solana"}</b>
               </div>
               <details className="premium-technical-details">
                 <summary>Detalhes técnicos e suporte</summary>{" "}
@@ -186,7 +187,13 @@ function OperationDetail() {
                 </div>
                 <div className="customer-row">
                   <span>Processamento finalizado</span>
-                  <b>{operation.withdrawal?.provider_completed ? "Sim, em teste" : "Não"}</b>
+                  <b>
+                    {operation.withdrawal?.provider_completed
+                      ? operation.environment === "test"
+                        ? "Sim, em teste"
+                        : "Sim"
+                      : "Não"}
+                  </b>
                 </div>
                 <div className="customer-row">
                   <span>Entrega on-chain verificada</span>

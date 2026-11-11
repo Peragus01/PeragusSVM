@@ -1,3 +1,4 @@
+import { useMoneyMode } from "@/lib/peragus/config";
 import { useEffect, useRef, useState } from "react";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import { CustomerNotice, CustomerPanel } from "./customer-ui";
@@ -29,6 +30,7 @@ export function CustomerDocuments() {
   ) : null;
 }
 function DocumentForm({ token }: { token: string }) {
+  const test = useMoneyMode() === "test";
   const [rows, setRows] = useState<DocumentRecord[]>([]);
   const [requirements, setRequirements] = useState<DocumentRequirements | null>(null);
   const [ready, setReady] = useState(false);
@@ -185,9 +187,11 @@ function DocumentForm({ token }: { token: string }) {
       />
       <div className="customer-documents-intro">
         <p>O recebimento dos arquivos não conclui a análise de identidade nem libera operações.</p>
-        <CustomerNotice>
-          Ambiente de testes: envie somente arquivos sintéticos. Não envie documentos reais.
-        </CustomerNotice>
+        {test && (
+          <CustomerNotice>
+            Ambiente de testes: envie somente arquivos sintéticos. Não envie documentos reais.
+          </CustomerNotice>
+        )}
       </div>
       {error && (
         <div role="alert">
@@ -251,7 +255,7 @@ function DocumentForm({ token }: { token: string }) {
                   }}
                 >
                   <fieldset className="customer-document-fields" disabled={busy || !!unknown}>
-                    <legend>Enviar arquivo de teste</legend>
+                    <legend>{test ? "Enviar arquivo de teste" : "Enviar arquivo"}</legend>
                     <label className="customer-field">
                       Tipo de documento
                       <select
@@ -296,7 +300,7 @@ function DocumentForm({ token }: { token: string }) {
                       Arquivo (até 4 MiB)
                       <input
                         ref={input}
-                        aria-label="Arquivo de teste"
+                        aria-label={test ? "Arquivo de teste" : "Arquivo do documento"}
                         type="file"
                         accept={
                           ["proof_of_address", "bank_statement"].includes(type)
@@ -326,7 +330,9 @@ function DocumentForm({ token }: { token: string }) {
                         checked={synthetic}
                         onChange={(e) => setSynthetic(e.target.checked)}
                       />
-                      Confirmo que este arquivo é sintético e não contém documentos reais.
+                      {test
+                        ? "Confirmo que este arquivo é sintético e não contém documentos reais."
+                        : "Confirmo que este arquivo é um documento meu, legível e atual."}
                     </label>
                     {blocked && (
                       <p>
@@ -344,7 +350,7 @@ function DocumentForm({ token }: { token: string }) {
                         !required.some((r) => r.doc_type === type && r.supported_for_upload)
                       }
                     >
-                      {busy ? "Enviando…" : "Enviar arquivo de teste"}
+                      {busy ? "Enviando…" : test ? "Enviar arquivo de teste" : "Enviar arquivo"}
                     </button>
                   </fieldset>
                 </form>

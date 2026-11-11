@@ -12,6 +12,7 @@ import { PeragusBrand } from "@/components/peragus/customer-ui";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import "@/public-home.css";
 import { useReveal } from "@/components/peragus/motion";
+import { moneyMode, useMoneyMode } from "@/lib/peragus/config";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
@@ -19,7 +20,9 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Conheça a experiência Peragus para comprar USDT em reais e acompanhar a entrega na sua carteira Solana. Acesso atual em ambiente de testes.",
+          moneyMode() === "test"
+            ? "Conheça a experiência Peragus para comprar USDT em reais e acompanhar a entrega na sua carteira Solana. Acesso atual em ambiente de testes."
+            : "Conheça a experiência Peragus para comprar USDT em reais e acompanhar a entrega na sua carteira Solana.",
       },
     ],
   }),
@@ -27,6 +30,7 @@ export const Route = createFileRoute("/")({
 });
 export function PublicHome() {
   useReveal();
+  const test = useMoneyMode() === "test";
   const { status } = useCustomerSession();
   return (
     <div className="peragus-home">
@@ -82,7 +86,9 @@ export function PublicHome() {
               Conheça a Peragus <ChevronDown size={16} />
             </a>
             <span className="public-pilot-note">
-              Piloto fechado em ambiente de testes. Operações reais ainda não disponíveis.
+              {test
+                ? "Piloto fechado em ambiente de testes. Operações reais ainda não disponíveis."
+                : "Piloto fechado, com acesso por convite."}
             </span>
           </div>
           <div className="public-conversion-visual" aria-label="Jornada de compra de USDT">
@@ -113,8 +119,12 @@ export function PublicHome() {
             </div>
             <p>
               Jornada planejada: cotação → revisão → Pix → entrega.
-              <br />
-              No ambiente atual, apenas estimativa e registro de teste.
+              {test && (
+                <>
+                  <br />
+                  No ambiente atual, apenas estimativa e registro de teste.
+                </>
+              )}
             </p>
           </div>
         </section>
@@ -213,10 +223,14 @@ export function PublicHome() {
                 "Posso criar uma conta agora?",
                 "O piloto é fechado e o cadastro depende de convite e da disponibilidade de adesão. A página de cadastro informa a situação atual.",
               ],
-              [
-                "As operações deste ambiente movimentam dinheiro real?",
-                "Não. O ambiente atual é de testes. Uma cotação indicativa ou registro de teste não representa pagamento, conversão concluída ou entrega na carteira.",
-              ],
+              ...(test
+                ? [
+                    [
+                      "As operações deste ambiente movimentam dinheiro real?",
+                      "Não. O ambiente atual é de testes. Uma cotação indicativa ou registro de teste não representa pagamento, conversão concluída ou entrega na carteira.",
+                    ],
+                  ]
+                : []),
               [
                 "O valor estimado é o valor final?",
                 "Não. A estimativa pode variar. Taxas e valores líquidos só são apresentados quando informados e confirmados pelo serviço responsável.",
@@ -246,7 +260,9 @@ export function PublicHome() {
         <p>Infraestrutura para uma América Latina mais conectada.</p>
         <Link to="/login">Entrar</Link>
         <Link to="/cadastro">Acesso por convite</Link>
-        <small>© {new Date().getFullYear()} Peragus. Piloto em ambiente de testes.</small>
+        <small>
+          © {new Date().getFullYear()} Peragus.{test ? " Piloto em ambiente de testes." : ""}
+        </small>
       </footer>
     </div>
   );

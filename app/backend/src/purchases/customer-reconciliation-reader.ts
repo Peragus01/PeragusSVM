@@ -1,5 +1,5 @@
 import type {Pool} from "pg";
-import type {MoneyMode} from "../config/money-environment.js";
+import {providerKeyMatchesMode,type MoneyMode} from "../config/money-environment.js";
 import {OzavClient,type OzavTransport} from "../providers/ozav-client.js";
 import {OzavSandboxWithdrawalProvider} from "../providers/ozav-sandbox-withdrawal.js";
 import {PostgresCustomerPixRepository} from "../repositories/postgres-customer-sandbox-pix.js";
@@ -11,7 +11,7 @@ import type {CustomerReconciliationReader} from "../jobs/customer-reconciliation
 /** Returns two GET-only functions. There is no send, reserve, claim or simulation capability. */
 export function createCustomerReconciliationReader(pool:Pool,key:string,mode:MoneyMode,read?:OzavTransport):CustomerReconciliationReader{
  // The key, provider clients and repositories all belong to the configured money mode.
- if((mode!=="test" && mode!=="live") || !new RegExp(`^ozav_sk_${mode}_[A-Za-z0-9_-]+$`).test(key))throw Error("Provider key for the money mode required");
+ if(!providerKeyMatchesMode(key,mode))throw Error("Provider key for the money mode required");
  const client=new OzavClient({apiKey:key,mode,attempts:1,timeoutMs:10000,...(read?{transport:read}:{})});
  const withdrawal=new OzavSandboxWithdrawalProvider(key,{mode,...(read?{read}:{})});
  const pixRepository=new PostgresCustomerPixRepository(pool,mode),withdrawalRepository=new PostgresSandboxExecutionRepository(pool,mode);

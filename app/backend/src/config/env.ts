@@ -1,5 +1,6 @@
 import { parseWithdrawalOperators } from "../withdrawals/operator-approvals.js";
 import "dotenv/config";
+import { moneyPathsNotLiveReady, providerKeyMatchesMode } from "./money-environment.js";
 
 import { z } from "zod";
 
@@ -249,10 +250,19 @@ const envSchema = z
     SOLANA_FEE_PAYER_KEYPAIR_BASE64: z.string().min(1).optional(),
   })
   .superRefine((env, context) => {
+    const expected =
+      env.PERAGUS_DEPLOYMENT_ENV === "production" ? "live" : "test";
+    // Sandbox money executors stay off in live until their live paths exist
+    // (Task 7 lifts the Pix flags, Task 10 the withdrawal send/closure flags).
+    for (const flag of moneyPathsNotLiveReady(expected, env)) {
+      context.addIssue({
+        code: "custom",
+        path: [flag],
+        message: `MONEY_PATH_NOT_LIVE_READY: ${flag}`,
+      });
+    }
     if (env.OZAV_API_KEY) {
-      const expected =
-        env.PERAGUS_DEPLOYMENT_ENV === "production" ? "live" : "test";
-      if (!env.OZAV_API_KEY.startsWith(`ozav_sk_${expected}_`)) {
+      if (!providerKeyMatchesMode(env.OZAV_API_KEY, expected)) {
         context.addIssue({
           code: "custom",
           path: ["OZAV_API_KEY"],
@@ -454,6 +464,14 @@ export function getEnv(): Env {
   const result = envSchema.safeParse(process.env);
 
   if (!result.success) {
+    const notLiveReady = result.error.issues
+      .filter((issue) => issue.message.startsWith("MONEY_PATH_NOT_LIVE_READY"))
+      .map((issue) => String(issue.path[0]));
+    if (notLiveReady.length)
+      throw Object.assign(
+        new Error(`MONEY_PATH_NOT_LIVE_READY: ${notLiveReady.join(",")}`),
+        { code: "MONEY_PATH_NOT_LIVE_READY", fields: notLiveReady },
+      );
     const fields = [
       ...new Set(
         result.error.issues

@@ -1,3 +1,4 @@
+import { useMoneyMode } from "@/lib/peragus/config";
 import { profileLabel } from "@/lib/peragus/customer-copy";
 import { useEffect, useState } from "react";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
@@ -9,6 +10,7 @@ import {
 import { CustomerNotice } from "./customer-ui";
 export function OnboardingEvidence() {
   const { accessToken, identity } = useCustomerSession();
+  const test = useMoneyMode() === "test";
   const id = identity?.customer?.id;
   const [value, setValue] = useState<{ token: string; data: OnboardingStatus } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -62,8 +64,9 @@ export function OnboardingEvidence() {
             <b>{data.pending_steps.length ? data.pending_steps.length : "Nenhuma"}</b>
           </div>
           <CustomerNotice>
-            Resultados registrados em ambiente de testes, sem nova validação de atualidade. Essas
-            verificações não habilitam compras com dinheiro real.
+            {test
+              ? "Resultados registrados em ambiente de testes, sem nova validação de atualidade. Essas verificações não habilitam compras com dinheiro real."
+              : "Resultados registrados, sem nova validação de atualidade."}
           </CustomerNotice>
         </>
       )}

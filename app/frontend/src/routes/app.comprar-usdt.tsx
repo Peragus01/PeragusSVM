@@ -1,3 +1,4 @@
+import { useMoneyMode } from "@/lib/peragus/config";
 import { AutomaticPurchaseForm } from "@/components/peragus/automatic-purchase";
 import { OnboardingEvidence } from "@/components/peragus/onboarding-evidence";
 import { createFileRoute, Link } from "@tanstack/react-router";
@@ -8,6 +9,7 @@ export { AutomaticPurchaseForm as PurchaseForm } from "@/components/peragus/auto
 export const Route = createFileRoute("/app/comprar-usdt")({ component: PurchasePage });
 function PurchasePage() {
   const { identity, accessToken } = useCustomerSession();
+  const test = useMoneyMode() === "test";
   return (
     <>
       <SectionTitle
@@ -61,10 +63,12 @@ function PurchasePage() {
               A cotação é uma estimativa. O pagamento e a entrega são etapas separadas e dependem de
               confirmação.
             </p>
-            <p className="customer-muted">
-              Neste ambiente, qualquer Pix disponível é de teste. A entrega real de USDT continua
-              desabilitada.
-            </p>
+            {test && (
+              <p className="customer-muted">
+                Neste ambiente, qualquer Pix disponível é de teste. A entrega real de USDT continua
+                desabilitada.
+              </p>
+            )}
           </div>
         </aside>
       </div>

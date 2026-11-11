@@ -173,7 +173,7 @@ export function RegistrationPage() {
         )}
         <p className="customer-muted">
           O convite é validado pelo servidor e vinculado ao seu e-mail. Não compartilhe seu código.
-          Ambiente de testes, sem dinheiro real.
+          {mode === "test" && " Ambiente de testes, sem dinheiro real."}
         </p>
         <Link className="customer-link" to="/login">
           Já tenho conta · Entrar

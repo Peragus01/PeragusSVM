@@ -547,10 +547,13 @@ export function AutomaticPurchaseForm({
             {formatAmount(quote.source.amount, "BRL")} → {formatAmount(quote.target.amount, "USDT")}{" "}
             estimados
           </p>
-          <p className="premium-address">Destino: {linked.wallet_address} · Solana Devnet</p>
+          <p className="premium-address">
+            Destino: {linked.wallet_address} · {mode === "test" ? "Solana Devnet" : "Solana"}
+          </p>
           <CustomerNotice kind="warning">
-            Esta confirmação salva apenas um registro de teste. Não gera Pix, não cobra reais e não
-            envia USDT.
+            {mode === "test"
+              ? "Esta confirmação salva apenas um registro de teste. Não gera Pix, não cobra reais e não envia USDT."
+              : "Esta confirmação registra a compra. Ela ainda não gera Pix, não cobra reais e não envia USDT."}
           </CustomerNotice>
           <button
             type="button"
@@ -559,12 +562,13 @@ export function AutomaticPurchaseForm({
             aria-describedby={!capabilities?.record ? "record-unavailable" : undefined}
             onClick={() => void confirm()}
           >
-            Confirmar registro de teste
+            {mode === "test" ? "Confirmar registro de teste" : "Confirmar registro"}
           </button>
           {!capabilities?.record && (
             <p id="record-unavailable" role="status">
-              O registro de teste está desabilitado neste ambiente. Você pode revisar a estimativa,
-              mas não confirmar uma operação.
+              {mode === "test"
+                ? "O registro de teste está desabilitado neste ambiente. Você pode revisar a estimativa, mas não confirmar uma operação."
+                : "O registro de compras está desabilitado no momento. Você pode revisar a estimativa, mas não confirmar uma operação."}
             </p>
           )}
         </div>
@@ -580,7 +584,7 @@ export function AutomaticPurchaseForm({
       )}
       {record && (
         <div className="premium-record-success" role="status">
-          <h3>Registro de teste salvo</h3>
+          <h3>{mode === "test" ? "Registro de teste salvo" : "Compra registrada"}</h3>
           <p>Sem cobrança e sem envio de USDT.</p>
           <Link to="/app/operacoes/$id" params={{ id: record.id }} className="customer-link">
             Acompanhar no histórico

@@ -97,7 +97,7 @@ import {
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
 import { runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
-import { moneyModeFor, resolveMoneyEnvironment } from "./config/money-environment.js";
+import { moneyModeFor, providerKeyMatchesMode, resolveMoneyEnvironment } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import {
   createJobQueue,
@@ -201,7 +201,7 @@ if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
 const documentOrigins = new Set(env.CUSTOMER_DOCUMENT_UPLOAD_ORIGINS.split(",").map(v=>v.trim()).filter(Boolean));
 if (env.CUSTOMER_DOCUMENTS_ENABLED) {
   assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV});
-  if (!env.OZAV_API_KEY?.startsWith(`ozav_sk_${moneyMode}_`)
+  if (!providerKeyMatchesMode(env.OZAV_API_KEY, moneyMode)
     || !env.CUSTOMER_SUBMISSION_ENABLED || !env.API_RATE_LIMITS_ENABLED || !documentOrigins.size)
     throw new Error("DOCUMENT_STAGING_CONFIGURATION_REQUIRED");
   for (const value of documentOrigins) {

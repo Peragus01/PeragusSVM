@@ -152,4 +152,27 @@ describe("money mode drives customer-facing environment", () => {
       "CUSTOMER_SANDBOX_PIX_SIMULATION_DISABLED",
     );
   });
+
+  it("verification simulate and sandbox-customer routes stay registered in test", async () => {
+    const app = await buildApp({
+      customerAccess,
+      customerVerificationService: verification,
+    });
+    applications.push(app);
+    const simulate = await app.inject({
+      method: "POST",
+      url: "/v1/me/onboarding/verification/simulate",
+      headers,
+      payload: { outcome: "approved" },
+    });
+    expect(simulate.statusCode).toBe(503);
+    expect(simulate.json().error.code).toBe("VERIFICATION_SIMULATION_DISABLED");
+    const sandboxCustomer = await app.inject({
+      method: "GET",
+      url: "/v1/me/ozav-sandbox-customer",
+      headers,
+    });
+    expect(sandboxCustomer.statusCode).not.toBe(404);
+    expect(sandboxCustomer.statusCode).toBe(503);
+  });
 });

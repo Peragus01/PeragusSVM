@@ -5,6 +5,8 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routeTree } from "@/routeTree.gen";
 import { RegistrationPage } from "@/routes/cadastro";
+import { Route as DashboardRoute } from "@/routes/app.index";
+import { PublicHome } from "@/routes/index";
 import { CustomerPublicLayout } from "@/components/peragus/customer-ui";
 import { environmentNotice } from "@/lib/peragus/customer-copy";
 import { moneyMode, moneyNetwork, walletProofDomain } from "@/lib/peragus/config";
@@ -140,4 +142,27 @@ describe("money mode drives customer-facing environment", () => {
     expect(walletProofDomain("live")).toBe("www.peragus.com.br");
     expect(walletProofDomain("test")).toBe("peragussvm-staging.up.railway.app");
   });
+});
+
+describe("test-environment copy follows the money mode", () => {
+  const testCopy = /ambiente de testes|sem dinheiro real|devnet/i;
+  const Dashboard = DashboardRoute.options.component as () => ReactNode;
+  const screens: [string, () => ReactNode][] = [
+    ["registration", () => <RegistrationPage />],
+    ["dashboard", () => <Dashboard />],
+    ["public home", () => <PublicHome />],
+  ];
+  for (const [name, Screen] of screens) {
+    it(`${name} shows no test copy in live`, () => {
+      vi.stubEnv("VITE_PERAGUS_MONEY_MODE", "live");
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data: [] }));
+      const { container } = render(<Screen />);
+      expect(container.textContent).not.toMatch(testCopy);
+    });
+    it(`${name} shows the test banner in test`, () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data: [] }));
+      const { container } = render(<Screen />);
+      expect(container.textContent).toMatch(/ambiente de testes/i);
+    });
+  }
 });

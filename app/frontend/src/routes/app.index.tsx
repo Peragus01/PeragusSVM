@@ -1,3 +1,4 @@
+import { useMoneyMode } from "@/lib/peragus/config";
 import { OnboardingEvidence } from "@/components/peragus/onboarding-evidence";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Wallet, ArrowRight, ArrowUpRight } from "lucide-react";
@@ -18,6 +19,7 @@ import { useCustomerSession } from "@/lib/peragus/customer-session";
 export const Route = createFileRoute("/app/")({ component: CustomerDashboard });
 function CustomerDashboard() {
   const { identity } = useCustomerSession();
+  const test = useMoneyMode() === "test";
   const { data, state, error, retry } = useOperations(5);
   const name = identity?.customer?.display_name || identity?.user.email.split("@")[0] || "cliente";
   return (
@@ -44,9 +46,11 @@ function CustomerDashboard() {
           <Link to="/app/comprar-usdt" className="customer-button">
             Comprar USDT <ArrowRight size={18} />
           </Link>
-          <small>
-            Ambiente de testes · sem dinheiro real. Sem movimentação ou entrega de USDT reais.
-          </small>
+          {test && (
+            <small>
+              Ambiente de testes · sem dinheiro real. Sem movimentação ou entrega de USDT reais.
+            </small>
+          )}
         </div>
         <div className="premium-dashboard-assets" aria-hidden="true">
           <span className="premium-orbit" />
@@ -97,7 +101,11 @@ function CustomerDashboard() {
           ) : !data?.data.length ? (
             <CustomerEmpty
               title="Seu histórico começa aqui"
-              description="Suas compras e registros de teste aparecerão aqui. Consulte uma cotação para começar."
+              description={
+                test
+                  ? "Suas compras e registros de teste aparecerão aqui. Consulte uma cotação para começar."
+                  : "Suas compras aparecerão aqui. Consulte uma cotação para começar."
+              }
             />
           ) : (
             data.data.map((op) => (
@@ -105,7 +113,7 @@ function CustomerDashboard() {
                 <div>
                   <b>{formatAmount(op.source.amount, "BRL")}</b>
                   <div className="customer-muted">
-                    {displayDate(op.created_at)} · {op.environment === "test" ? "Teste" : "Real"}
+                    {displayDate(op.created_at)} · {op.environment === "test" ? "Teste" : "Ao vivo"}
                   </div>
                 </div>
                 <div style={{ textAlign: "right" }}>

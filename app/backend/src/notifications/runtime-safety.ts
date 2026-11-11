@@ -1,7 +1,7 @@
-import { moneyModeFor, moneyNetworkFor } from "../config/money-environment.js";
+import { moneyModeFor, moneyNetworkFor, providerKeyMatchesMode } from "../config/money-environment.js";
 import { OzavClientError } from "../providers/ozav-client.js";
-// Deployment location and provider mode are separate: both locations run only
-// controlled synthetic onboarding until a separately reviewed live integration.
+// Each deployment location is bound to one money mode (staging -> test,
+// production -> live); the provider key must belong to that mode.
 const projects = {
   staging: "lybdkqkbwlfwvmmvstzi",
   production: "athwkklyvnaetotmancy",
@@ -106,7 +106,7 @@ export function assertNotificationEnvironment(
   );
   // The provider key must belong to the deployment's money mode (staging=test, production=live).
   const moneyMode = moneyModeFor({ PERAGUS_DEPLOYMENT_ENV: mode });
-  if (!new RegExp(`^ozav_sk_${moneyMode}_[A-Za-z0-9_-]+$`).test(env.OZAV_API_KEY ?? ""))
+  if (!providerKeyMatchesMode(env.OZAV_API_KEY, moneyMode))
     throw Error(`ONBOARDING_${moneyMode.toUpperCase()}_PROVIDER_REQUIRED`);
   if (
     env.OZAV_ONRAMP_WRITES_ENABLED ||

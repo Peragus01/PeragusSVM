@@ -1,3 +1,4 @@
+import { useMoneyMode } from "@/lib/peragus/config";
 import { CustomerDocumentSummary } from "./customer-document-summary";
 import { OnboardingReceipt, type OnboardingReview } from "./onboarding-receipt";
 import { useEffect, useRef, useState } from "react";
@@ -83,6 +84,7 @@ const fieldMessages: Record<string, string> = {
 const fieldSummary = "Corrija os campos destacados para continuar.";
 export function CustomerOnboarding() {
   const { accessToken, identity } = useCustomerSession();
+  const test = useMoneyMode() === "test";
   const [individual, setIndividual] = useState<Individual>(empty);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [terms, setTerms] = useState<Terms | null>(null);
@@ -285,7 +287,9 @@ export function CustomerOnboarding() {
   );
   const stateLabel =
     verification?.identity_outcome === "approved"
-      ? "Aprovado em teste"
+      ? test
+        ? "Aprovado em teste"
+        : "Aprovado"
       : verification?.identity_outcome === "rejected"
         ? "Não aprovado"
         : verification?.status === "expired"
@@ -298,8 +302,9 @@ export function CustomerOnboarding() {
   return (
     <div className="journey-onboarding" id="dados-cadastrais">
       <CustomerNotice kind="warning">
-        Cadastro e KYC obrigatórios · ambiente de testes. Use apenas dados sintéticos. Não envie
-        documentos reais neste ambiente.
+        {test
+          ? "Cadastro e KYC obrigatórios · ambiente de testes. Use apenas dados sintéticos. Não envie documentos reais neste ambiente."
+          : "Cadastro e verificação de identidade (KYC) são obrigatórios."}
       </CustomerNotice>
       <ol className="journey-step-list customer-kyc-stepper" aria-label="Etapas do cadastro">
         <li data-complete="true">
@@ -540,8 +545,9 @@ export function CustomerOnboarding() {
                           checked={synthetic}
                           onChange={(e) => setSynthetic(e.target.checked)}
                         />
-                        Confirmo que os dados usados neste ambiente são sintéticos, sem documentos
-                        reais.
+                        {test
+                          ? "Confirmo que os dados usados neste ambiente são sintéticos, sem documentos reais."
+                          : "Confirmo que os dados informados são meus e verdadeiros."}
                       </label>
                       <button
                         className="customer-button"
@@ -597,14 +603,21 @@ export function CustomerOnboarding() {
                   </button>
                 ) : (
                   <>
-                    <details>
-                      <summary>Sobre a verificação no ambiente de testes</summary>
-                      <p>
+                    {test ? (
+                      <details>
+                        <summary>Sobre a verificação no ambiente de testes</summary>
+                        <p>
+                          O envio de arquivos, quando disponível, aparece na seção de documentos. A
+                          verificação permanece pendente até a análise; não envie documentos reais
+                          neste ambiente.
+                        </p>
+                      </details>
+                    ) : (
+                      <p className="customer-muted">
                         O envio de arquivos, quando disponível, aparece na seção de documentos. A
-                        verificação permanece pendente até a análise; não envie documentos reais
-                        neste ambiente.
+                        verificação permanece pendente até a análise.
                       </p>
-                    </details>
+                    )}
                     <button
                       className="customer-button-secondary"
                       disabled={busy}
@@ -618,7 +631,9 @@ export function CustomerOnboarding() {
                   <span>Análise de conformidade</span>
                   <b>
                     {screening?.status === "completed" && screening.result === "clear"
-                      ? "Concluída em teste"
+                      ? test
+                        ? "Concluída em teste"
+                        : "Concluída"
                       : screening
                         ? "Em acompanhamento"
                         : "Não iniciada"}

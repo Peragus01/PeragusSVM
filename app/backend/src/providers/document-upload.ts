@@ -2,7 +2,7 @@ import https from "node:https";
 import { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import { DocumentError } from "../onboarding/customer-documents.js";
-import type { MoneyMode } from "../config/money-environment.js";
+import { providerKeyMatchesMode, type MoneyMode } from "../config/money-environment.js";
 
 export function publicIPv4(ip: string) {
   if (isIP(ip) !== 4) return false;
@@ -40,7 +40,7 @@ export async function uploadDocumentBytes(
     const token = url.searchParams.getAll("upload_token");
     if (
       !auth ||
-      !new RegExp(`^ozav_sk_${auth.mode ?? "test"}_[A-Za-z0-9_-]+$`).test(auth.apiKey) ||
+      !providerKeyMatchesMode(auth.apiKey, auth.mode ?? "test") ||
       !/^ozav_cus_[A-Za-z0-9]{16,}$/.test(auth.customerId) ||
       !/^ozav_doc_[A-Za-z0-9]{16,}$/.test(auth.documentId) ||
       url.pathname !==

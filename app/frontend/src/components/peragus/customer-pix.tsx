@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CustomerNotice } from "./customer-ui";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
-import { moneyMode, type MoneyMode } from "@/lib/peragus/config";
+import { moneyMode, useMoneyMode, type MoneyMode } from "@/lib/peragus/config";
 type Pix = {
   id: string;
   purchase_intent_id: string;
@@ -31,6 +31,7 @@ export function CustomerPix({
   amount: string;
   enabled: boolean;
 }) {
+  const test = useMoneyMode() === "test";
   const [pix, setPix] = useState<Pix | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -109,8 +110,9 @@ export function CustomerPix({
     <section className="premium-review">
       <h3>Pagamento Pix</h3>
       <CustomerNotice kind="warning">
-        Somente teste · não pague com dinheiro real. A confirmação de teste não comprova entrega de
-        USDT.
+        {test
+          ? "Somente teste · não pague com dinheiro real. A confirmação de teste não comprova entrega de USDT."
+          : "A confirmação do pagamento não comprova a entrega de USDT na sua carteira."}
       </CustomerNotice>
       {!enabled && (
         <p className="customer-muted">A criação de Pix está desabilitada pelo servidor.</p>
@@ -121,7 +123,13 @@ export function CustomerPix({
         disabled={busy || (!enabled && !pix)}
         onClick={() => void run()}
       >
-        {busy ? "Consultando…" : pix ? "Atualizar pagamento" : "Gerar ou recuperar Pix de teste"}
+        {busy
+          ? "Consultando…"
+          : pix
+            ? "Atualizar pagamento"
+            : test
+              ? "Gerar ou recuperar Pix de teste"
+              : "Gerar ou recuperar Pix"}
       </button>
       {error && (
         <div role="alert">
@@ -131,9 +139,13 @@ export function CustomerPix({
       {pix && (
         <p role="status">
           {pix.payment_confirmed
-            ? "Pagamento confirmado em teste"
+            ? test
+              ? "Pagamento confirmado em teste"
+              : "Pagamento confirmado"
             : instructions
-              ? "Aguardando pagamento de teste"
+              ? test
+                ? "Aguardando pagamento de teste"
+                : "Aguardando pagamento"
               : "Pagamento sem instruções válidas para exibição"}{" "}
           · Entrega não iniciada
         </p>
@@ -150,11 +162,11 @@ export function CustomerPix({
                 width="200"
                 height="200"
                 src={instructions.qr_code_image}
-                alt="QR do Pix de teste"
+                alt={test ? "QR do Pix de teste" : "QR do Pix"}
               />
             )}
           <label className="customer-field">
-            Pix copia e cola de teste
+            {test ? "Pix copia e cola de teste" : "Pix copia e cola"}
             <textarea readOnly value={instructions.br_code} />
           </label>
           <button
@@ -167,7 +179,7 @@ export function CustomerPix({
                 .catch(() => setError("Não foi possível copiar. Selecione o código manualmente."));
             }}
           >
-            {copied ? "Código copiado" : "Copiar código de teste"}
+            {copied ? "Código copiado" : test ? "Copiar código de teste" : "Copiar código"}
           </button>
         </>
       )}

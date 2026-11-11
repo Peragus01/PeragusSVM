@@ -1,5 +1,5 @@
 import {z} from "zod";
-import type {MoneyMode} from "../config/money-environment.js";
+import {providerKeyMatchesMode,type MoneyMode} from "../config/money-environment.js";
 import {individualDraftSchema} from "../onboarding/individual-schema.js";
 import {OzavClient, OzavClientError, httpsOzavTransport, httpsOzavWriteTransport,
  type OzavTransport, type OzavWriteTransport} from "./ozav-client.js";
@@ -33,13 +33,13 @@ function observation(value:unknown):WithdrawalObservation {
   sourceAmount:from.amount,targetAmount:to?.amount??null,sourceLegStatus:leg(row.source_leg),destinationLegStatus:leg(row.destination_leg),
   transactionReference:refs.tx_hash==null?null:z.string().min(1).max(256).parse(refs.tx_hash)};
 }
-/** A separate sandbox-only send boundary; no live key or generic POST retry is accepted. */
+/** A separate send boundary bound to one money mode (key and capabilities); no generic POST retry. Live sends stay refused at boot until Task 10 (MONEY_PATH_NOT_LIVE_READY). */
 export class OzavSandboxWithdrawalProvider {
  readonly funding:OzavClient;
  private readonly read:OzavTransport;private readonly write:OzavWriteTransport;
  private readonly mode:MoneyMode;
  constructor(private readonly key:string,options:{mode:MoneyMode;read?:OzavTransport;write?:OzavWriteTransport}){
-  if(options.mode!=="test" && options.mode!=="live" || !new RegExp(`^ozav_sk_${options.mode}_[A-Za-z0-9_-]+$`).test(key))throw new OzavClientError("Sandbox key required",false);
+  if(!providerKeyMatchesMode(key,options.mode))throw new OzavClientError("Sandbox key required",false);
   this.mode=options.mode;
   this.read=options.read??httpsOzavTransport;this.write=options.write??httpsOzavWriteTransport;
   this.funding=new OzavClient({apiKey:key,mode:options.mode,transport:this.read,attempts:1,timeoutMs:10000});

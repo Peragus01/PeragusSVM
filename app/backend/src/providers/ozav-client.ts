@@ -1,6 +1,6 @@
 import type { IndividualDraft } from "../onboarding/individual-schema.js";
 import https from "node:https";
-import type { MoneyMode } from "../config/money-environment.js";
+import { providerKeyMatchesMode, type MoneyMode } from "../config/money-environment.js";
 
 export interface OzavResponse {
   statusCode: number;
@@ -639,7 +639,7 @@ export interface OzavClientOptions {
   wait?: (milliseconds: number) => Promise<void>;
 }
 
-/** Sandbox-only OZAV client. State changes require explicit method calls. */
+/** OZAV client bound to one money mode (key prefix and capabilities). State changes require explicit method calls. */
 export class OzavClient {
   private readonly apiKey: string;
   /** Money mode the key belongs to; provider capabilities must report the same environment. */
@@ -652,8 +652,7 @@ export class OzavClient {
 
   constructor(options: OzavClientOptions) {
     if (
-      options.mode !== "test" && options.mode !== "live" ||
-      !new RegExp(`^ozav_sk_${options.mode}_[A-Za-z0-9_-]+$`).test(options.apiKey)
+      !providerKeyMatchesMode(options.apiKey, options.mode)
     ) {
       throw new OzavClientError("An OZAV key matching the money mode is required", false);
     }
