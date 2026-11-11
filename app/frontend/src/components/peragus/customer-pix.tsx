@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { CustomerNotice } from "./customer-ui";
-import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
+import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
 import { moneyMode, useMoneyMode, type MoneyMode } from "@/lib/peragus/config";
+// The FX rate lock was refused or did not match: the operation failed and no Pix exists to pay.
+const LOCK_FAILURES: Record<string, string> = {
+  PIX_RATE_LOCK_UNAVAILABLE:
+    "A trava de câmbio não foi concedida. Nenhum Pix foi gerado; faça uma nova cotação.",
+  PIX_LOCKED_AMOUNT_MISMATCH:
+    "O valor travado não conferiu com a cotação aceita. Nenhum Pix foi gerado; faça uma nova cotação.",
+  PIX_RATE_LOCK_REQUIRED:
+    "Esta compra não tem uma trava de câmbio aceita. Nenhum Pix foi gerado; faça uma nova cotação.",
+};
 type Pix = {
   id: string;
   purchase_intent_id: string;
@@ -11,6 +20,8 @@ type Pix = {
   operations_enabled: false;
   payment_confirmed: boolean;
   state: string;
+  /** Status of the purchase operation; failed/expired never show instructions. */
+  status?: string | null;
   source: { currency: "BRL"; amount: string };
   payment_instructions: {
     br_code: string;
@@ -90,7 +101,8 @@ export function CustomerPix({
       sessionStorage.setItem(storageKey, JSON.stringify({ ...saved, id: data.id }));
       setPix(data);
     } catch (e) {
-      if (epoch.current === turn) setError(journeyMessage(e));
+      if (epoch.current === turn)
+        setError((e instanceof JourneyError && LOCK_FAILURES[e.code]) || journeyMessage(e));
     } finally {
       if (epoch.current === turn) {
         lock.current = false;
@@ -98,7 +110,9 @@ export function CustomerPix({
       }
     }
   }
+  const closed = pix?.status === "failed" || pix?.status === "expired";
   const instructions =
+    !closed &&
     pix?.state === "awaiting_payment" &&
     !pix.recovery_required &&
     !pix.payment_confirmed &&
@@ -138,15 +152,17 @@ export function CustomerPix({
       )}
       {pix && (
         <p role="status">
-          {pix.payment_confirmed
-            ? test
-              ? "Pagamento confirmado em teste"
-              : "Pagamento confirmado"
-            : instructions
+          {closed
+            ? "Operação encerrada · nenhum Pix para pagar"
+            : pix.payment_confirmed
               ? test
-                ? "Aguardando pagamento de teste"
-                : "Aguardando pagamento"
-              : "Pagamento sem instruções válidas para exibição"}{" "}
+                ? "Pagamento confirmado em teste"
+                : "Pagamento confirmado"
+              : instructions
+                ? test
+                  ? "Aguardando pagamento de teste"
+                  : "Aguardando pagamento"
+                : "Pagamento sem instruções válidas para exibição"}{" "}
           · Entrega não iniciada
         </p>
       )}

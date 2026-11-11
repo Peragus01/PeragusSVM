@@ -25,7 +25,7 @@ import { WithdrawalOperatorApprovalService } from "./withdrawals/operator-approv
 import { PostgresWithdrawalOperatorApprovalRepository } from "./repositories/postgres-withdrawal-operator-approvals.js";
 import { CustomerWithdrawalRequestService } from "./withdrawals/customer-withdrawal-requests.js";
 import { PostgresCustomerWithdrawalRequestRepository } from "./repositories/postgres-customer-withdrawal-requests.js";
-import { CustomerSandboxPixService } from "./purchases/customer-sandbox-pix.js";
+import { CustomerPixService } from "./purchases/customer-sandbox-pix.js";
 import { PostgresCustomerPixRepository } from "./repositories/postgres-customer-sandbox-pix.js";
 import { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
 import { PostgresCustomerPurchaseIntentRepository } from "./repositories/postgres-customer-purchase-intents.js";
@@ -624,7 +624,7 @@ const app = await buildApp({
     env.CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED,
   ...(env.CUSTOMER_SANDBOX_PIX_ENABLED
     ? {
-        customerSandboxPixService: new CustomerSandboxPixService(
+        customerSandboxPixService: new CustomerPixService(
           new PostgresCustomerPixRepository(pool!, moneyModeFor(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
@@ -633,6 +633,11 @@ const app = await buildApp({
             timeoutMs: 5000,
           }),
           moneyMode,
+          // Records accepted -> awaiting_pix, or failed when the FX rate lock is refused.
+          new PostgresCustomerPurchaseIntentRepository(pool!, moneyModeFor(env), {
+            maxOpenGlobal: env.PURCHASE_MAX_OPEN_GLOBAL,
+            limits: purchaseLimits(env),
+          }),
         ),
       }
     : {}),

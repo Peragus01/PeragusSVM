@@ -48,7 +48,43 @@ describe("sandbox money paths are refused in live", () => {
         CUSTOMER_SANDBOX_PIX_ENABLED: true,
         SANDBOX_WITHDRAWAL_EXECUTION_ENABLED: true,
       }),
-    ).toEqual(["CUSTOMER_SANDBOX_PIX_ENABLED", "SANDBOX_WITHDRAWAL_EXECUTION_ENABLED"]);
+    ).toEqual(["SANDBOX_WITHDRAWAL_EXECUTION_ENABLED"]);
+  });
+  it("still refuses Pix simulation, verification simulation and withdrawal send/closure in live", () => {
+    expect([...SANDBOX_MONEY_PATH_FLAGS].sort()).toEqual([
+      "CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED",
+      "CUSTOMER_VERIFICATION_SIMULATION_ENABLED",
+      "SANDBOX_WITHDRAWAL_CLOSURE_ENABLED",
+      "SANDBOX_WITHDRAWAL_EXECUTION_ENABLED",
+    ]);
+  });
+  it("allows the live-safe customer Pix path (CUSTOMER_SANDBOX_PIX_ENABLED) in live", async () => {
+    vi.stubEnv("PERAGUS_DEPLOYMENT_ENV", "production");
+    vi.stubEnv("OZAV_API_KEY", "ozav_sk_live_synthetic");
+    vi.stubEnv("CUSTOMER_SANDBOX_PIX_ENABLED", "true");
+    const getEnv = await freshGetEnv();
+    let error: unknown;
+    try {
+      getEnv();
+    } catch (e) {
+      error = e;
+    }
+    expect((error as { code?: string } | undefined)?.code).not.toBe("MONEY_PATH_NOT_LIVE_READY");
+    expect(String(error ?? "")).not.toContain("MONEY_PATH_NOT_LIVE_READY");
+    expect(moneyPathsNotLiveReady("live", { CUSTOMER_SANDBOX_PIX_ENABLED: true })).toEqual([]);
+  });
+  it("refuses Pix simulation in live even together with the Pix path", async () => {
+    vi.stubEnv("PERAGUS_DEPLOYMENT_ENV", "production");
+    vi.stubEnv("OZAV_API_KEY", "ozav_sk_live_synthetic");
+    vi.stubEnv("CUSTOMER_SANDBOX_PIX_ENABLED", "true");
+    vi.stubEnv("CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED", "true");
+    const getEnv = await freshGetEnv();
+    expect(() => getEnv()).toThrow(
+      expect.objectContaining({
+        code: "MONEY_PATH_NOT_LIVE_READY",
+        fields: ["CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED"],
+      }),
+    );
   });
 });
 

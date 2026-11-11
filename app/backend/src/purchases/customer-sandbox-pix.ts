@@ -1,6 +1,8 @@
 import { moneyNetworkFor, type MoneyMode } from "../config/money-environment.js";
-import type {OzavClient, OzavTransfer} from "../providers/ozav-client.js";
+import {OzavFacilityLockRefusedError, type OzavClient, type OzavFacilityOutcome, type OzavTransfer} from "../providers/ozav-client.js";
 import {onboardingExternalRef} from "../onboarding/submission-types.js";
+import type {OperationStatus} from "./operation-status.js";
+import type {PurchaseIntentRepository} from "./customer-purchase-intents.js";
 
 export class CustomerPixError extends Error {
   constructor(public readonly code: string) { super(code); }
@@ -8,11 +10,17 @@ export class CustomerPixError extends Error {
 export interface PixContext {
   purchaseId: string; providerCustomerId: string; providerQuoteId: string;
   amountBrl: string; walletAddress: string;
+  /** From the accepted (immutable) purchase: the FX lock terms accepted with the quote (live) and the locked USDT. */
+  facilityTermsVersion?: string | null; lockedUsdtAmount?: string;
 }
 export interface CustomerPixRecord extends PixContext {
   id: string; customerId: string; requestId: string; providerWalletId: string;
   attempted: boolean; simulationAttempted: boolean; transferId: string | null; observation: OzavTransfer | null;
+  /** Status of the purchase operation this charge funds. */
+  operationStatus?: OperationStatus;
 }
+/** Moves the purchase operation; validated again by the database. */
+export type PixOperations = Pick<PurchaseIntentRepository, "transitionOperation">;
 export interface CustomerPixRepository {
   context(customerId: string, purchaseId: string): Promise<PixContext | null>;
   findRequest(customerId: string, requestId: string): Promise<CustomerPixRecord | null>;
@@ -25,6 +33,13 @@ export interface CustomerPixRepository {
 }
 type Provider = Pick<OzavClient, "getCustomerCapabilities" | "getSandboxCustomerSnapshot" | "getCustomerManagedWallet" |
   "createCustomerPixTransfer" | "findCustomerPixTransfer" | "getTransfer" | "simulateCustomerPixPayment">;
+const PIX_ACTOR = "system:pix";
+/** USDT decimal (up to 6 places) to micro-units; null when not a plain decimal. */
+const micro = (value: string | null | undefined) => {
+  if (typeof value !== "string" || !/^\d+(\.\d{1,6})?$/.test(value)) return null;
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(whole!) * 1_000_000n + BigInt(fraction.padEnd(6, "0"));
+};
 const cents = (value: string) => {
   if (!/^(0|[1-9]\d{0,4})(\.\d{1,2})?$/.test(value)) throw new CustomerPixError("PIX_PROVIDER_CONTEXT_MISMATCH");
   const [whole, fraction = ""] = value.split(".");
@@ -44,9 +59,12 @@ export function validatePixTransfer(row: Pick<CustomerPixRecord, "providerCustom
 }
 export function pixView(row: CustomerPixRecord, mode: MoneyMode = "test") {
   const t = row.observation, instructions = t?.source.paymentInstructions;
-  const payable = !row.simulationAttempted && t?.status === "awaiting_payment" && instructions && Date.parse(instructions.expiresAt) > Date.now();
+  const status = row.operationStatus ?? null, closed = status === "failed" || status === "expired";
+  // Live instructions only after the FX lock was accepted and verified (operation awaiting_pix).
+  const locked = mode === "test" || status === "awaiting_pix";
+  const payable = !closed && locked && !row.simulationAttempted && t?.status === "awaiting_payment" && instructions && Date.parse(instructions.expiresAt) > Date.now();
   return {id: row.id, purchase_intent_id: row.purchaseId, request_id: row.requestId,
-    state: t?.status ?? (row.attempted ? "uncertain" : "reserved"), environment: mode,
+    state: t?.status ?? (closed ? status : row.attempted ? "uncertain" : "reserved"), status, environment: mode,
     source: {currency: "BRL", amount: row.amountBrl},
     funding_destination: {type: "provider_managed_wallet"},
     subsequent_delivery: {wallet_address: row.walletAddress, proof_network: moneyNetworkFor(mode), started: false},
@@ -55,12 +73,35 @@ export function pixView(row: CustomerPixRecord, mode: MoneyMode = "test") {
     source_leg_status: t?.sourceLegStatus ?? null, destination_leg_status: t?.destinationLegStatus ?? null,
     payment_confirmed: t?.sourceLegStatus === "completed" && ["payment_confirmed", "converting", "payout_initiated", "completed"].includes(t.status),
     custody_conversion_completed: t?.status === "completed" && t.sourceLegStatus === "completed" && t.destinationLegStatus === "completed",
-    recovery_required: (row.attempted && !t) || (row.simulationAttempted && t?.status === "awaiting_payment"), automatic_retry: false,
+    recovery_required: !closed && ((row.attempted && !t) || (row.simulationAttempted && t?.status === "awaiting_payment")), automatic_retry: false,
     real_money: mode === "live", job_enqueued: false, operations_enabled: false};
 }
-export class CustomerSandboxPixService {
+/**
+ * Creates the OZAV transfer fiat_payment -> customer's managed wallet for an accepted
+ * purchase and exposes its Pix instructions. In live the transfer carries the FX rate
+ * lock acceptance; instructions are shown only when OZAV locked the rate at the
+ * purchase's locked USDT amount. A refused or unverifiable lock fails the operation.
+ */
+export class CustomerPixService {
   constructor(private readonly repo: CustomerPixRepository, private readonly provider: Provider,
-    private readonly mode: MoneyMode = "test") {}
+    private readonly mode: MoneyMode = "test", private readonly operations?: PixOperations) {}
+  private async fail(row: CustomerPixRecord, reason: string, code: string): Promise<never> {
+    await this.operations!.transitionOperation(row.purchaseId, "failed", PIX_ACTOR, reason);
+    throw new CustomerPixError(code);
+  }
+  /** Live: the lock must be locked at exactly the purchase's locked_usdt_amount (compared with facility.amount). */
+  private async checkLock(row: CustomerPixRecord, context: PixContext, facility: OzavFacilityOutcome | null) {
+    if (!facility?.locked) {
+      return this.fail(row, `RATE_LOCK_NOT_APPLIED: state=${facility?.state ?? "missing"}${facility?.reason ? ` reason=${facility.reason}` : ""}`,
+        "PIX_RATE_LOCK_UNAVAILABLE");
+    }
+    const expected = micro(context.lockedUsdtAmount), actual = micro(facility.amount);
+    if (facility.currency !== "USDT" || expected === null || actual === null || actual !== expected) {
+      return this.fail(row, `LOCKED_AMOUNT_MISMATCH: facility.amount=${facility.amount} ${facility.currency} locked_usdt_amount=${context.lockedUsdtAmount}`,
+        "PIX_LOCKED_AMOUNT_MISMATCH");
+    }
+    return `rate_locked: facility.amount=${facility.amount} ${facility.currency} deadline_at=${facility.deadlineAt}`;
+  }
   async read(customerId: string, id: string) {
     const row = await this.repo.read(customerId, id);
     if (!row) throw new CustomerPixError("PIX_NOT_FOUND");
@@ -84,6 +125,9 @@ export class CustomerSandboxPixService {
     if (customer.provider_status !== "approved" || customer.verification_mode !== "full" || customer.requirements_pending !== false) {
       throw new CustomerPixError("PIX_CUSTOMER_NOT_READY");
     }
+    const live = this.mode === "live";
+    // Live: no FX lock to accept, or nothing to record its outcome with, means no Pix at all.
+    if (live && (!context.facilityTermsVersion || !this.operations)) throw new CustomerPixError("PIX_RATE_LOCK_REQUIRED");
     const walletId = await this.provider.getCustomerManagedWallet(context.providerCustomerId);
     const row = await this.repo.reserve(customerId, requestId, context, walletId);
     if (!await this.repo.claim(row.id)) {
@@ -92,18 +136,38 @@ export class CustomerSandboxPixService {
       return {data: pixView(current, this.mode), replayed: true};
     }
     row.attempted = true;
-    const result = await this.provider.createCustomerPixTransfer({customerId: row.providerCustomerId,
-      walletId: row.providerWalletId, quoteId: row.providerQuoteId, idempotencyKey: `peragus-pix-${row.id}`,
-      metadata: {peragus_pix_id: row.id, peragus_purchase_intent_id: row.purchaseId}});
+    let result: Awaited<ReturnType<Provider["createCustomerPixTransfer"]>>;
+    try {
+      result = await this.provider.createCustomerPixTransfer({customerId: row.providerCustomerId,
+        walletId: row.providerWalletId, quoteId: row.providerQuoteId, idempotencyKey: `peragus-pix-${row.id}`,
+        metadata: {peragus_pix_id: row.id, peragus_purchase_intent_id: row.purchaseId},
+        ...(live ? {facilityTermsVersion: context.facilityTermsVersion!} : {})});
+    } catch (error) {
+      // OZAV documents that nothing was created: the operation fails, the claim stays.
+      if (live && error instanceof OzavFacilityLockRefusedError) {
+        return this.fail(row, `RATE_LOCK_REFUSED: ${error.ozavErrorCode}${error.reason ? ` reason=${error.reason}` : ""}`,
+          "PIX_RATE_LOCK_UNAVAILABLE");
+      }
+      throw error;
+    }
     // Persist even the reduced HTTP 200 needs_review ID. No instructions are
     // exposed until a complete response is verified against the frozen context.
     await this.repo.bind(row, result.id);
     row.transferId = result.id;
     if (!result.transfer) return {data: pixView(row, this.mode), replayed: false};
     validatePixTransfer(row, result.transfer);
-    return {data: pixView(await this.repo.save(row, result.transfer), this.mode), replayed: false};
+    const saved = await this.repo.save(row, result.transfer);
+    // The lock outcome exists only on this response (GET never returns it).
+    const reason = live ? await this.checkLock(saved, context, result.facility) : "pix_instructions_issued";
+    if (this.operations && saved.observation?.status === "awaiting_payment" && saved.observation.source.paymentInstructions) {
+      await this.operations.transitionOperation(row.purchaseId, "awaiting_pix", PIX_ACTOR, reason);
+      return {data: pixView((await this.repo.read(customerId, row.id)) ?? saved, this.mode), replayed: false};
+    }
+    return {data: pixView(saved, this.mode), replayed: false};
   }
   async simulatePayment(customerId: string, id: string) {
+    // Sandbox only: live payments are real Pix transfers made by the customer.
+    if (this.mode !== "test") throw new CustomerPixError("PIX_SIMULATION_NOT_AVAILABLE");
     let row = await this.repo.read(customerId, id);
     if (!row) throw new CustomerPixError("PIX_NOT_FOUND");
     if (!row.attempted || !row.transferId) throw new CustomerPixError("PIX_SIMULATION_NOT_READY");
@@ -150,7 +214,15 @@ export class CustomerSandboxPixService {
   }
 }
 
-/** GET-only recovery; cannot reserve, claim, create or simulate a Pix. */
+/** Former name, kept so existing callers keep compiling. */
+export const CustomerSandboxPixService = CustomerPixService;
+export type CustomerSandboxPixService = CustomerPixService;
+
+/**
+ * GET-only recovery; cannot reserve, claim, create or simulate a Pix. It never moves
+ * the operation: in live the lock outcome is not recoverable by GET, so a recovered
+ * charge whose operation is not awaiting_pix never exposes instructions.
+ */
 export async function reconcileCustomerPix(
   repo: Pick<CustomerPixRepository,"read"|"bind"|"save">,
   provider: Pick<Provider,"findCustomerPixTransfer"|"getTransfer">,

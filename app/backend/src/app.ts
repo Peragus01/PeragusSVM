@@ -23,7 +23,7 @@ import type { WithdrawalOperatorApprovalService } from "./withdrawals/operator-a
 import { registerCustomerWithdrawalRequestRoutes } from "./routes/customer-withdrawal-requests.js";
 import type { CustomerWithdrawalRequestService } from "./withdrawals/customer-withdrawal-requests.js";
 import { registerCustomerSandboxPixRoutes } from "./routes/customer-sandbox-pix.js";
-import type { CustomerSandboxPixService } from "./purchases/customer-sandbox-pix.js";
+import type { CustomerPixService } from "./purchases/customer-sandbox-pix.js";
 import { registerCustomerPurchaseIntentRoutes } from "./routes/customer-purchase-intents.js";
 import type { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
 import { registerCustomerQuoteRoutes } from "./routes/customer-quotes.js";
@@ -100,7 +100,7 @@ export interface BuildAppOptions {
   sandboxWithdrawalExecutionService?: SandboxWithdrawalExecutionService;
   withdrawalOperatorApprovalService?: WithdrawalOperatorApprovalService;
   customerWithdrawalRequestService?: CustomerWithdrawalRequestService;
-  customerSandboxPixService?: CustomerSandboxPixService;
+  customerSandboxPixService?: CustomerPixService;
   customerSandboxPixSimulationEnabled?: boolean;
   customerPurchaseIntentService?: CustomerPurchaseIntentService;
   customerQuoteService?: CustomerQuoteService;

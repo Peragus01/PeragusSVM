@@ -115,6 +115,12 @@ export class PostgresCustomerQuoteRepository implements CustomerQuoteRepository 
       quote.spreadBps !== 0
     )
       throw new CustomerQuoteError("QUOTE_CONFLICT", row.id);
+    // Defence in depth: a live quote is only stored with its FX rate lock terms.
+    if (
+      this.e.mode === "live" &&
+      !/^[A-Za-z0-9._-]{1,64}$/.test(quote.facility?.termsVersion ?? "")
+    )
+      throw new CustomerQuoteError("QUOTE_RATE_LOCK_UNAVAILABLE");
     try {
       const r = await this.pool.query<Row>(
         `update peragus_customer_indicative_quotes set provider_quote_id=$3,observation=$4::jsonb,source_amount_brl=$6::numeric,facility_terms_version=$7,locked_usdt_amount=$8::numeric,updated_at=now()

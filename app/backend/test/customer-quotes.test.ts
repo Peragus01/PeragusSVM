@@ -682,9 +682,26 @@ describe("FX rate lock on quotes (trava de câmbio)", () => {
     for (const bad of [{}, { terms_version: "" }, { terms_version: 2 }]) {
       const s = await setup("pf", "live");
       s.mutate((row) => ({ ...row, facility: bad }));
-      await expect(
-        s.service.create(s.customer.id, s.requestId, "500"),
-      ).rejects.toThrow();
+      const error = await s.service
+        .create(s.customer.id, s.requestId, "500")
+        .catch((e: unknown) => e);
+      // The malformed block is an invalid provider response: provider error, nothing stored.
+      expect(error).toBeInstanceOf(CustomerQuoteProviderError);
+      expect(error).toMatchObject({ message: "QUOTE_PROVIDER_UNAVAILABLE", providerStatus: null });
+      const rows = (
+        await db.query(
+          "select provider_quote_id,observation,facility_terms_version,locked_usdt_amount from peragus_customer_indicative_quotes where customer_id=$1",
+          [s.customer.id],
+        )
+      ).rows as any[];
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows)
+        expect(row).toEqual({
+          provider_quote_id: null,
+          observation: null,
+          facility_terms_version: null,
+          locked_usdt_amount: null,
+        });
     }
   });
   it("test quote never sends facility_preview and keeps the target as the locked amount", async () => {

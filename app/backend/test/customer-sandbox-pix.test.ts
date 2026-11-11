@@ -51,7 +51,7 @@ async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
 const path="/v1/me/purchase-intents",headers={authorization:"Bearer valid"};
 
 import {PostgresCustomerPixRepository} from "../src/repositories/postgres-customer-sandbox-pix.js";
-import {CustomerSandboxPixService} from "../src/purchases/customer-sandbox-pix.js";
+import {CustomerSandboxPixService,CustomerPixService} from "../src/purchases/customer-sandbox-pix.js";
 import type {OzavTransfer} from "../src/providers/ozav-client.js";
 async function fixture(){
  const s=await setup();
@@ -181,6 +181,32 @@ describe("customer-owned sandbox Pix",()=>{
   expect((await app.inject({method:"POST",url})).statusCode).toBe(401);
   expect((await app.inject({method:"POST",url,headers,payload:{provider_transfer_id:"foreign"}})).statusCode).toBe(400);
   const result=await app.inject({method:"POST",url,headers});expect(result.statusCode).toBe(200);expect(result.json().data.payment_confirmed).toBe(true);expect(result.headers["cache-control"]).toBe("no-store");
+ });
+ it("moves the accepted operation to awaiting_pix when instructions are issued and reports the status",async()=>{
+  const f=await fixture(),pix=new CustomerPixService(f.pixRepo,f.provider,"test",repo);
+  const r=await pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+  expect(r.data).toMatchObject({status:"awaiting_pix",state:"awaiting_payment",payment_instructions:{br_code:"sandbox-code"}});
+  expect((await service.read(f.s.customer.id,f.p.data.id)).status).toBe("awaiting_pix");
+  const events=(await db.query<any>("select from_status,to_status,actor,reason from peragus_operation_status_events where purchase_id=$1 order by id",[f.p.data.id])).rows;
+  expect(events.at(-1)).toEqual({from_status:"accepted",to_status:"awaiting_pix",actor:"system:pix",reason:"pix_instructions_issued"});
+  // Sandbox simulation still works from awaiting_pix and never moves the operation further (Task 8).
+  expect((await pix.simulatePayment(f.s.customer.id,r.data.id)).data.payment_confirmed).toBe(true);
+  expect((await service.read(f.s.customer.id,f.p.data.id)).status).toBe("awaiting_pix");
+ });
+ it("never shows instructions for a failed or expired operation",async()=>{
+  const f=await fixture(),r=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+  expect(r.data.payment_instructions).not.toBeNull();
+  await repo.transitionOperation(f.p.data.id,"expired","system:test","expired for test");
+  expect(await f.pix.read(f.s.customer.id,r.data.id)).toMatchObject({status:"expired",payment_instructions:null});
+ });
+ it("serves the same routes under the v1/me/pix alias",async()=>{
+  const f=await fixture();
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner})},customerSandboxPixService:f.pix});apps.push(app);
+  const r=await app.inject({method:"POST",url:"/v1/me/pix",headers,payload:{request_id:f.requestId,purchase_intent_id:f.p.data.id}});
+  expect(r.statusCode).toBe(201);expect(r.headers.location).toBe(`/v1/me/pix/${r.json().data.id}`);
+  expect((await app.inject({method:"GET",url:`/v1/me/pix/${r.json().data.id}`,headers})).json().data.id).toBe(r.json().data.id);
+  expect((await app.inject({method:"POST",url:`/v1/me/pix/${r.json().data.id}/reconcile`,headers})).statusCode).toBe(200);
+  expect((await app.inject({method:"GET",url:`/v1/me/sandbox-pix/${r.json().data.id}`,headers})).statusCode).toBe(200);
  });
  it("hides expired instructions, and route requires auth, enabled flag and strict input",async()=>{
   const f=await fixture();f.transfer.source.paymentInstructions!.expiresAt=new Date(Date.now()-1000).toISOString();

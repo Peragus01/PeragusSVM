@@ -46,6 +46,32 @@ export class OzavClientError extends Error {
   }
 }
 
+/**
+ * OZAV refused the FX rate lock on POST /transfers (422 FACILITY_LOCK_UNAVAILABLE or
+ * FACILITY_TERMS_VERSION_REQUIRED). Unlike other non-201 outcomes this is not
+ * ambiguous: OZAV documents that nothing was created.
+ */
+export class OzavFacilityLockRefusedError extends OzavClientError {
+  /** `details.reason` slug (e.g. client_not_exempt), when well-formed. */
+  readonly reason: string | null;
+  constructor(statusCode: number, ozavErrorCode: string, reason: string | null) {
+    super("OZAV refused the FX rate lock", false, statusCode, ozavErrorCode);
+    this.name = "OzavFacilityLockRefusedError";
+    this.reason = reason;
+  }
+}
+
+/** Create-time FX rate lock outcome (`facility` on the 201). GET never returns it. */
+export interface OzavFacilityOutcome {
+  locked: boolean;
+  state: "locked" | "not_locked" | "refused" | "undetermined";
+  reason: string | null;
+  /** What the customer receives at the locked conditions (major units); only when locked. */
+  amount: string | null;
+  currency: string | null;
+  deadlineAt: string | null;
+}
+
 export interface OzavSandboxCustomerInput {
   externalRef: string;
   email: string;
@@ -305,6 +331,8 @@ export interface CreateOzavTransferInput {
   quoteId: string;
   idempotencyKey: string;
   metadata: Readonly<Record<string, string>>;
+  /** Live only (required there): the facility terms version accepted with the quote. */
+  facilityTermsVersion?: string;
 }
 
 export interface OzavPayoutDestination {
@@ -398,6 +426,47 @@ function paymentInstructions(value: unknown): OzavPaymentInstructions | null {
     qrCodeImage: optionalText(row.qr_code_image),
     expiresAt: timestamp(row.expires_at),
   };
+}
+
+const slug = (value: unknown): string | null =>
+  typeof value === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(value) ? value : null;
+
+/** A malformed or inconsistent block is returned as null: "no usable lock". */
+function facilityOutcome(value: unknown): OzavFacilityOutcome | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const states = ["locked", "not_locked", "refused", "undetermined"] as const;
+  const state = states.find((s) => s === row.state);
+  if (typeof row.locked !== "boolean" || !state || row.locked !== (state === "locked"))
+    return null;
+  if (!row.locked)
+    return { locked: false, state, reason: slug(row.reason), amount: null, currency: null, deadlineAt: null };
+  if (
+    typeof row.amount !== "string" ||
+    !/^\d+(?:\.\d{1,6})?$/.test(row.amount) ||
+    typeof row.currency !== "string" ||
+    !/^[A-Z]{2,10}$/.test(row.currency) ||
+    typeof row.deadline_at !== "string" ||
+    Number.isNaN(Date.parse(row.deadline_at))
+  )
+    return null;
+  return {
+    locked: true,
+    state,
+    reason: null,
+    amount: row.amount,
+    currency: row.currency,
+    deadlineAt: row.deadline_at,
+  };
+}
+
+function providerErrorReason(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const error = (body as { error?: unknown }).error;
+  if (typeof error !== "object" || error === null) return null;
+  const details = (error as { details?: unknown }).details;
+  if (typeof details !== "object" || details === null) return null;
+  return slug((details as { reason?: unknown }).reason);
 }
 
 /** Only a well-formed upper-snake slug is surfaced; messages and details never are. */
@@ -1359,14 +1428,26 @@ export class OzavClient {
   }
 
   /** Customer Pix path: exactly one POST; preserve degraded-success IDs for GET recovery. */
-  async createCustomerPixTransfer(
-    input: CreateOzavTransferInput,
-  ): Promise<{ id: string; transfer: OzavTransfer | null }> {
+  async createCustomerPixTransfer(input: CreateOzavTransferInput): Promise<{
+    id: string;
+    transfer: OzavTransfer | null;
+    /** Live only: the create-time FX rate lock outcome; null when absent or unusable. */
+    facility: OzavFacilityOutcome | null;
+  }> {
     identifier(input.customerId, "ozav_cus_");
     identifier(input.walletId, "ozav_wal_");
     identifier(input.quoteId, "ozav_q_");
     if (!/^peragus-pix-[0-9a-f-]{36}$/.test(input.idempotencyKey))
       throw new OzavClientError("Invalid Pix key", false);
+    // Live Pix is created only with the FX rate lock accepted; test keys never send it.
+    const live = this.mode === "live";
+    if (
+      live
+        ? typeof input.facilityTermsVersion !== "string" ||
+          !/^[A-Za-z0-9._-]{1,64}$/.test(input.facilityTermsVersion)
+        : input.facilityTermsVersion !== undefined
+    )
+      throw new OzavClientError("Invalid FX rate lock acceptance", false);
     // Do not use post(): its retries are appropriate for other paths, but this
     // path recovers unknown outcomes through listing/GET, never another POST.
     const response = await this.writeTransport(
@@ -1383,6 +1464,12 @@ export class OzavClient {
             chain: "solana",
           },
           metadata: input.metadata,
+          ...(live
+            ? {
+                facility_terms_accepted: true,
+                facility_terms_version: input.facilityTermsVersion,
+              }
+            : {}),
         },
       },
       this.apiKey,
@@ -1392,16 +1479,27 @@ export class OzavClient {
       const row = object(response.body);
       if (row.object !== "transfer" || row.status !== "needs_review")
         return invalidResponse();
-      return { id: identifier(row.id, "ozav_tr_"), transfer: null };
+      return { id: identifier(row.id, "ozav_tr_"), transfer: null, facility: null };
     }
+    const code = providerErrorCode(response.body);
+    if (
+      response.statusCode === 422 &&
+      (code === "FACILITY_LOCK_UNAVAILABLE" || code === "FACILITY_TERMS_VERSION_REQUIRED")
+    )
+      throw new OzavFacilityLockRefusedError(422, code, providerErrorReason(response.body));
     if (response.statusCode !== 201)
       throw new OzavClientError(
         "Pix outcome requires reconciliation",
         false,
         response.statusCode,
+        code,
       );
     const row = transfer(response.body);
-    return { id: row.id, transfer: row };
+    return {
+      id: row.id,
+      transfer: row,
+      facility: live ? facilityOutcome(object(response.body).facility) : null,
+    };
   }
 
   async getCustomerManagedWallet(customerId: string): Promise<string> {

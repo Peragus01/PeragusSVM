@@ -269,7 +269,7 @@ const envSchema = z
     const expected =
       env.PERAGUS_DEPLOYMENT_ENV === "production" ? "live" : "test";
     // Sandbox money executors stay off in live until their live paths exist
-    // (Task 7 lifts the Pix flags, Task 10 the withdrawal send/closure flags).
+    // (the customer Pix path is live-safe; Task 10 lifts the withdrawal send/closure flags).
     for (const flag of moneyPathsNotLiveReady(expected, env)) {
       context.addIssue({
         code: "custom",

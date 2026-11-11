@@ -224,6 +224,35 @@ describe("automatic BRL/USDT purchase", () => {
     expect(posts()).toHaveLength(2);
     expect(JSON.parse(String(posts()[1]![1]!.body))).toEqual(first);
   });
+  it.each([
+    ["QUOTE_RATE_LOCK_UNAVAILABLE", 503],
+    ["QUOTE_RECOVERY_REQUIRED", 409],
+  ])("retries %s with a freshly minted request_id", async (code, status) => {
+    let calls = 0;
+    custom = async (_url, init) => {
+      calls++;
+      if (calls === 1)
+        return Response.json(
+          { error: { code, quote_id: "0b9e6f4e-5d1c-4a8b-9f3e-2c1d0a9b8c7d" } },
+          { status },
+        );
+      return Response.json({ data: quote(JSON.parse(String(init?.body)).request_id) });
+    };
+    await open();
+    await type("BRL", "1000");
+    const first = JSON.parse(String(posts()[0]![1]!.body));
+    expect(screen.getByRole("alert")).toHaveTextContent(/nova cotação/);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Conferir solicitação salva" }));
+    });
+    expect(posts()).toHaveLength(2);
+    const second = JSON.parse(String(posts()[1]![1]!.body));
+    expect(second.source_amount_brl).toBe(first.source_amount_brl);
+    expect(second.request_id).not.toBe(first.request_id);
+    expect(second.request_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(fetcher.mock.calls.some(([url]) => String(url).includes("0b9e6f4e"))).toBe(false);
+    expect(screen.getByLabelText("Você recebe · estimativa bruta")).toHaveValue("200,000000");
+  });
   it("recovers a known legacy quote by GET without another POST", async () => {
     sessionStorage.setItem(
       `peragus-purchase-v1:${customer}`,

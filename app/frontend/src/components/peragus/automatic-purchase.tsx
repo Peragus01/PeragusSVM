@@ -273,6 +273,32 @@ export function AutomaticPurchaseForm({
       if (epoch.current !== turn) return;
       const problem =
         e instanceof PurchaseError ? e : new PurchaseError("LOCAL_STORAGE_UNAVAILABLE");
+      // A quote never moves money: when the lock was unavailable or the attempt cannot be
+      // recovered, the explicit retry asks for a new quote under a fresh request_id.
+      if (
+        problem.code === "QUOTE_RATE_LOCK_UNAVAILABLE" ||
+        problem.code === "QUOTE_RECOVERY_REQUIRED"
+      ) {
+        const fresh: Receipt = {
+          side: r.side,
+          input: r.input,
+          quoteRequestId: crypto.randomUUID(),
+          purchaseRequestId: crypto.randomUUID(),
+        };
+        try {
+          persist(customerId, fresh);
+          receipt.current = fresh;
+        } catch {
+          // Keep the previous receipt; the retry then repeats the same identifiers.
+        }
+        setBlocked(true);
+        setError(
+          problem.code === "QUOTE_RATE_LOCK_UNAVAILABLE"
+            ? "A trava de câmbio não está disponível agora. Tente novamente para pedir uma nova cotação."
+            : "Não foi possível recuperar a cotação anterior. Tente novamente para pedir uma nova cotação.",
+        );
+        return;
+      }
       if (problem.quoteId) {
         const saved = { ...r, quoteId: problem.quoteId };
         try {
