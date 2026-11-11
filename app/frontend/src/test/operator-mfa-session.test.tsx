@@ -86,6 +86,7 @@ describe("operator MFA in existing memory-only session", () => {
     expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toEqual({
       factor_type: "totp",
       friendly_name: "Peragus Operador",
+      issuer: "https://www.peragus.com.br",
     });
     expect(fetcher.mock.calls[4]![0]).toBe(
       `https://syntheticproject.supabase.co/auth/v1/factors/${id}/challenge`,
