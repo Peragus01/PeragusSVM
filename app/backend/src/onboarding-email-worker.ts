@@ -198,7 +198,7 @@ async function main() {
       JSON.stringify({
         event: "onboarding_email_worker_ready",
         environment,
-        provider_environment: "test",
+        provider_environment: moneyModeFor(env),
         restricted_recipients: true,
       }),
     );

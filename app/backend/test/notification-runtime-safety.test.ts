@@ -110,9 +110,10 @@ describe("notification deployment isolation", () => {
       }),
     ).toBe("staging");
     expect(
-      assertNotificationEnvironment(fixture("athwkklyvnaetotmancy"), {
-        ONBOARDING_EMAIL_DEPLOYMENT_ENV: "production",
-      }),
+      assertNotificationEnvironment(
+        { ...fixture("athwkklyvnaetotmancy"), OZAV_API_KEY: "ozav_sk_live_synthetic" },
+        { ONBOARDING_EMAIL_DEPLOYMENT_ENV: "production" },
+      ),
     ).toBe("production");
     expect(() =>
       assertNotificationEnvironment(fixture(), {
@@ -196,4 +197,31 @@ it("records the failing provider stage and HTTP category without its body", asyn
     return;
   }
   throw Error("Expected provider error");
+});
+
+describe("provider key follows the money mode", () => {
+  const production = { ...fixture("athwkklyvnaetotmancy"), OZAV_API_KEY: "ozav_sk_live_synthetic" };
+  it("accepts a live key in production and refuses a test key there", () => {
+    expect(
+      assertNotificationEnvironment(production, { ONBOARDING_EMAIL_DEPLOYMENT_ENV: "production" }),
+    ).toBe("production");
+    expect(() =>
+      assertNotificationEnvironment(
+        { ...production, OZAV_API_KEY: "ozav_sk_test_synthetic" },
+        { ONBOARDING_EMAIL_DEPLOYMENT_ENV: "production" },
+      ),
+    ).toThrow("ONBOARDING_LIVE_PROVIDER_REQUIRED");
+  });
+  it("audits whether the provider key matches the money mode without printing it", () => {
+    const live = deploymentConfigurationAudit({ PERAGUS_DEPLOYMENT_ENV: "production", OZAV_API_KEY: "ozav_sk_live_synthetic" });
+    expect(live).toMatchObject({ provider_key_mode: "live", provider_matches_money_mode: true });
+    expect(
+      deploymentConfigurationAudit({ PERAGUS_DEPLOYMENT_ENV: "production", OZAV_API_KEY: "ozav_sk_test_synthetic" }),
+    ).toMatchObject({ provider_key_mode: "test", provider_matches_money_mode: false });
+    expect(deploymentConfigurationAudit({ OZAV_API_KEY: "ozav_sk_test_synthetic" })).toMatchObject({
+      provider_key_mode: "test",
+      provider_matches_money_mode: true,
+    });
+    expect(JSON.stringify(live)).not.toContain("ozav_sk_live_synthetic");
+  });
 });

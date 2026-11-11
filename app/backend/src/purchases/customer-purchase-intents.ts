@@ -1,3 +1,4 @@
+import {moneyNetworkFor,type MoneyMode} from "../config/money-environment.js";
 export interface PurchaseIntent {
   id:string;customerId:string;requestId:string;quoteId:string;sourceAmountBrl:string;
   estimatedTargetAmountUsdt:string;quoteSnapshot:{rate:string;rate_type:"floating";quoted_at:string;
@@ -11,14 +12,15 @@ export interface PurchaseIntentRepository {
   read(customerId:string,id:string):Promise<PurchaseIntent|null>;
   record(customerId:string,requestId:string,quoteId:string):Promise<{record:PurchaseIntent;replayed:boolean}>;
 }
-const view=(r:PurchaseIntent)=>({id:r.id,request_id:r.requestId,quote_id:r.quoteId,state:"recorded",record_only:true,
+const renderView=(r:PurchaseIntent,mode:MoneyMode)=>({id:r.id,request_id:r.requestId,quote_id:r.quoteId,state:"recorded",record_only:true,
   source:{currency:"BRL",amount:r.sourceAmountBrl},estimated_target:{currency:"USDT",amount:r.estimatedTargetAmountUsdt,chain:"solana"},
-  quote_reference:r.quoteSnapshot,destination:{wallet_address:r.walletAddress,proof_network:"solana:devnet",verified_at:r.walletVerifiedAt},
-  created_at:r.createdAt,environment:"test",indicative:true,executable:false,
+  quote_reference:r.quoteSnapshot,destination:{wallet_address:r.walletAddress,proof_network:moneyNetworkFor(mode),verified_at:r.walletVerifiedAt},
+  created_at:r.createdAt,environment:mode,indicative:true,executable:false,
   observation_freshness:"not_evaluated",external_delivery_costs_evaluated:false,
   funding_started:false,job_enqueued:false,operations_enabled:false});
 export class CustomerPurchaseIntentService {
-  constructor(private readonly repository:PurchaseIntentRepository){}
-  async read(customerId:string,id:string){const record=await this.repository.read(customerId,id);if(!record)throw new PurchaseIntentError("PURCHASE_INTENT_NOT_FOUND");return view(record);}
-  async record(customerId:string,requestId:string,quoteId:string){const result=await this.repository.record(customerId,requestId,quoteId);return{data:view(result.record),replayed:result.replayed};}
+  constructor(private readonly repository:PurchaseIntentRepository,private readonly mode:MoneyMode="test"){}
+  private view(r:PurchaseIntent){return renderView(r,this.mode);}
+  async read(customerId:string,id:string){const record=await this.repository.read(customerId,id);if(!record)throw new PurchaseIntentError("PURCHASE_INTENT_NOT_FOUND");return this.view(record);}
+  async record(customerId:string,requestId:string,quoteId:string){const result=await this.repository.record(customerId,requestId,quoteId);return{data:this.view(result.record),replayed:result.replayed};}
 }

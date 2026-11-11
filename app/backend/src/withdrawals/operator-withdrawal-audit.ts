@@ -68,10 +68,10 @@ export class OperatorWithdrawalAuditService {
   const sendCompleted=completed(r.execution_status,r.execution_source_status,r.execution_destination_status);
   const convertedMatches=convertedAmount!==null && units(convertedAmount)===units(r.amount_usdt);
   return {
-   withdrawal_request_id:r.id,customer_id:r.customer_id,recorded_at:iso(r.created_at),environment:"test",real_money:false,
+   withdrawal_request_id:r.id,customer_id:r.customer_id,recorded_at:iso(r.created_at),environment:this.e.mode,real_money:this.e.mode==="live",
    refund_request:r.refund_id?{id:r.refund_id,state:r.refund_state}:null,
    source:{currency:"USDT",gross_amount:r.amount_usdt},
-   destination:{wallet_address:r.wallet_address,network:"solana",proof_network:"solana:devnet",verified_at:iso(r.wallet_verified_at)},
+   destination:{wallet_address:r.wallet_address,network:"solana",proof_network:this.e.network,verified_at:iso(r.wallet_verified_at)},
    purchase:r.purchase_id?{id:r.purchase_id,recorded_at:iso(r.purchase_created_at),source:{currency:"BRL",amount:r.source_amount_brl},estimated_target:{currency:"USDT",amount:r.estimated_target_amount_usdt,indicative:true}}:null,
    pix:r.pix_id?{id:r.pix_id,recorded_at:iso(r.pix_created_at),last_updated_at:iso(r.pix_updated_at),creation_attempted:r.pix_attempted===true,
     state:r.pix_status??(r.pix_attempted?"uncertain":"reserved"),source_leg_status:r.pix_source_status,destination_leg_status:r.pix_destination_status,

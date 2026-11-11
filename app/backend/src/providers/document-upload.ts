@@ -2,6 +2,7 @@ import https from "node:https";
 import { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import { DocumentError } from "../onboarding/customer-documents.js";
+import type { MoneyMode } from "../config/money-environment.js";
 
 export function publicIPv4(ip: string) {
   if (isIP(ip) !== 4) return false;
@@ -23,7 +24,7 @@ export async function uploadDocumentBytes(
   url: URL,
   bytes: Buffer,
   mime: string,
-  auth?: { apiKey: string; customerId: string; documentId: string },
+  auth?: { apiKey: string; customerId: string; documentId: string; mode?: MoneyMode },
 ): Promise<void> {
   if (
     url.protocol !== "https:" ||
@@ -39,7 +40,7 @@ export async function uploadDocumentBytes(
     const token = url.searchParams.getAll("upload_token");
     if (
       !auth ||
-      !/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(auth.apiKey) ||
+      !new RegExp(`^ozav_sk_${auth.mode ?? "test"}_[A-Za-z0-9_-]+$`).test(auth.apiKey) ||
       !/^ozav_cus_[A-Za-z0-9]{16,}$/.test(auth.customerId) ||
       !/^ozav_doc_[A-Za-z0-9]{16,}$/.test(auth.documentId) ||
       url.pathname !==

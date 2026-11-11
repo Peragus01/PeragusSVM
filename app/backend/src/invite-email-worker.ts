@@ -43,7 +43,7 @@ try {
     JSON.stringify({
       event: "invite_email_worker_ready",
       environment: env.PERAGUS_DEPLOYMENT_ENV,
-      provider_environment: "test",
+      provider_environment: moneyModeFor(env),
     }),
   );
   while (!stopping) {

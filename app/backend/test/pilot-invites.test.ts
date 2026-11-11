@@ -8,6 +8,7 @@ import { AuthenticationError } from "../src/auth/customer-access.js";
 import { PostgresCustomerRepository } from "../src/repositories/postgres-customer-repository.js";
 import { InviteEmailCipher } from "../src/invites/invite-email-cipher.js";
 import { PilotInviteService } from "../src/invites/pilot-invites.js";
+import { invitationMessage } from "../src/invites/invite-email-template.js";
 const db = new PGlite();
 const pool = {
   query: async (sql: string, args?: unknown[]) => {
@@ -756,5 +757,39 @@ describe("email invitations before Auth signup", () => {
         })
       ).statusCode,
     ).toBe(400);
+  });
+});
+
+describe("invitation email follows the money mode", () => {
+  const code = "pginv_" + "y".repeat(43);
+  it("live invite email omits the test-environment banner", () => {
+    const message = JSON.parse(
+      invitationMessage("person@example.test", code, "contato@peragus.com.br", "https://www.peragus.com.br", "live"),
+    );
+    expect(message.subject).toBe("Seu convite para a Peragus");
+    for (const part of [message.subject, message.text, message.html]) {
+      expect(part).not.toMatch(/TESTES|AMBIENTE DE TESTES|SEM DINHEIRO REAL|sem dinheiro real/);
+    }
+    expect(message.text).toContain("https://www.peragus.com.br/cadastro");
+    expect(message.text).toContain(code);
+  });
+  it("test invite email keeps the test-environment banner", () => {
+    const message = JSON.parse(invitationMessage("person@example.test", code, "contato@peragus.com.br", undefined, "test"));
+    expect(message.subject).toContain("[TESTES]");
+    expect(message.text).toContain("AMBIENTE DE TESTES");
+    expect(message.html).toContain("AMBIENTE DE TESTES");
+  });
+  it("binds the outbox idempotency key to the row environment", async () => {
+    const r = await db.query<{ def: string }>(
+      "select pg_get_constraintdef(oid) as def from pg_constraint where conrelid='peragus_invite_email_outbox'::regclass and contype='c' and pg_get_constraintdef(oid) like '%peragus-invitation-%'",
+    );
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]!.def).toContain("environment");
+    expect(r.rows[0]!.def).not.toContain("peragus-invitation-test/");
+  });
+  it("refuses a live invitation that points at the staging frontend", () => {
+    expect(() => invitationMessage("person@example.test", code, "contato@peragus.com.br", undefined, "live")).toThrow(
+      "INVITE_FRONTEND_ORIGIN_INVALID",
+    );
   });
 });

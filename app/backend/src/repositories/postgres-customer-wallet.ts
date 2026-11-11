@@ -1,7 +1,7 @@
 import type {Pool} from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
-import {walletProofMessage,WalletProofError,type CustomerWalletRepository,type WalletChallenge,type CustomerWallet} from "../wallets/customer-wallet.js";
+import {WalletProofError,type CustomerWalletRepository,type WalletChallenge,type CustomerWallet} from "../wallets/customer-wallet.js";
 interface ChallengeRow {id:string;customer_id:string;wallet_address:string;nonce:string;issued_at:Date|string;expires_at:Date|string;consumed_at:Date|string|null;}
 interface WalletRow {wallet_address:string;verified_at:Date|string;}
 const time=(v:Date|string)=>new Date(v).toISOString();
@@ -26,7 +26,7 @@ export class PostgresCustomerWalletRepository implements CustomerWalletRepositor
       nonce=excluded.nonce,issued_at=excluded.issued_at,expires_at=excluded.expires_at,consumed_at=null`,
       [c.customerId,c.id,c.walletAddress,c.nonce,c.issuedAt,c.expiresAt,this.e.mode]);
   }
-  async consume(c:WalletChallenge,now:Date,signatureBase64:string){
+  async consume(c:WalletChallenge,now:Date,signatureBase64:string,proofMessage:string){
     const client=await this.pool.connect();
     try {
       await client.query("begin");await client.query("set local lock_timeout='1500ms'");
@@ -36,7 +36,7 @@ export class PostgresCustomerWalletRepository implements CustomerWalletRepositor
         and expires_at>clock_timestamp() returning id`,[c.customerId,c.id,c.walletAddress,now.toISOString()]);
       if(!claimed.rows[0])throw new WalletProofError("WALLET_CHALLENGE_INVALID");
       const saved=await client.query<WalletRow>(`insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature,environment,network)
-        values($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing returning wallet_address,verified_at`,[c.customerId,c.walletAddress,c.id,now.toISOString(),walletProofMessage(c),signatureBase64,this.e.mode,this.e.network]);
+        values($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing returning wallet_address,verified_at`,[c.customerId,c.walletAddress,c.id,now.toISOString(),proofMessage,signatureBase64,this.e.mode,this.e.network]);
       if(!saved.rows[0])throw new WalletProofError("WALLET_BINDING_CONFLICT");
       await client.query("commit");return mapWallet(saved.rows[0]);
     } catch(error){await client.query("rollback");throw error;}

@@ -48,7 +48,7 @@ interface ProfileRow {
 const hash = (code: string) => createHash("sha256").update(code).digest("hex");
 const iso = (date: Date | string | null) =>
   date ? new Date(date).toISOString() : null;
-const view = (r: InviteRow) => ({
+const view = (r: InviteRow, environment: MoneyMode) => ({
   id: r.id,
   slot: r.slot,
   target_user_id: r.target_user_id,
@@ -61,7 +61,7 @@ const view = (r: InviteRow) => ({
   reason: r.reason,
   redeemed_at: iso(r.redeemed_at),
   revoked_at: iso(r.revoked_at),
-  environment: "test",
+  environment,
   email_delivery: r.email_delivery ?? null,
 });
 const profile = (r: ProfileRow) => ({
@@ -136,7 +136,7 @@ export class PilotInviteService {
       (row.target_email_hash ?? null) !== emailHash
     )
       fail("PILOT_INVITE_IDEMPOTENCY_CONFLICT");
-    return { data: view(row), code: null, replayed: true };
+    return { data: view(row, this.e.mode), code: null, replayed: true };
   }
   private emailHash(email: string) {
     if (!this.emailKey || !/^[a-f0-9]{64}$/i.test(this.emailKey))
@@ -169,7 +169,7 @@ export class PilotInviteService {
       fail("PILOT_INVITE_NOT_AVAILABLE");
     return {
       valid: true,
-      environment: "test",
+      environment: this.e.mode,
       email_confirmation_required: true,
     };
   }
@@ -249,6 +249,7 @@ export class PilotInviteService {
               code,
               this.inviteEmailFrom!,
               this.inviteFrontendOrigin,
+              this.e.mode,
             ),
           })
         : null;
@@ -277,7 +278,7 @@ export class PilotInviteService {
      sealed
        ? `, queued as (
     insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload,environment)
-    select id,'peragus-invitation-test/'||id::text,$9::jsonb,'${this.e.mode}' from issued returning invite_id
+    select id,'peragus-invitation-${this.e.mode}/'||id::text,$9::jsonb,'${this.e.mode}' from issued returning invite_id
    )`
        : ""
    } select * from issued`,
@@ -309,6 +310,7 @@ export class PilotInviteService {
                 },
               }
             : row,
+          this.e.mode,
         ),
         code: sealed ? null : code,
         replayed: false,
@@ -330,13 +332,13 @@ export class PilotInviteService {
       `select i.* ${this.inviteEmailCipher ? ", (select jsonb_build_object('state',o.state,'accepted_at',o.accepted_at,'delivered_at',o.delivered_at,'retry_blocked',o.retry_blocked_at is not null,'last_error',o.last_error) from peragus_invite_email_outbox o where o.invite_id=i.id) as email_delivery" : ""} from peragus_pilot_invites i where environment='${this.e.mode}' order by created_at desc,id desc limit 50`,
     );
     // Raw codes and email hashes are never persisted in or returned by the list API.
-    return rows.rows.map(view);
+    return rows.rows.map((r) => view(r, this.e.mode));
   }
   async read(user: AuthenticatedUser, id: string) {
     this.authorize(user);
     const row = await this.find("id=$1", [id]);
     if (!row) fail("PILOT_INVITE_NOT_FOUND");
-    return view(row);
+    return view(row, this.e.mode);
   }
   async revoke(
     user: AuthenticatedUser,
@@ -353,7 +355,7 @@ export class PilotInviteService {
     if (prior) {
       if (prior.id !== id || prior.revocation_reason !== reason)
         fail("PILOT_INVITE_IDEMPOTENCY_CONFLICT");
-      return { data: view(prior), replayed: true };
+      return { data: view(prior, this.e.mode), replayed: true };
     }
     await this.throttle(user.id, "revoke");
     try {
@@ -363,7 +365,7 @@ export class PilotInviteService {
         [id, user.id, requestId, reason],
       );
       if (result.rows[0])
-        return { data: view(result.rows[0]), replayed: false };
+        return { data: view(result.rows[0], this.e.mode), replayed: false };
     } catch (error) {
       if (!duplicate(error)) throw error;
       fail("PILOT_INVITE_IDEMPOTENCY_CONFLICT");
@@ -376,7 +378,7 @@ export class PilotInviteService {
     ) {
       if (current.revocation_reason !== reason)
         fail("PILOT_INVITE_IDEMPOTENCY_CONFLICT");
-      return { data: view(current), replayed: true };
+      return { data: view(current, this.e.mode), replayed: true };
     }
     fail("PILOT_INVITE_TERMINAL");
   }
@@ -403,7 +405,7 @@ export class PilotInviteService {
       data: {
         invite_id: row.id,
         customer: profile(customer),
-        environment: "test",
+        environment: this.e.mode,
       },
       replayed: true,
     };
@@ -458,7 +460,7 @@ export class PilotInviteService {
           data: {
             invite_id: prior.id,
             customer: profile(result.rows[0]),
-            environment: "test",
+            environment: this.e.mode,
           },
           replayed: false,
         };

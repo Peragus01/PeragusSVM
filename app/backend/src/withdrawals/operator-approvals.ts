@@ -1,3 +1,4 @@
+import {moneyNetworkFor,type MoneyMode} from "../config/money-environment.js";
 import {z} from "zod";
 import type {AuthenticatedUser} from "../auth/customer-access.js";
 export class OperatorApprovalError extends Error {
@@ -18,19 +19,20 @@ export interface OperatorApprovalRepository {
  read(withdrawalId:string):Promise<OperatorApproval|null>;
  record(withdrawalId:string,operatorId:string,requestId:string,reason:string):Promise<{record:OperatorApproval;replayed:boolean}>;
 }
-const view=(r:OperatorApproval)=>({id:r.id,withdrawal_request_id:r.withdrawalId,request_id:r.requestId,
+const renderView=(r:OperatorApproval,mode:MoneyMode)=>({id:r.id,withdrawal_request_id:r.withdrawalId,request_id:r.requestId,
  operator_user_id:r.operatorId,reason:r.reason,created_at:r.createdAt,
- source:{currency:"USDT",amount:r.amountUsdt},destination:{wallet_address:r.walletAddress,proof_network:"solana:devnet"},
- approved:true,environment:"test",record_only:true,execution_authorized:false,
+ source:{currency:"USDT",amount:r.amountUsdt},destination:{wallet_address:r.walletAddress,proof_network:moneyNetworkFor(mode)},
+ approved:true,environment:mode,record_only:true,execution_authorized:false,
  provider_freshness_evaluated:false,balance_reserved:false,withdrawal_started:r.executionAttempted===true,job_enqueued:false});
 export class WithdrawalOperatorApprovalService {
- constructor(private readonly repository:OperatorApprovalRepository,private readonly operators:ReadonlySet<string>){}
+ constructor(private readonly repository:OperatorApprovalRepository,private readonly operators:ReadonlySet<string>,private readonly mode:MoneyMode="test"){}
+ private view(r:OperatorApproval){return renderView(r,this.mode);}
  isAllowed(id:string){return this.operators.has(id.toLowerCase());}
  authorize(user:AuthenticatedUser){
   authorizeWithdrawalOperator(user,this.operators);
  }
- async read(user:AuthenticatedUser,withdrawalId:string){this.authorize(user);const row=await this.repository.read(withdrawalId);if(!row)throw new OperatorApprovalError("WITHDRAWAL_APPROVAL_NOT_FOUND");return view(row);}
+ async read(user:AuthenticatedUser,withdrawalId:string){this.authorize(user);const row=await this.repository.read(withdrawalId);if(!row)throw new OperatorApprovalError("WITHDRAWAL_APPROVAL_NOT_FOUND");return this.view(row);}
  async approve(user:AuthenticatedUser,withdrawalId:string,requestId:string,reason:string){
-  this.authorize(user);const result=await this.repository.record(withdrawalId,user.id,requestId,reason);return{data:view(result.record),replayed:result.replayed};
+  this.authorize(user);const result=await this.repository.record(withdrawalId,user.id,requestId,reason);return{data:this.view(result.record),replayed:result.replayed};
  }
 }

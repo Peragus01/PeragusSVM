@@ -315,7 +315,7 @@ try {
   await startJobQueue(boss);
   await ensureSettlementQueues(boss);
   if(env.CUSTOMER_RECONCILIATION_ENABLED){
-    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!),moneyModeFor(env)));
+    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!,moneyModeFor(env)),moneyModeFor(env)));
     console.info(JSON.stringify({event:"customer_reconciliation_configured",enabled:true,providerReadsOnly:true}));
   }else{
     await boss.unschedule(CUSTOMER_RECONCILIATION_QUEUE);
@@ -464,7 +464,7 @@ try {
       customerReconciliationEnabled:env.CUSTOMER_RECONCILIATION_ENABLED,
       queue: SETTLEMENT_ORCHESTRATION_QUEUE,
       concurrency: env.JOB_CONCURRENCY,
-      ozavEnvironment: "test",
+      ozavEnvironment: moneyModeFor(env),
       ozavOnrampWritesEnabled:
         env.OZAV_ONRAMP_WRITES_ENABLED,
       solanaContingencyReserveEnabled:

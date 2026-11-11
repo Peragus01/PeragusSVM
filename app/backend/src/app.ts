@@ -58,6 +58,7 @@ import type { OperatorAlertService } from "./operations/operator-alerts.js";
 import { registerOperatorAlertRoutes } from "./routes/operator-alerts.js";
 import type { SandboxClosureService } from "./withdrawals/sandbox-closure.js";
 import { registerSandboxClosureRoutes } from "./routes/sandbox-withdrawal-closure.js";
+import {moneyNetworkFor,type MoneyMode} from "./config/money-environment.js";
 import sensible from "@fastify/sensible";
 import Fastify, {
   type FastifyInstance,
@@ -86,6 +87,8 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  /** Configured money mode; sandbox-only simulation routes exist only in "test". Defaults to "test". */
+  moneyMode?: MoneyMode;
   inviteDelivery?: InviteDeliveryOptions;
   manualRefundService?: ManualRefundService;
   sandboxWithdrawalRecoveryService?: SandboxWithdrawalRecoveryService;
@@ -137,6 +140,10 @@ export interface BuildAppOptions {
 export async function buildApp(
   options: BuildAppOptions = {},
 ): Promise<FastifyInstance> {
+  const mode: MoneyMode = options.moneyMode ?? "test";
+  if (mode !== "test" && mode !== "live")
+    throw Object.assign(new Error("MONEY_ENVIRONMENT_INVALID"), { code: "MONEY_ENVIRONMENT_INVALID" });
+  const sandboxOnly = mode === "test";
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: 64 * 1024,
@@ -162,14 +169,14 @@ export async function buildApp(
       return reply.code(401).send({ error: { code: "AUTH_REQUIRED" } });
     return {
       data: {
-        environment: "test",
+        environment: mode,
         operations_enabled: false,
-        real_purchase: false,
+        real_purchase: mode === "live",
         required_costs_complete: false,
         quote: Boolean(options.customerQuoteService),
         record: Boolean(options.customerPurchaseIntentService),
         pix: Boolean(options.customerSandboxPixService),
-        network: "solana:devnet",
+        network: moneyNetworkFor(mode),
       },
     };
   });
@@ -239,7 +246,8 @@ export async function buildApp(
   await registerCustomerSandboxPixRoutes(
     app,
     options.customerAccess ? options.customerSandboxPixService : undefined,
-    options.customerSandboxPixSimulationEnabled ?? false,
+    sandboxOnly && (options.customerSandboxPixSimulationEnabled ?? false),
+    sandboxOnly,
   );
   await registerCustomerPurchaseIntentRoutes(
     app,
@@ -265,7 +273,8 @@ export async function buildApp(
   await registerCustomerVerificationRoutes(
     app,
     options.customerAccess ? options.customerVerificationService : undefined,
-    options.verificationSimulationEnabled,
+    sandboxOnly && (options.verificationSimulationEnabled ?? false),
+    sandboxOnly,
   );
   await registerCustomerSubmissionRoutes(
     app,
@@ -278,12 +287,15 @@ export async function buildApp(
   await registerIndividualOnboardingRoutes(
     app,
     options.customerAccess ? options.individualDraftService : undefined,
+    mode,
   );
 
-  registerOzavSandboxCustomerRoutes(
-    app,
-    options.customerAccess ? options.ozavSandboxCustomerService : undefined,
-  );
+  // Synthetic OZAV customers are a sandbox fixture; the routes do not exist outside test mode.
+  if (sandboxOnly)
+    registerOzavSandboxCustomerRoutes(
+      app,
+      options.customerAccess ? options.ozavSandboxCustomerService : undefined,
+    );
 
   app.get("/health", async () => ({
     status: "ok",
@@ -311,7 +323,9 @@ export async function buildApp(
 
   await registerOzavOnrampRoutes(app, {
     reader: options.ozavOnrampReader,
-    sandboxPaymentSimulator: options.sandboxPixPaymentSimulator,
+    sandboxPaymentSimulator: sandboxOnly
+      ? options.sandboxPixPaymentSimulator
+      : undefined,
     now: options.now ?? (() => new Date()),
   });
 

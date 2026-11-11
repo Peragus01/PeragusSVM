@@ -37,14 +37,16 @@ function observation(value:unknown):WithdrawalObservation {
 export class OzavSandboxWithdrawalProvider {
  readonly funding:OzavClient;
  private readonly read:OzavTransport;private readonly write:OzavWriteTransport;
+ private readonly mode:MoneyMode;
  constructor(private readonly key:string,options:{mode:MoneyMode;read?:OzavTransport;write?:OzavWriteTransport}){
   if(options.mode!=="test" && options.mode!=="live" || !new RegExp(`^ozav_sk_${options.mode}_[A-Za-z0-9_-]+$`).test(key))throw new OzavClientError("Sandbox key required",false);
+  this.mode=options.mode;
   this.read=options.read??httpsOzavTransport;this.write=options.write??httpsOzavWriteTransport;
   this.funding=new OzavClient({apiKey:key,mode:options.mode,transport:this.read,attempts:1,timeoutMs:10000});
  }
  private async get(path:string){const r=await this.read(path,this.key,10000);if(r.statusCode!==200)throw new OzavClientError("Withdrawal read unavailable",false,r.statusCode);return record.parse(r.body);}
  async capabilities(){const c=await this.get("/v2/capabilities");const scopes=z.array(z.string()).parse(c.scopes),entitlements=z.array(z.string()).parse(c.entitlements),features=record.parse(c.features);
-  if(c.environment!=="test" || !["liquidity","custody","customers"].every(v=>entitlements.includes(v))
+  if(c.environment!==this.mode || !["liquidity","custody","customers"].every(v=>entitlements.includes(v))
    || !["customers:read","wallets:read","transfers:read","transfers:write"].every(v=>scopes.includes(v))
    || features.transfers!=="live" || features.wallet_transfers!=="live")throw new OzavClientError("Withdrawal capabilities missing",false);
  }

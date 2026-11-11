@@ -89,13 +89,13 @@ export class CustomerOperationHistoryService {
       const pixStatus=status(row.pix_status),sendStatus=status(row.execution_status);
       const converted=pixStatus==="completed" && row.pix_source_status==="completed" && row.pix_destination_status==="completed";
       return {
-        id:row.id,quote_id:row.quote_id,created_at:row.created_at,environment:"test",real_money:false,
+        id:row.id,quote_id:row.quote_id,created_at:row.created_at,environment:this.e.mode,real_money:this.e.mode==="live",
         refund_request:row.refund_id?{id:row.refund_id,state:row.refund_state,request_path:`/v1/me/operations/${row.id}/refund-request`}:null,
         stage:row.withdrawal_id?"withdrawal":row.pix_id?"pix":"purchase_recorded",
         source:{currency:"BRL",amount:row.source_amount_brl},
         estimated_target:{currency:"USDT",amount:row.estimated_target_amount_usdt,indicative:true},
         converted_target:converted && positiveAmount(row.converted_amount)?{currency:"USDT",amount:positiveAmount(row.converted_amount)}:null,
-        destination:{wallet_address:row.wallet_address,network:"solana",proof_network:"solana:devnet"},
+        destination:{wallet_address:row.wallet_address,network:"solana",proof_network:this.e.network},
         pix:row.pix_id?{id:row.pix_id,state:pixStatus??(row.pix_attempted?"uncertain":"reserved"),conversion_completed:converted}:null,
         withdrawal:row.withdrawal_id?{
           id:row.withdrawal_id,approved:row.approved,

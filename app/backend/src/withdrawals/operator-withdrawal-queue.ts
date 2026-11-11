@@ -58,10 +58,10 @@ export class OperatorWithdrawalQueueService {
   const rows=result.rows.slice(0,limit),last=rows.at(-1),hasMore=result.rows.length>limit;
   return {data:rows.map(row=>({
    id:row.id,customer_id:row.customer_id,purchase_intent_id:row.purchase_intent_id,pix_id:row.pix_id,
-   created_at:row.created_at,state:row.queue_state,environment:"test",real_money:false,
+   created_at:row.created_at,state:row.queue_state,environment:this.e.mode,real_money:this.e.mode==="live",
    refund_request:row.refund_id?{id:row.refund_id,state:row.refund_state}:null,
    source:{currency:"USDT",amount:row.amount_usdt},
-   destination:{wallet_address:row.wallet_address,network:"solana",proof_network:"solana:devnet"},
+   destination:{wallet_address:row.wallet_address,network:"solana",proof_network:this.e.network},
    approved:row.approved,approval_recorded_at:row.approved_at?new Date(row.approved_at).toISOString():null,
    withdrawal_started:row.attempted,provider_completed:row.provider_completed,
    recovery_required:row.queue_state==="uncertain",manual_review_required:row.queue_state==="needs_review",

@@ -1,3 +1,4 @@
+import type { MoneyMode } from "../config/money-environment.js";
 import type {
   OzavClient,
   OzavIndicativeQuote,
@@ -86,7 +87,7 @@ export class CustomerQuoteProviderError extends Error {
     super("QUOTE_PROVIDER_UNAVAILABLE");
   }
 }
-const view = (r: CustomerQuoteRecord) => ({
+const renderView = (r: CustomerQuoteRecord, mode: MoneyMode) => ({
   id: r.id,
   request_id: r.requestId,
   state: r.quote ? "quoted" : "uncertain",
@@ -109,7 +110,7 @@ const view = (r: CustomerQuoteRecord) => ({
   expires_at: r.quote?.expiresAt ?? null,
   quoted_at: r.quote?.createdAt ?? null,
   recorded_at: r.createdAt,
-  environment: "test",
+  environment: mode,
   indicative: true,
   executable: false,
   pricing_scope: "conversion_estimate",
@@ -126,7 +127,11 @@ export class CustomerQuoteService {
       | "getSandboxCustomerSnapshot"
       | "createCustomerIndicativeQuote"
     >,
+    private readonly mode: MoneyMode = "test",
   ) {}
+  private view(row: CustomerQuoteRecord) {
+    return renderView(row, this.mode);
+  }
   private check(
     row: CustomerQuoteRecord,
     providerCustomerId: string,
@@ -144,7 +149,7 @@ export class CustomerQuoteService {
   async read(customerId: string, id: string) {
     const row = await this.repository.findOwned(customerId, id);
     if (!row) throw new CustomerQuoteError("QUOTE_NOT_FOUND");
-    return view(row);
+    return this.view(row);
   }
   async create(
     customerId: string,
@@ -160,7 +165,7 @@ export class CustomerQuoteService {
     const prior = await this.repository.findRequest(customerId, requestId);
     if (prior) {
       this.check(prior, binding.providerId, amountBrl, targetAmount);
-      if (prior.quote) return { data: view(prior), replayed: true };
+      if (prior.quote) return { data: this.view(prior), replayed: true };
     }
     // Never repeat a quote POST with unknown outcome: this provider operation has
     // no documented idempotency key or quote-list reconciliation endpoint.
@@ -168,7 +173,7 @@ export class CustomerQuoteService {
       throw new CustomerQuoteError("QUOTE_RECOVERY_REQUIRED", prior.id);
     const caps = await this.provider.getCustomerCapabilities();
     if (
-      caps.environment !== "test" ||
+      caps.environment !== this.mode ||
       !["customers", "liquidity"].every((v) => caps.entitlements.includes(v)) ||
       !["customers:read", "quotes:write"].every((v) => caps.scopes.includes(v))
     )
@@ -199,7 +204,7 @@ export class CustomerQuoteService {
           amountBrl,
         );
     this.check(row, binding.providerId, amountBrl, targetAmount);
-    if (row.quote) return { data: view(row), replayed: true };
+    if (row.quote) return { data: this.view(row), replayed: true };
     if (!(await this.repository.claim(row.id)))
       throw new CustomerQuoteError("QUOTE_RECOVERY_REQUIRED", row.id);
     let quote: OzavIndicativeQuote;
@@ -215,7 +220,7 @@ export class CustomerQuoteService {
       throw error;
     }
     return {
-      data: view(await this.repository.save(row, quote)),
+      data: this.view(await this.repository.save(row, quote)),
       replayed: false,
     };
   }

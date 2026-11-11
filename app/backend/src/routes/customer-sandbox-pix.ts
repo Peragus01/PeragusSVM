@@ -1,11 +1,12 @@
 import type {FastifyInstance} from "fastify";
 import {z} from "zod";
 import {CustomerPixError, type CustomerSandboxPixService} from "../purchases/customer-sandbox-pix.js";
-export async function registerCustomerSandboxPixRoutes(app:FastifyInstance,service?:CustomerSandboxPixService,simulationEnabled=false){
+export async function registerCustomerSandboxPixRoutes(app:FastifyInstance,service?:CustomerSandboxPixService,simulationEnabled=false,simulationRegistered=true){
+ // simulationRegistered is false outside test mode: the simulate route then does not exist (404).
  await app.register(async scoped=>{
   scoped.removeContentTypeParser("application/json");
   scoped.addContentTypeParser("application/json",{parseAs:"buffer",bodyLimit:4096},(_req,body,done)=>done(null,body));
-  for(const action of ["create","read","reconcile","simulate"] as const)scoped.route({
+  for(const action of (simulationRegistered?["create","read","reconcile","simulate"] as const:["create","read","reconcile"] as const))scoped.route({
    method:action==="read"?"GET":"POST",url:action==="create"?"/v1/me/sandbox-pix":`/v1/me/sandbox-pix/:id${action==="reconcile"?"/reconcile":action==="simulate"?"/simulate":""}`,bodyLimit:4096,
    handler:async(request,reply)=>{
     reply.header("Cache-Control","no-store");

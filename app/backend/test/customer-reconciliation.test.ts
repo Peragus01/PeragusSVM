@@ -61,7 +61,7 @@ async function withdrawalFixture(){
 describe("durable GET-only customer reconciliation",()=>{
  it("discovers a completed Pix once, validates real reader evidence and writes one immutable event",async()=>{
   const f=await fixture();const transport=vi.fn(async()=>({statusCode:200,body:rawPix(f)}));
-  const service=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example",transport),"test");
+  const service=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",transport),"test");
   expect(await service.run()).toMatchObject({processed:true,kind:"pix",state:"provider_terminal",attempts:1,saved:true});
   expect(await service.run()).toEqual({processed:false});expect(transport).toHaveBeenCalledTimes(1);
   expect(transport.mock.calls[0]![0]).toBe(`/v2/transfers/${f.transfer}`);
@@ -80,14 +80,14 @@ describe("durable GET-only customer reconciliation",()=>{
   const f=await fixture();await db.query("update peragus_customer_sandbox_pix set provider_transfer_id=null,observation=null where id=$1",[f.pix]);
   const paths:string[]=[];
   const transport=async(path:string)=>{paths.push(path);return {statusCode:200,body:path.includes("?")?{data:[{id:f.transfer,customer_id:f.provider,metadata:{peragus_pix_id:f.pix}}],has_more:false}:rawPix(f)};};
-  expect(await new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example",transport),"test").run()).toMatchObject({state:"provider_terminal"});
+  expect(await new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",transport),"test").run()).toMatchObject({state:"provider_terminal"});
   expect(paths).toHaveLength(2);expect(paths[0]).toContain("/v2/transfers?");
   expect((await db.query("select create_attempted,provider_transfer_id from peragus_customer_sandbox_pix where id=$1",[f.pix])).rows[0]).toEqual({create_attempted:true,provider_transfer_id:f.transfer});
  });
  it("retains uncertainty and backs off rather than treating an empty list as failure",async()=>{
   const f=await fixture();await db.query("update peragus_customer_sandbox_pix set provider_transfer_id=null,observation=null where id=$1",[f.pix]);
   const transport=vi.fn(async()=>({statusCode:200,body:{data:[],has_more:false}}));
-  const service=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example",transport),"test");
+  const service=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",transport),"test");
   expect(await service.run()).toMatchObject({state:"pending",manualReviewRequired:false});
   expect(await service.run()).toEqual({processed:false});expect(transport).toHaveBeenCalledTimes(1);
   expect((await checkpoint()).last_status).toBe("uncertain");
@@ -95,7 +95,7 @@ describe("durable GET-only customer reconciliation",()=>{
  it("blocks mismatched evidence without overwriting the stored observation",async()=>{
   const f=await fixture(),body=rawPix(f);body.customer_id="ozav_cus_foreign";
   const before=(await db.query("select observation from peragus_customer_sandbox_pix where id=$1",[f.pix])).rows[0];
-  const service=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example",async()=>({statusCode:200,body})),"test");
+  const service=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",async()=>({statusCode:200,body})),"test");
   expect(await service.run()).toMatchObject({state:"needs_review",errorCode:"EVIDENCE_MISMATCH"});
   expect((await db.query("select observation from peragus_customer_sandbox_pix where id=$1",[f.pix])).rows[0]).toEqual(before);
  });
@@ -161,12 +161,14 @@ describe("durable GET-only customer reconciliation",()=>{
   expect(()=>assertCustomerReconciliationSafety(safe)).not.toThrow();
   expect(()=>assertCustomerReconciliationSafety({...safe,OZAV_ONRAMP_WRITES_ENABLED:true})).toThrow();
   expect(()=>assertCustomerReconciliationSafety({...safe,OZAV_API_KEY:"ozav_sk_live_example"})).toThrow();
-  expect(()=>createCustomerReconciliationReader(pool,"ozav_sk_live_example")).toThrow();
+  expect(()=>createCustomerReconciliationReader(pool,"ozav_sk_live_example","test")).toThrow();
+  expect(()=>createCustomerReconciliationReader(pool,"ozav_sk_test_example","live")).toThrow();
+  expect(()=>createCustomerReconciliationReader(pool,"ozav_sk_live_example","live")).not.toThrow();
  });
  it("recovers a withdrawal with GET only, preserving unknown target and the original pilot claim",async()=>{
   const f=await withdrawalFixture();const paths:string[]=[];
   const transport=async(path:string)=>{paths.push(path);return {statusCode:200,body:path.includes("?")?{data:[{id:f.send,customer_id:f.provider,metadata:{peragus_execution_id:f.execution}}],has_more:false}:f.body};};
-  const safe=createCustomerReconciliationReader(pool,"ozav_sk_test_example",transport);
+  const safe=createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",transport);
   expect(Object.keys(safe)).toEqual(["pix","withdrawal"]);
   expect(await safe.withdrawal(f.customer.id,f.withdrawal)).toEqual({status:"completed",complete:true,review:false});
   expect(paths).toHaveLength(2);
@@ -179,13 +181,13 @@ describe("durable GET-only customer reconciliation",()=>{
   const f=await withdrawalFixture();
   await db.query("update peragus_sandbox_withdrawal_executions set provider_send_id=$1 where id=$2",[f.send,f.execution]);
   const body={...f.body,destination:{...f.body.destination,address:Keypair.generate().publicKey.toBase58()}};
-  const safe=createCustomerReconciliationReader(pool,"ozav_sk_test_example",async()=>({statusCode:200,body}));
+  const safe=createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",async()=>({statusCode:200,body}));
   await expect(safe.withdrawal(f.customer.id,f.withdrawal)).rejects.toThrow("WITHDRAWAL_PROVIDER_CONTEXT_MISMATCH");
   body.destination.address=f.wallet;body.destination_leg.status="pending";
   expect(await safe.withdrawal(f.customer.id,f.withdrawal)).toEqual({status:"completed",complete:false,review:true});
  });
  it("discovers only attempted withdrawals and completes their checkpoint without another send",async()=>{
-  const f=await withdrawalFixture(),safe=createCustomerReconciliationReader(pool,"ozav_sk_test_example",async(path)=>({statusCode:200,body:path.includes("?")?{data:[{id:f.send,customer_id:f.provider,metadata:{peragus_execution_id:f.execution}}],has_more:false}:f.body}));
+  const f=await withdrawalFixture(),safe=createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",async(path)=>({statusCode:200,body:path.includes("?")?{data:[{id:f.send,customer_id:f.provider,metadata:{peragus_execution_id:f.execution}}],has_more:false}:f.body}));
   const service=new CustomerReconciliationService(pool,safe,"test");await service.discover();
   await db.query("update peragus_customer_reconciliation set state='provider_terminal' where pix_id is not null");
   expect(await service.run()).toMatchObject({kind:"withdrawal",state:"provider_terminal",saved:true});

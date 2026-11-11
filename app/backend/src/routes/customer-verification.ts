@@ -3,11 +3,12 @@ import { z } from "zod";
 import type { CustomerVerificationService } from "../onboarding/customer-verification-service.js";
 import { VerificationError } from "../onboarding/verification-types.js";
 import { OzavClientError } from "../providers/ozav-client.js";
-export async function registerCustomerVerificationRoutes(app: FastifyInstance, service?: CustomerVerificationService, simulationEnabled = false) {
+export async function registerCustomerVerificationRoutes(app: FastifyInstance, service?: CustomerVerificationService, simulationEnabled = false, simulationRegistered = true) {
+  // simulationRegistered is false outside test mode: the simulate route then does not exist (404).
   await app.register(async scoped => {
     scoped.removeContentTypeParser("application/json");
     scoped.addContentTypeParser("application/json", { parseAs: "buffer", bodyLimit: 8192 }, (_request, body, done) => done(null, body));
-    for (const action of ["read", "start", "refresh", "simulate"] as const) scoped.route({
+    for (const action of (simulationRegistered ? ["read", "start", "refresh", "simulate"] as const : ["read", "start", "refresh"] as const)) scoped.route({
       method: action === "read" ? "GET" : "POST", bodyLimit: 8192,
       url: `/v1/me/onboarding/verification${action === "refresh" || action === "simulate" ? `/${action}` : ""}`,
       handler: async (request, reply) => {

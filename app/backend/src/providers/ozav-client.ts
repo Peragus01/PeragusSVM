@@ -642,6 +642,8 @@ export interface OzavClientOptions {
 /** Sandbox-only OZAV client. State changes require explicit method calls. */
 export class OzavClient {
   private readonly apiKey: string;
+  /** Money mode the key belongs to; provider capabilities must report the same environment. */
+  readonly mode: MoneyMode;
   private readonly transport: OzavTransport;
   private readonly writeTransport: OzavWriteTransport;
   private readonly timeoutMs: number;
@@ -656,6 +658,7 @@ export class OzavClient {
       throw new OzavClientError("An OZAV key matching the money mode is required", false);
     }
     this.apiKey = options.apiKey;
+    this.mode = options.mode;
     this.transport = options.transport ?? httpsOzavTransport;
     this.writeTransport = options.writeTransport ?? httpsOzavWriteTransport;
     this.timeoutMs = options.timeoutMs ?? 15_000;
@@ -760,19 +763,19 @@ export class OzavClient {
   }
 
   async getCustomerCapabilities(): Promise<{
-    environment: "test";
+    environment: MoneyMode;
     entitlements: string[];
     scopes: string[];
   }> {
     const row = object(await this.get("/v2/capabilities"));
     if (
-      row.environment !== "test" ||
+      row.environment !== this.mode ||
       !Array.isArray(row.entitlements) ||
       !Array.isArray(row.scopes)
     )
       return invalidResponse();
     return {
-      environment: "test",
+      environment: this.mode,
       entitlements: row.entitlements.map(text),
       scopes: row.scopes.map(text),
     };

@@ -144,7 +144,7 @@ describe("Postgres repositories write the money mode they were built with",()=>{
     issuedAt:now.toISOString(),expiresAt:new Date(now.getTime()+60000).toISOString(),consumedAt:null};
    await repo.issue(c);
    expect((await repo.challenge(id))?.id).toBe(c.id);
-   await repo.consume(c,new Date(now.getTime()+1000),"synthetic signature");
+   await repo.consume(c,new Date(now.getTime()+1000),"synthetic signature","synthetic proof message");
    expect(await repo.find(id)).toMatchObject({walletAddress:c.walletAddress});
    expect((await db.query("select environment,network from peragus_customer_wallets where customer_id=$1",[id])).rows).toEqual([{environment:mode,network}]);
    const wrong=new PostgresCustomerWalletRepository(pool(db),mode==="live"?"test":"live");

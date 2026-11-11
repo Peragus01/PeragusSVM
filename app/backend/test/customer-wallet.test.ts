@@ -9,6 +9,8 @@ import {AuthenticationError} from "../src/auth/customer-access.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerWalletRepository} from "../src/repositories/postgres-customer-wallet.js";
 import {CustomerWalletService,walletProofMessage,canonicalWalletAddress} from "../src/wallets/customer-wallet.js";
+import {resolveMoneyEnvironment,MAINNET_USDT_MINT} from "../src/config/money-environment.js";
+const testEnv=resolveMoneyEnvironment({PERAGUS_DEPLOYMENT_ENV:"staging",SOLANA_USDT_MINT:MAINNET_USDT_MINT}),liveEnv=resolveMoneyEnvironment({PERAGUS_DEPLOYMENT_ENV:"production",SOLANA_USDT_MINT:undefined});
 const db=new PGlite();let failInsert=false;let connection=Promise.resolve();
 const query=async(sql:string,params?:unknown[])=>{
  if(failInsert && sql.includes("insert into peragus_customer_wallets")){failInsert=false;throw new Error("insert unavailable");}
@@ -19,7 +21,7 @@ const pool={query,connect:async()=>{
  return{query,release};
 }} as unknown as Pool;
 const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerWalletRepository(pool,"test");
-let now=new Date();const service=new CustomerWalletService(repo,()=>now);
+let now=new Date();const service=new CustomerWalletService(repo,testEnv,()=>now);
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
@@ -65,7 +67,7 @@ describe("authenticated Solana wallet ownership",()=>{
   now=new Date(Date.parse(c.expires_at)-300001);await expect(service.confirm(s.customer.id,c.challenge_id,signature(c.message,s.keys))).rejects.toThrow("WALLET_CHALLENGE_EXPIRED");
  });
  it("checks expiry again on the database clock when consuming, even if the API validation time is stale",async()=>{
-  const s=await setup(),past=new Date(Date.now()-600000),stale=new CustomerWalletService(repo,()=>past);
+  const s=await setup(),past=new Date(Date.now()-600000),stale=new CustomerWalletService(repo,testEnv,()=>past);
   const c=await stale.start(s.customer.id,s.address);
   await expect(stale.confirm(s.customer.id,c.challenge_id,signature(c.message,s.keys))).rejects.toThrow("WALLET_CHALLENGE_INVALID");
   expect(await stale.read(s.customer.id)).toBeNull();
@@ -104,8 +106,8 @@ describe("authenticated Solana wallet ownership",()=>{
   expect((await db.query("select * from peragus_customer_wallets where customer_id=$1",[s.customer.id])).rows).toHaveLength(1);
  });
  it("does not consume a stale challenge after another issue has replaced it",async()=>{
-  const s=await setup();await service.start(s.customer.id,s.address);const old=(await repo.challenge(s.customer.id))!;const sig=signature(walletProofMessage(old),s.keys);await service.start(s.customer.id,s.address);
-  await expect(repo.consume(old,now,sig)).rejects.toThrow("WALLET_CHALLENGE_INVALID");expect(await service.read(s.customer.id)).toBeNull();
+  const s=await setup();await service.start(s.customer.id,s.address);const old=(await repo.challenge(s.customer.id))!;const sig=signature(walletProofMessage(old,testEnv),s.keys);await service.start(s.customer.id,s.address);
+  await expect(repo.consume(old,now,sig,walletProofMessage(old,testEnv))).rejects.toThrow("WALLET_CHALLENGE_INVALID");expect(await service.read(s.customer.id)).toBeNull();
  });
  it("enforces authentication, PF, suspension, feature gates, strict payloads and private parse errors",async()=>{
   const s=await setup(),pj=await setup("pj"),app=await appFor(s);
@@ -125,5 +127,20 @@ describe("authenticated Solana wallet ownership",()=>{
   await expect(db.query("update peragus_customer_wallets set environment='live' where customer_id=$1",[s.customer.id])).rejects.toThrow();
   await expect(db.query("update peragus_customer_wallets set network='solana:mainnet' where customer_id=$1",[s.customer.id])).rejects.toThrow();
   await expect(db.query("update peragus_customer_wallet_challenges set expires_at=issued_at+interval '6 minutes' where customer_id=$1",[s.customer.id])).rejects.toThrow();
+ });
+ it("live wallet proof message names www.peragus.com.br and solana:mainnet and omits TEST",async()=>{
+  const issued:unknown[]=[];
+  const fake={find:async()=>null,challenge:async()=>null,issue:async(c:unknown)=>{issued.push(c);},consume:async()=>{throw new Error("unused");}};
+  const live=new CustomerWalletService(fake,liveEnv,()=>now),s=await setup();
+  const c=await live.start(s.customer.id,s.address);
+  expect(c).toMatchObject({domain:"www.peragus.com.br",uri:"https://www.peragus.com.br",network:"solana:mainnet",environment:"live"});
+  expect(c.message).toContain("www.peragus.com.br requests proof of control");
+  expect(c.message).toContain("Network: solana:mainnet");
+  expect(c.message).toContain("URI: https://www.peragus.com.br");
+  expect(c.message).toContain("authenticated Peragus account");
+  expect(c.message).not.toContain("TEST");expect(c.message).not.toContain("devnet");
+  expect(issued).toHaveLength(1);
+  const test=walletProofMessage(issued[0] as never,testEnv);
+  expect(test).toContain("Peragus TEST account");expect(test).toContain("Network: solana:devnet");
  });
 });

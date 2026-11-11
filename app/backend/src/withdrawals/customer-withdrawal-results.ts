@@ -39,7 +39,7 @@ export class CustomerWithdrawalResultService {
     const gross=units(row.amount_usdt),target=row.target_amount==null?null:units(row.target_amount);
     const known=completed && gross!==null && target!==null && target>0n && target<=gross;
     return {
-      withdrawal_request_id:row.id,environment:"test",real_money:false,
+      withdrawal_request_id:row.id,environment:this.e.mode,real_money:this.e.mode==="live",
       state:row.status?`provider_${row.status}`:row.attempted?"uncertain":row.approved?"approved":"recorded",
       approved:row.approved,withdrawal_started:row.attempted,provider_completed:completed,
       recovery_required:row.attempted && row.status===null,
@@ -48,7 +48,7 @@ export class CustomerWithdrawalResultService {
         deducted_amount:known?format(gross!-target!):null,
         basis:known?"recorded_provider_amounts":"not_reported",
         fee_breakdown:null},
-      destination:{wallet_address:row.wallet_address,network:"solana",proof_network:"solana:devnet"},
+      destination:{wallet_address:row.wallet_address,network:"solana",proof_network:this.e.network},
       observed_at:row.observed_at?new Date(row.observed_at).toISOString():null,
       observation_freshness:"not_evaluated",onchain_delivery_verified:false,mainnet_execution:false
     };

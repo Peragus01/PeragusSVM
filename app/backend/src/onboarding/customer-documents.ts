@@ -208,13 +208,13 @@ export function uploadGrant(
     throw new DocumentError("DOCUMENT_UPLOAD_EXPIRY_TOO_LATE");
   return { id: v.id, url };
 }
-const view = (row: DocumentRow) => ({
+const renderView = (row: DocumentRow, mode: MoneyMode) => ({
   id: row.id,
   request_id: row.request_id,
   doc_type: row.doc_type,
   side: row.side,
   state: row.state,
-  environment: "test",
+  environment: mode,
   identity_verified: false,
   operations_enabled: false,
 });
@@ -235,7 +235,11 @@ export class CustomerDocumentService {
       reason: string;
       hostname?: string;
     }) => void = () => {},
+    private readonly mode: MoneyMode = "test",
   ) {}
+  private view(row: DocumentRow) {
+    return renderView(row, this.mode);
+  }
   private async binding(customer: string) {
     const b = await this.submissions.find(customer);
     if (
@@ -250,14 +254,14 @@ export class CustomerDocumentService {
   private async capabilities() {
     const c = await this.provider.getCustomerCapabilities();
     if (
-      c.environment !== "test" ||
+      c.environment !== this.mode ||
       !c.entitlements.includes("customers") ||
       !["customers:read", "customers:write"].every((s) => c.scopes.includes(s))
     )
       throw new DocumentError("DOCUMENT_CAPABILITY_REQUIRED");
   }
   async list(customer: string) {
-    return (await this.repo.list(customer)).map(view);
+    return (await this.repo.list(customer)).map((r) => this.view(r));
   }
   async requirements(customer: string) {
     const providerCustomer = await this.binding(customer);
@@ -311,7 +315,7 @@ export class CustomerDocumentService {
     return {
       required_documents: required,
       source: "provider_observation",
-      environment: "test",
+      environment: this.mode,
       identity_verified: false,
       operations_enabled: false,
     };
@@ -348,7 +352,7 @@ export class CustomerDocumentService {
       state: "declaring",
     });
     let row = reservation.row;
-    if (!reservation.created) return { data: view(row), replayed: true };
+    if (!reservation.created) return { data: this.view(row), replayed: true };
     let stage = "declaration";
     let rejectedHostname: string | undefined;
     try {
@@ -446,13 +450,13 @@ export class CustomerDocumentService {
     try {
       return { data: await this.refresh(customer, row.id), replayed: false };
     } catch {
-      return { data: view(row), replayed: false };
+      return { data: this.view(row), replayed: false };
     }
   }
   async read(customer: string, id: string) {
     const row = await this.repo.find(customer, id);
     if (!row) throw new DocumentError("DOCUMENT_NOT_FOUND");
-    return view(row);
+    return this.view(row);
   }
   async refresh(customer: string, id: string) {
     const row = await this.repo.find(customer, id);
@@ -460,7 +464,7 @@ export class CustomerDocumentService {
     const binding = await this.binding(customer);
     if (binding !== row.provider_customer_id)
       throw new DocumentError("DOCUMENT_BINDING_CONFLICT");
-    if (!row.provider_document_id) return view(row);
+    if (!row.provider_document_id) return this.view(row);
     await this.capabilities();
     const seen = new Set<string>();
     let cursor: string | undefined;
@@ -486,7 +490,7 @@ export class CustomerDocumentService {
           doc.associated_person_id != null
         )
           throw new DocumentError("DOCUMENT_BINDING_CONFLICT");
-        if (doc.status === "pending_upload") return view(row);
+        if (doc.status === "pending_upload") return this.view(row);
         if (
           !["received", "rejected"].includes(String(doc.status)) ||
           doc.sha256 !== row.sha256 ||
@@ -494,8 +498,8 @@ export class CustomerDocumentService {
           doc.mime !== row.mime
         )
           throw new DocumentError("DOCUMENT_RECEIPT_MISMATCH");
-        if (row.state === doc.status) return view(row);
-        return view(
+        if (row.state === doc.status) return this.view(row);
+        return this.view(
           await this.repo.update(row, doc.status as "received" | "rejected"),
         );
       }

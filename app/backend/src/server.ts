@@ -97,7 +97,7 @@ import {
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
 import { runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
-import { moneyModeFor } from "./config/money-environment.js";
+import { moneyModeFor, resolveMoneyEnvironment } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import {
   createJobQueue,
@@ -126,6 +126,7 @@ import type { SettlementRepository } from "./repositories/settlement-repository.
 
 console.info(JSON.stringify(deploymentConfigurationAudit()));
 const env = getEnv();
+const moneyMode = moneyModeFor(env);
 const onboardingEmailConfig = notificationConfig();
 if (process.env.RAILWAY_ENVIRONMENT_NAME === "production" || env.PERAGUS_DEPLOYMENT_ENV === "production") {
   assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV});
@@ -200,7 +201,7 @@ if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
 const documentOrigins = new Set(env.CUSTOMER_DOCUMENT_UPLOAD_ORIGINS.split(",").map(v=>v.trim()).filter(Boolean));
 if (env.CUSTOMER_DOCUMENTS_ENABLED) {
   assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV});
-  if (!env.OZAV_API_KEY?.startsWith("ozav_sk_test_")
+  if (!env.OZAV_API_KEY?.startsWith(`ozav_sk_${moneyMode}_`)
     || !env.CUSTOMER_SUBMISSION_ENABLED || !env.API_RATE_LIMITS_ENABLED || !documentOrigins.size)
     throw new Error("DOCUMENT_STAGING_CONFIGURATION_REQUIRED");
   for (const value of documentOrigins) {
@@ -482,9 +483,12 @@ const customerTermsService =
           timeoutMs: 5000,
         }),
         draftService!,
+        () => new Date(),
+        moneyMode,
       )
     : undefined;
 const app = await buildApp({
+  moneyMode,
   ...(pool
     ? {
         sandboxClosureService: new SandboxClosureService(
@@ -493,7 +497,7 @@ const app = await buildApp({
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
           env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED,
           env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED
-            ? createSandboxRecoveryReader(env.OZAV_API_KEY!)
+            ? createSandboxRecoveryReader(env.OZAV_API_KEY!, moneyMode)
             : undefined,
         ),
       }
@@ -548,7 +552,7 @@ const app = await buildApp({
     ? {
         sandboxWithdrawalRecoveryService: new SandboxWithdrawalRecoveryService(
           new PostgresSandboxExecutionRepository(pool!, moneyModeFor(env)),
-          createSandboxRecoveryReader(env.OZAV_API_KEY!),
+          createSandboxRecoveryReader(env.OZAV_API_KEY!, moneyMode),
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
         ),
       }
@@ -592,6 +596,7 @@ const app = await buildApp({
             new WithdrawalOperatorApprovalService(
               new PostgresWithdrawalOperatorApprovalRepository(pool!, moneyModeFor(env)),
               new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+              moneyMode,
             ),
           ),
       }
@@ -602,6 +607,7 @@ const app = await buildApp({
           new WithdrawalOperatorApprovalService(
             new PostgresWithdrawalOperatorApprovalRepository(pool!, moneyModeFor(env)),
             new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+            moneyMode,
           ),
       }
     : {}),
@@ -609,6 +615,7 @@ const app = await buildApp({
     ? {
         customerWithdrawalRequestService: new CustomerWithdrawalRequestService(
           new PostgresCustomerWithdrawalRequestRepository(pool!, moneyModeFor(env)),
+          moneyMode,
         ),
       }
     : {}),
@@ -624,6 +631,7 @@ const app = await buildApp({
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
         ),
       }
     : {}),
@@ -631,6 +639,7 @@ const app = await buildApp({
     ? {
         customerPurchaseIntentService: new CustomerPurchaseIntentService(
           new PostgresCustomerPurchaseIntentRepository(pool!, moneyModeFor(env)),
+          moneyMode,
         ),
       }
     : {}),
@@ -645,13 +654,17 @@ const app = await buildApp({
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
         ),
       }
     : {}),
   ...(env.CUSTOMER_WALLET_LINKING_ENABLED
     ? {
+        // Constructed only when enabled: the wallet proof binds to the resolved
+        // environment's domain and network (staging requires SOLANA_USDT_MINT).
         customerWalletService: new CustomerWalletService(
           new PostgresCustomerWalletRepository(pool!, moneyModeFor(env)),
+          resolveMoneyEnvironment(env),
         ),
       }
     : {}),
@@ -670,6 +683,7 @@ const app = await buildApp({
           undefined,
           async customer => onboardingEmailConfig.enabled && onboardingEmailConfig.owners.includes(customer.ownerUserId)
             ? emailNotificationReady(pool!, customer.ownerUserId) : false,
+          moneyMode,
         ),
       }
     : {}),
@@ -684,14 +698,16 @@ const app = await buildApp({
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
         ),
       }
     : {}),
   ...(env.CUSTOMER_DOCUMENTS_ENABLED ? {customerDocumentService: new CustomerDocumentService(
     new DocumentRepository(pool!, moneyModeFor(env)), new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
     new OzavClient({apiKey: env.OZAV_API_KEY!,mode: moneyModeFor(env), attempts:1, timeoutMs:5000}), documentOrigins,
-    (url, bytes, mime, binding) => uploadDocumentBytes(url, bytes, mime, {apiKey: env.OZAV_API_KEY!, ...binding}),
+    (url, bytes, mime, binding) => uploadDocumentBytes(url, bytes, mime, {apiKey: env.OZAV_API_KEY!, mode: moneyMode, ...binding}),
     (event) => console.warn(JSON.stringify({event:"customer_document_upload_failure", ...event})),
+    moneyMode,
   )} : {}),
   ...(env.CUSTOMER_VERIFICATIONS_ENABLED
     ? {
@@ -704,6 +720,7 @@ const app = await buildApp({
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
         ),
         verificationSimulationEnabled:
           env.CUSTOMER_VERIFICATION_SIMULATION_ENABLED,
@@ -725,6 +742,7 @@ const app = await buildApp({
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
         ),
       }
     : {}),

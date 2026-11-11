@@ -1,4 +1,5 @@
 import type {AuthenticatedUser} from "../auth/customer-access.js";
+import type {MoneyMode} from "../config/money-environment.js";
 import {OzavSandboxWithdrawalProvider} from "../providers/ozav-sandbox-withdrawal.js";
 import {authorizeWithdrawalOperator} from "./operator-approvals.js";
 import {SandboxExecutionError,executionView,validateWithdrawal,type SandboxExecutionRepository} from "./sandbox-execution.js";
@@ -7,8 +8,8 @@ type RecoveryRepository=Pick<SandboxExecutionRepository,"read"|"bind"|"save">;
 type RecoveryReader=Pick<OzavSandboxWithdrawalProvider,"find"|"transfer">;
 
 /** Exposes GET operations only; no send operation reaches the recovery service. */
-export function createSandboxRecoveryReader(key:string):RecoveryReader {
- const provider=new OzavSandboxWithdrawalProvider(key,{mode:"test"});
+export function createSandboxRecoveryReader(key:string,mode:MoneyMode):RecoveryReader {
+ const provider=new OzavSandboxWithdrawalProvider(key,{mode});
  return Object.freeze({find:provider.find.bind(provider),transfer:provider.transfer.bind(provider)});
 }
 

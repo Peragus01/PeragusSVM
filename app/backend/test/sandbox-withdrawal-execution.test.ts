@@ -160,8 +160,8 @@ describe("approved sandbox withdrawal execution",()=>{
   expect(f.sends()).toBe(1);
  });
  it("exposes only read methods from the sandbox recovery provider",()=>{
-  expect(()=>createSandboxRecoveryReader("ozav_sk_live_example")).toThrow("Sandbox key required");
-  const reader=createSandboxRecoveryReader("ozav_sk_test_example");
+  expect(()=>createSandboxRecoveryReader("ozav_sk_live_example","test")).toThrow("Sandbox key required");expect(()=>createSandboxRecoveryReader("ozav_sk_live_example","live")).not.toThrow();
+  const reader=createSandboxRecoveryReader("ozav_sk_test_example","test");
   expect(Object.keys(reader).sort()).toEqual(["find","transfer"]);expect(Object.isFrozen(reader)).toBe(true);
  });
  it("reads stored audit before approval and after completion with writes disabled",async()=>{

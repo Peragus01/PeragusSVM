@@ -78,8 +78,8 @@ export class OperatorAlertService {
    withdrawal_request_id:row.withdrawal_request_id,refund_request_id:row.refund_request_id,
    detail_path:row.refund_request_id?`/v1/admin/refund-requests/${row.refund_request_id}`:
     row.kind.startsWith('reconciliation_')?'/v1/admin/customer-reconciliation':`/v1/admin/withdrawal-requests/${row.withdrawal_request_id}/audit`,
-   environment:'test',stored_evidence_only:true,execution_authorized:false
+   environment:this.e.mode,stored_evidence_only:true,execution_authorized:false
   })),meta:{has_more:hasMore,next_cursor:hasMore && last?Buffer.from(JSON.stringify({priority:last.priority,at:last.recorded_at,id:last.id,kind:last.kind})).toString('base64url'):null,
-   environment:'test',provider_refreshed:false,notifications_sent:false}};
+   environment:this.e.mode,provider_refreshed:false,notifications_sent:false}};
  }
 }

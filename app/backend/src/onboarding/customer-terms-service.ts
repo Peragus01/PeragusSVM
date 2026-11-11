@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { OzavClient, OzavTermsEvidence, OzavTermsSession } from "../providers/ozav-client.js";
 import type { IndividualDraftService } from "./individual-draft-service.js";
+import type { MoneyMode } from "../config/money-environment.js";
 import { TermsFlowError, type TermsRecord, type TermsRepository } from "./terms-types.js";
 import { TermsVault, type TermsContext } from "./terms-vault.js";
 const evidenceSchema = z.object({ accepted_by: z.object({ legal_name: z.string().min(2).max(160) }).strict(), accepted_at: z.string().datetime() }).strict();
@@ -8,7 +9,8 @@ const tokenSchema = z.object({ token: z.string().regex(/^ts_[A-Za-z0-9_-]{8,256}
 export class CustomerTermsService {
   constructor(private readonly repository: TermsRepository, private readonly vault: TermsVault,
     private readonly provider: Pick<OzavClient, "getCustomerCapabilities" | "createCustomerTerms" | "acceptCustomerTerms">,
-    private readonly drafts: Pick<IndividualDraftService, "read">, private readonly now: () => Date = () => new Date()) {}
+    private readonly drafts: Pick<IndividualDraftService, "read">, private readonly now: () => Date = () => new Date(),
+    private readonly mode: MoneyMode = "test") {}
   private context(row: TermsRecord): TermsContext {
     if (!row.termsUrl || !row.termsVersion || !row.expiresAt) throw new TermsFlowError("TERMS_RESPONSE_CONFLICT");
     return { id: row.id, customerId: row.customerId, termsUrl: row.termsUrl, termsVersion: row.termsVersion, expiresAt: row.expiresAt };
@@ -23,11 +25,11 @@ export class CustomerTermsService {
       expires_at: row.expiresAt, expired, accepted_at: row.acceptedAt,
       can_accept: row.state === "ready" && !expired,
       can_renew: row.state === "uncertain" || (expired && row.state !== "accepting"),
-      environment: "test", operations_enabled: false };
+      environment: this.mode, operations_enabled: false };
   }
   private async capabilities() {
     const caps = await this.provider.getCustomerCapabilities();
-    if (caps.environment !== "test" || !caps.entitlements.includes("customers") || !caps.scopes.includes("customers:write")) throw new TermsFlowError("TERMS_CAPABILITY_REQUIRED");
+    if (caps.environment !== this.mode || !caps.entitlements.includes("customers") || !caps.scopes.includes("customers:write")) throw new TermsFlowError("TERMS_CAPABILITY_REQUIRED");
   }
   async read(customerId: string) {
     const row = await this.repository.findActive(customerId);
