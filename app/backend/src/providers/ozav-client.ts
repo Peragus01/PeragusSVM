@@ -748,12 +748,15 @@ export class OzavClient {
     return this.get(`/v2/customers/${customerId}/documents?limit=100${cursor ? `&starting_after=${encodeURIComponent(cursor)}` : ""}`);
   }
 
-  async getCapabilities(): Promise<{ environment: "test"; scopes: string[] }> {
+  async getCapabilities(): Promise<{ environment: "test" | "live"; scopes: string[] }> {
     const row = object(await this.get("/v2/capabilities"));
-    if (row.environment !== "test" || !Array.isArray(row.scopes)) {
+    if (
+      (row.environment !== "test" && row.environment !== "live")
+      || !Array.isArray(row.scopes)
+    ) {
       return invalidResponse();
     }
-    return { environment: "test", scopes: row.scopes.map(text) };
+    return { environment: row.environment, scopes: row.scopes.map(text) };
   }
 
   async getCustomerCapabilities(): Promise<{

@@ -32,9 +32,13 @@ describe("read-only OZAV sandbox client", () => {
     expect(() => new OzavClient({ mode: "test", apiKey: "ozav_sk_live_secret" }))
       .toThrow("An OZAV key matching the money mode is required");
   });
-  it("requires a test environment response", async () => {
-    const { client } = setup([{ statusCode: 200, body: { environment: "live", scopes: [] } }]);
+  it("rejects an unknown environment response", async () => {
+    const { client } = setup([{ statusCode: 200, body: { environment: "other", scopes: [] } }]);
     await expect(client.getCapabilities()).rejects.toThrow("Invalid OZAV response");
+  });
+  it("reports a live environment response so boot checks can compare it", async () => {
+    const { client } = setup([{ statusCode: 200, body: { environment: "live", scopes: [] } }]);
+    expect(await client.getCapabilities()).toEqual({ environment: "live", scopes: [] });
   });
   it("validates capabilities", async () => {
     const { client } = setup([{ statusCode: 200, body: { environment: "test", scopes: ["events:read"] } }]);

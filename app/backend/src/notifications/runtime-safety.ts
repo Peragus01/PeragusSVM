@@ -1,3 +1,4 @@
+import { moneyModeFor } from "../config/money-environment.js";
 import { OzavClientError } from "../providers/ozav-client.js";
 // Deployment location and provider mode are separate: both locations run only
 // controlled synthetic onboarding until a separately reviewed live integration.
@@ -140,8 +141,14 @@ export function deploymentConfigurationAudit(
   const project = refs.find(
     (p) => host === `db.${p}.supabase.co` || username === `postgres.${p}`,
   );
+  const moneyMode = moneyModeFor({
+    PERAGUS_DEPLOYMENT_ENV:
+      runtime.PERAGUS_DEPLOYMENT_ENV === "production" ? "production" : "staging",
+  });
   return {
     event: "deployment_configuration_audit",
+    money_mode: moneyMode,
+    network: moneyMode === "live" ? "solana:mainnet" : "solana:devnet",
     environment: ["staging", "production"].includes(
       runtime.RAILWAY_ENVIRONMENT_NAME ?? "",
     )
