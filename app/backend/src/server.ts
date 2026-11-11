@@ -489,7 +489,7 @@ const app = await buildApp({
     ? {
         sandboxClosureService: new SandboxClosureService(
           pool,
-          new PostgresSandboxExecutionRepository(pool),
+          new PostgresSandboxExecutionRepository(pool, moneyModeFor(env)),
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
           env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED,
           env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED
@@ -530,6 +530,7 @@ const app = await buildApp({
           new CustomerReconciliationStatusService(
             pool,
             new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+            moneyModeFor(env),
           ),
       }
     : {}),
@@ -539,13 +540,14 @@ const app = await buildApp({
           pool,
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
           env.MANUAL_REFUNDS_ENABLED,
+          moneyModeFor(env),
         ),
       }
     : {}),
   ...(env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED
     ? {
         sandboxWithdrawalRecoveryService: new SandboxWithdrawalRecoveryService(
-          new PostgresSandboxExecutionRepository(pool!),
+          new PostgresSandboxExecutionRepository(pool!, moneyModeFor(env)),
           createSandboxRecoveryReader(env.OZAV_API_KEY!),
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
         ),
@@ -585,10 +587,10 @@ const app = await buildApp({
     ? {
         sandboxWithdrawalExecutionService:
           new SandboxWithdrawalExecutionService(
-            new PostgresSandboxExecutionRepository(pool!),
+            new PostgresSandboxExecutionRepository(pool!, moneyModeFor(env)),
             new OzavSandboxWithdrawalProvider(env.OZAV_API_KEY!, { mode: moneyModeFor(env) }),
             new WithdrawalOperatorApprovalService(
-              new PostgresWithdrawalOperatorApprovalRepository(pool!),
+              new PostgresWithdrawalOperatorApprovalRepository(pool!, moneyModeFor(env)),
               new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
             ),
           ),
@@ -598,7 +600,7 @@ const app = await buildApp({
     ? {
         withdrawalOperatorApprovalService:
           new WithdrawalOperatorApprovalService(
-            new PostgresWithdrawalOperatorApprovalRepository(pool!),
+            new PostgresWithdrawalOperatorApprovalRepository(pool!, moneyModeFor(env)),
             new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
           ),
       }
@@ -606,7 +608,7 @@ const app = await buildApp({
   ...(env.CUSTOMER_WITHDRAWAL_REQUESTS_ENABLED
     ? {
         customerWithdrawalRequestService: new CustomerWithdrawalRequestService(
-          new PostgresCustomerWithdrawalRequestRepository(pool!),
+          new PostgresCustomerWithdrawalRequestRepository(pool!, moneyModeFor(env)),
         ),
       }
     : {}),
@@ -615,7 +617,7 @@ const app = await buildApp({
   ...(env.CUSTOMER_SANDBOX_PIX_ENABLED
     ? {
         customerSandboxPixService: new CustomerSandboxPixService(
-          new PostgresCustomerPixRepository(pool!),
+          new PostgresCustomerPixRepository(pool!, moneyModeFor(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
             mode: moneyModeFor(env),
@@ -628,14 +630,14 @@ const app = await buildApp({
   ...(env.CUSTOMER_PURCHASE_INTENTS_ENABLED
     ? {
         customerPurchaseIntentService: new CustomerPurchaseIntentService(
-          new PostgresCustomerPurchaseIntentRepository(pool!),
+          new PostgresCustomerPurchaseIntentRepository(pool!, moneyModeFor(env)),
         ),
       }
     : {}),
   ...(env.CUSTOMER_QUOTES_ENABLED
     ? {
         customerQuoteService: new CustomerQuoteService(
-          new PostgresCustomerQuoteRepository(pool!),
+          new PostgresCustomerQuoteRepository(pool!, moneyModeFor(env)),
           new PostgresOnboardingSubmissionRepository(pool!),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
@@ -649,7 +651,7 @@ const app = await buildApp({
   ...(env.CUSTOMER_WALLET_LINKING_ENABLED
     ? {
         customerWalletService: new CustomerWalletService(
-          new PostgresCustomerWalletRepository(pool!),
+          new PostgresCustomerWalletRepository(pool!, moneyModeFor(env)),
         ),
       }
     : {}),

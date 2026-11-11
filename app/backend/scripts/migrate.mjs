@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 
 import { Pool } from "pg";
 
+import { recordDatabaseEnvironment } from "./lib/database-environment.mjs";
+
 const backendDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -133,6 +135,15 @@ async function migrate() {
     console.log(
       `Migrations concluídas: ${appliedCount} aplicada(s).`,
     );
+
+    // One money environment per database; a different recorded value aborts
+    // with DATABASE_ENVIRONMENT_CONFLICT (non-zero exit below).
+    const environment = await recordDatabaseEnvironment(
+      client,
+      process.env.PERAGUS_DEPLOYMENT_ENV,
+    );
+
+    console.log(`Ambiente do banco: ${environment}.`);
   } finally {
     try {
       await client.query(

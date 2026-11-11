@@ -59,3 +59,9 @@ export function resolveMoneyEnvironment(
 export const moneyModeFor = (
   env: Pick<Env, "PERAGUS_DEPLOYMENT_ENV">,
 ): MoneyMode => (env.PERAGUS_DEPLOYMENT_ENV === "production" ? "live" : "test");
+
+export type MoneyNetwork = MoneyEnvironment["network"];
+
+/** Solana network bound to a money mode; the database enforces the same pairing. */
+export const moneyNetworkFor = (mode: MoneyMode): MoneyNetwork =>
+  mode === "live" ? "solana:mainnet" : "solana:devnet";

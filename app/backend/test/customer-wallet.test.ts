@@ -18,13 +18,14 @@ const pool={query,connect:async()=>{
  const previous=connection;let release!:()=>void;connection=new Promise<void>(resolve=>{release=resolve;});await previous;
  return{query,release};
 }} as unknown as Pool;
-const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerWalletRepository(pool);
+const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerWalletRepository(pool,"test");
 let now=new Date();const service=new CustomerWalletService(repo,()=>now);
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
  const dir=new URL("../migrations/",import.meta.url);
  for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await db.exec(await readFile(new URL(f,dir),"utf8"));
+ await db.exec("insert into peragus_database_environment(environment) values('test')");
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 async function setup(type:"pf"|"pj"="pf"){

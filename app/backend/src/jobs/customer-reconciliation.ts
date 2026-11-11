@@ -2,6 +2,8 @@ import {randomUUID} from "node:crypto";
 import type {Pool} from "pg";
 import type {PgBoss} from "pg-boss";
 import type {AuthenticatedUser} from "../auth/customer-access.js";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {authorizeWithdrawalOperator} from "../withdrawals/operator-approvals.js";
 import {assertSmokeTestSafety} from "./worker-smoke-test.js";
 import {z} from "zod";
@@ -33,17 +35,18 @@ function classifyError(error:unknown){
 
 /** Discovers existing requests only. Every provider call is a read, never a retry of a send. */
 export class CustomerReconciliationService {
- constructor(private readonly pool:Pick<Pool,"query">,private readonly reader:CustomerReconciliationReader){}
+ private readonly e:RowEnvironment;
+ constructor(private readonly pool:Pick<Pool,"query">,private readonly reader:CustomerReconciliationReader,mode:MoneyMode){this.e=rowEnvironment(mode);}
  async discover(){
-  await this.pool.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,pix_id,created_at)
-   select x.customer_id,x.purchase_intent_id,x.id,x.created_at from peragus_customer_sandbox_pix x
-   where x.environment='test' and x.create_attempted
+  await this.pool.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,pix_id,created_at,environment)
+   select x.customer_id,x.purchase_intent_id,x.id,x.created_at,'${this.e.mode}' from peragus_customer_sandbox_pix x
+   where x.environment='${this.e.mode}' and x.create_attempted
     and not exists(select 1 from peragus_customer_reconciliation c where c.pix_id=x.id)
    order by x.created_at,x.id limit 100 on conflict do nothing`);
-  await this.pool.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,withdrawal_request_id,created_at)
-   select e.customer_id,w.purchase_intent_id,e.withdrawal_request_id,e.created_at from peragus_sandbox_withdrawal_executions e
-   join peragus_customer_withdrawal_requests w on w.id=e.withdrawal_request_id and w.customer_id=e.customer_id and w.environment='test'
-   where e.environment='test' and e.create_attempted
+  await this.pool.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,withdrawal_request_id,created_at,environment)
+   select e.customer_id,w.purchase_intent_id,e.withdrawal_request_id,e.created_at,'${this.e.mode}' from peragus_sandbox_withdrawal_executions e
+   join peragus_customer_withdrawal_requests w on w.id=e.withdrawal_request_id and w.customer_id=e.customer_id and w.environment='${this.e.mode}'
+   where e.environment='${this.e.mode}' and e.create_attempted
     and not exists(select 1 from peragus_customer_reconciliation c where c.withdrawal_request_id=e.withdrawal_request_id)
    order by e.created_at,e.id limit 100 on conflict do nothing`);
  }
@@ -57,7 +60,7 @@ export class CustomerReconciliationService {
   ) insert into peragus_customer_reconciliation_events(reconciliation_id,attempt,state,provider_status,error_code,manual_review_required)
    select id,attempts,state,last_status,last_error_code,manual_review_required from exhausted on conflict do nothing`);
   const claim=await this.pool.query<Checkpoint>(`with due as (
-   select id from peragus_customer_reconciliation where environment='test' and state='pending' and attempts<120
+   select id from peragus_customer_reconciliation where environment='${this.e.mode}' and state='pending' and attempts<120
     and next_check_at<=now() and (lease_until is null or lease_until<=now())
    order by next_check_at,id for update skip locked limit 1
   ) update peragus_customer_reconciliation c set lease_token=$1,lease_until=now()+interval '10 minutes',
@@ -91,7 +94,8 @@ export class CustomerReconciliationService {
 
 /** Safe operational view; no provider identifiers, secrets or payloads. */
 export class CustomerReconciliationStatusService {
- constructor(private readonly pool:Pick<Pool,"query">,private readonly operators:ReadonlySet<string>){}
+ private readonly e:RowEnvironment;
+ constructor(private readonly pool:Pick<Pool,"query">,private readonly operators:ReadonlySet<string>,mode:MoneyMode){this.e=rowEnvironment(mode);}
  async list(user:AuthenticatedUser,query:unknown){
   authorizeWithdrawalOperator(user,this.operators);
   const parsed=z.object({state:z.enum(["all","pending","provider_terminal","needs_review"]).default("all"),
@@ -101,9 +105,9 @@ export class CustomerReconciliationStatusService {
    last_status,last_error_code,manual_review_required,last_checked_at,
    case when state='pending' then next_check_at end as next_check_at,updated_at,
    coalesce(lease_until>now(),false) as leased from peragus_customer_reconciliation
-   where environment='test' and ($1='all' or state=$1)
+   where environment='${this.e.mode}' and ($1='all' or state=$1)
    order by manual_review_required desc,updated_at desc,id desc limit $2`,[parsed.data.state,Number(parsed.data.limit)]);
-  return {data:rows.rows,meta:{environment:"test",provider_reads_only:true,financial_retries:false}};
+  return {data:rows.rows,meta:{environment:this.e.mode,provider_reads_only:true,financial_retries:false}};
  }
 }
 export async function registerCustomerReconciliationWorker(boss:Pick<PgBoss,"createQueue"|"schedule"|"work">,service:Pick<CustomerReconciliationService,"run">){

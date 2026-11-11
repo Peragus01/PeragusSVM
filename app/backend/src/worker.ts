@@ -315,7 +315,7 @@ try {
   await startJobQueue(boss);
   await ensureSettlementQueues(boss);
   if(env.CUSTOMER_RECONCILIATION_ENABLED){
-    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!)));
+    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!),moneyModeFor(env)));
     console.info(JSON.stringify({event:"customer_reconciliation_configured",enabled:true,providerReadsOnly:true}));
   }else{
     await boss.unschedule(CUSTOMER_RECONCILIATION_QUEUE);

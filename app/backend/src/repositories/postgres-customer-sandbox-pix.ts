@@ -1,16 +1,18 @@
 import {randomUUID} from "node:crypto";
 import type {Pool} from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
 import {CustomerPixError, validatePixTransfer, type CustomerPixRecord, type CustomerPixRepository, type PixContext} from "../purchases/customer-sandbox-pix.js";
 import type {OzavTransfer} from "../providers/ozav-client.js";
-const eligible = `select p.id as purchase_id,p.provider_customer_id,q.provider_quote_id,p.source_amount_brl,p.wallet_address
+const eligible = (env:RowEnvironment) => `select p.id as purchase_id,p.provider_customer_id,q.provider_quote_id,p.source_amount_brl,p.wallet_address
    from peragus_customer_purchase_intents p join peragus_customer_indicative_quotes q on q.id=p.quote_id and q.customer_id=p.customer_id
    join peragus_customers c on c.id=q.customer_id and c.customer_type='pf' and not c.suspended
    join peragus_customer_onboarding_submissions s on s.customer_id=q.customer_id and s.environment='test'
    join peragus_customer_terms_sessions t on t.id=s.terms_session_id and t.customer_id=q.customer_id and t.environment='test'
    join peragus_customer_verifications v on v.customer_id=q.customer_id and v.environment='test'
    join peragus_customer_screenings sc on sc.customer_id=q.customer_id and sc.environment='test'
-   join peragus_customer_wallets w on w.customer_id=q.customer_id and w.environment='test' and w.network='solana:devnet'
-   where p.id=$2 and p.customer_id=$1 and q.environment='test' and q.provider_quote_id is not null
+   join peragus_customer_wallets w on w.customer_id=q.customer_id and w.environment='${env.mode}' and w.network='${env.network}'
+   where p.id=$2 and p.customer_id=$1 and q.environment='${env.mode}' and q.provider_quote_id is not null
     and q.create_attempted and q.observation->>'customerId'=q.provider_customer_id
     and q.observation->>'id'=q.provider_quote_id and (q.observation->>'rate')::numeric>0
     and q.observation->>'rateType'='floating' and q.observation->'expiresAt'='null'::jsonb
@@ -35,17 +37,18 @@ const map=(r:Row):CustomerPixRecord=>({id:r.id,customerId:r.customer_id,requestI
  providerCustomerId:r.provider_customer_id,providerQuoteId:r.provider_quote_id,amountBrl:r.source_amount_brl,walletAddress:r.wallet_address,
  providerWalletId:r.provider_wallet_id,attempted:r.create_attempted,simulationAttempted:r.simulation_attempted,transferId:r.provider_transfer_id,observation:r.observation});
 export class PostgresCustomerPixRepository implements CustomerPixRepository {
- constructor(private readonly pool:Pool){}
+ private readonly e:RowEnvironment;
+ constructor(private readonly pool:Pool,mode:MoneyMode){this.e=rowEnvironment(mode);}
  async context(customerId:string,purchaseId:string):Promise<PixContext|null>{
-  const r=await this.pool.query(eligible,[customerId,purchaseId]),x=r.rows[0];
+  const r=await this.pool.query(eligible(this.e),[customerId,purchaseId]),x=r.rows[0];
   return x?{purchaseId:x.purchase_id,providerCustomerId:x.provider_customer_id,providerQuoteId:x.provider_quote_id,amountBrl:x.source_amount_brl,walletAddress:x.wallet_address}:null;
  }
  async findRequest(customerId:string,requestId:string){const r=await this.pool.query<Row>("select * from peragus_customer_sandbox_pix where customer_id=$1 and request_id=$2",[customerId,requestId]);return r.rows[0]?map(r.rows[0]):null;}
  async read(customerId:string,id:string){const r=await this.pool.query<Row>("select * from peragus_customer_sandbox_pix where customer_id=$1 and id=$2",[customerId,id]);return r.rows[0]?map(r.rows[0]):null;}
  async reserve(customerId:string,requestId:string,c:PixContext,walletId:string){
   const id=randomUUID();
-  await this.pool.query(`insert into peragus_customer_sandbox_pix(id,customer_id,request_id,purchase_intent_id,provider_customer_id,provider_quote_id,source_amount_brl,wallet_address,provider_wallet_id,idempotency_key)
-   select $3,$1,$4,e.purchase_id,e.provider_customer_id,e.provider_quote_id,e.source_amount_brl,e.wallet_address,$5,$6 from (${eligible}) e
+  await this.pool.query(`insert into peragus_customer_sandbox_pix(id,customer_id,request_id,purchase_intent_id,provider_customer_id,provider_quote_id,source_amount_brl,wallet_address,provider_wallet_id,idempotency_key,environment)
+   select $3,$1,$4,e.purchase_id,e.provider_customer_id,e.provider_quote_id,e.source_amount_brl,e.wallet_address,$5,$6,'${this.e.mode}' from (${eligible(this.e)}) e
    where e.provider_customer_id=$7 and e.provider_quote_id=$8 and e.source_amount_brl=$9 and e.wallet_address=$10
    on conflict do nothing`,[customerId,c.purchaseId,id,requestId,walletId,`peragus-pix-${id}`,c.providerCustomerId,c.providerQuoteId,c.amountBrl,c.walletAddress]);
   const row=await this.findRequest(customerId,requestId);
@@ -56,14 +59,14 @@ export class PostgresCustomerPixRepository implements CustomerPixRepository {
  async claim(id:string){
   const row=await this.pool.query<Row>("select * from peragus_customer_sandbox_pix where id=$1",[id]);const r=row.rows[0];if(!r)return false;
   const result=await this.pool.query(`update peragus_customer_sandbox_pix set create_attempted=true,updated_at=now()
-   where id=$3 and not create_attempted and exists(${eligible}) returning id`,[r.customer_id,r.purchase_intent_id,id]);return Boolean(result.rows[0]);
+   where id=$3 and not create_attempted and exists(${eligible(this.e)}) returning id`,[r.customer_id,r.purchase_intent_id,id]);return Boolean(result.rows[0]);
  }
  async claimSimulation(row:CustomerPixRecord){
   const r=await this.pool.query(`update peragus_customer_sandbox_pix set simulation_attempted=true,simulation_attempted_at=now(),updated_at=now()
    where id=$3 and customer_id=$1 and purchase_intent_id=$2 and not simulation_attempted and create_attempted
     and provider_transfer_id=$4 and observation->>'status'='awaiting_payment'
     and (observation->'source'->'paymentInstructions'->>'expiresAt')::timestamptz>clock_timestamp()
-    and exists(${eligible}) returning id`,[row.customerId,row.purchaseId,row.id,row.transferId]);
+    and exists(${eligible(this.e)}) returning id`,[row.customerId,row.purchaseId,row.id,row.transferId]);
   return Boolean(r.rows[0]);
  }
  async bind(row:CustomerPixRecord,transferId:string){

@@ -12,7 +12,8 @@ export function createCustomerReconciliationReader(pool:Pool,key:string,read?:Oz
  if(!/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(key))throw Error("Sandbox key required");
  const client=new OzavClient({apiKey:key,mode:"test",attempts:1,timeoutMs:10000,...(read?{transport:read}:{})});
  const withdrawal=new OzavSandboxWithdrawalProvider(key,{mode:"test",...(read?{read}:{})});
- const pixRepository=new PostgresCustomerPixRepository(pool),withdrawalRepository=new PostgresSandboxExecutionRepository(pool);
+ // Sandbox-key reader: rows are always the test environment.
+ const pixRepository=new PostgresCustomerPixRepository(pool,"test"),withdrawalRepository=new PostgresSandboxExecutionRepository(pool,"test");
  const pixProvider=Object.freeze({findCustomerPixTransfer:client.findCustomerPixTransfer.bind(client),getTransfer:client.getTransfer.bind(client)});
  const withdrawalProvider=Object.freeze({find:withdrawal.find.bind(withdrawal),transfer:withdrawal.transfer.bind(withdrawal)});
  return Object.freeze({

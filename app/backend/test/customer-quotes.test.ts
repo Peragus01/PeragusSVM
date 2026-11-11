@@ -30,7 +30,7 @@ const pool = {
 } as unknown as Pool;
 const customers = new PostgresCustomerRepository(pool),
   submissions = new PostgresOnboardingSubmissionRepository(pool),
-  repo = new PostgresCustomerQuoteRepository(pool);
+  repo = new PostgresCustomerQuoteRepository(pool,"test");
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 beforeAll(async () => {
   await db.exec(
@@ -41,6 +41,9 @@ beforeAll(async () => {
     .filter((f) => /^\d+_.*\.sql$/.test(f))
     .sort())
     await db.exec(await readFile(new URL(f, dir), "utf8"));
+  await db.exec(
+    "insert into peragus_database_environment(environment) values('test')",
+  );
 }, 30000);
 afterAll(async () => {
   await Promise.all(apps.map((a) => a.close()));

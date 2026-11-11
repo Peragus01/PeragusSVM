@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
 import type { OzavIndicativeQuote } from "../providers/ozav-client.js";
 import {
   normalizeQuoteUsdt,
@@ -30,17 +32,23 @@ const map = (r: Row): CustomerQuoteRecord => ({
   createdAt: new Date(r.created_at).toISOString(),
 });
 export class PostgresCustomerQuoteRepository implements CustomerQuoteRepository {
-  constructor(private readonly pool: Pool) {}
+  private readonly e: RowEnvironment;
+  constructor(
+    private readonly pool: Pool,
+    mode: MoneyMode,
+  ) {
+    this.e = rowEnvironment(mode);
+  }
   async findRequest(customerId: string, requestId: string) {
     const r = await this.pool.query<Row>(
-      "select * from peragus_customer_indicative_quotes where customer_id=$1 and request_id=$2 and environment='test'",
+      `select * from peragus_customer_indicative_quotes where customer_id=$1 and request_id=$2 and environment='${this.e.mode}'`,
       [customerId, requestId],
     );
     return r.rows[0] ? map(r.rows[0]) : null;
   }
   async findOwned(customerId: string, id: string) {
     const r = await this.pool.query<Row>(
-      "select * from peragus_customer_indicative_quotes where customer_id=$1 and id=$2 and environment='test'",
+      `select * from peragus_customer_indicative_quotes where customer_id=$1 and id=$2 and environment='${this.e.mode}'`,
       [customerId, id],
     );
     return r.rows[0] ? map(r.rows[0]) : null;
@@ -52,8 +60,8 @@ export class PostgresCustomerQuoteRepository implements CustomerQuoteRepository 
     amountBrl: string,
   ) {
     await this.pool.query(
-      "insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl) values($1,$2,$3,$4,$5) on conflict(customer_id,request_id) do nothing",
-      [randomUUID(), customerId, requestId, providerCustomerId, amountBrl],
+      "insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,environment) values($1,$2,$3,$4,$5,$6) on conflict(customer_id,request_id) do nothing",
+      [randomUUID(), customerId, requestId, providerCustomerId, amountBrl, this.e.mode],
     );
     const row = await this.findRequest(customerId, requestId);
     if (
@@ -71,8 +79,8 @@ export class PostgresCustomerQuoteRepository implements CustomerQuoteRepository 
     targetAmount: string,
   ) {
     await this.pool.query(
-      "insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,target_amount_usdt) values($1,$2,$3,$4,0,$5) on conflict(customer_id,request_id) do nothing",
-      [randomUUID(), customerId, requestId, providerCustomerId, targetAmount],
+      "insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,target_amount_usdt,environment) values($1,$2,$3,$4,0,$5,$6) on conflict(customer_id,request_id) do nothing",
+      [randomUUID(), customerId, requestId, providerCustomerId, targetAmount, this.e.mode],
     );
     const row = await this.findRequest(customerId, requestId);
     if (
@@ -85,7 +93,7 @@ export class PostgresCustomerQuoteRepository implements CustomerQuoteRepository 
   }
   async claim(id: string) {
     const r = await this.pool.query(
-      "update peragus_customer_indicative_quotes set create_attempted=true,updated_at=now() where id=$1 and environment='test' and not create_attempted returning id",
+      `update peragus_customer_indicative_quotes set create_attempted=true,updated_at=now() where id=$1 and environment='${this.e.mode}' and not create_attempted returning id`,
       [id],
     );
     return Boolean(r.rows[0]);
@@ -106,7 +114,7 @@ export class PostgresCustomerQuoteRepository implements CustomerQuoteRepository 
     try {
       const r = await this.pool.query<Row>(
         `update peragus_customer_indicative_quotes set provider_quote_id=$3,observation=$4::jsonb,source_amount_brl=$6::numeric,updated_at=now()
-        where id=$1 and customer_id=$2 and provider_customer_id=$5 and environment='test' and create_attempted and provider_quote_id is null returning *`,
+        where id=$1 and customer_id=$2 and provider_customer_id=$5 and environment='${this.e.mode}' and create_attempted and provider_quote_id is null returning *`,
         [
           row.id,
           row.customerId,

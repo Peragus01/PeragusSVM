@@ -17,6 +17,7 @@ beforeAll(async()=>{
  await db.exec("create role anon;create role authenticated;alter default privileges grant all on tables to anon,authenticated;");
  const dir=new URL("../migrations/",import.meta.url);
  for(const name of (await readdir(dir)).filter(n=>/^\d+_.*\.sql$/.test(n)).sort())await db.exec(await readFile(new URL(name,dir),"utf8"));
+ await db.exec("insert into peragus_database_environment(environment) values('test')");
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 const reason="Cliente solicita analise manual da devolucao.";
@@ -29,13 +30,13 @@ async function fixture(){
  values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now(),now(),'{}','{}')`,[terms,customer.id,randomUUID()]);
  await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version)
  values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full','{}',1)`,[randomUUID(),customer.id,terms,"a".repeat(64),randomUUID(),provider]);
- await db.query(`insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl) values($1,$2,$3,$4,1000)`,[quote,customer.id,randomUUID(),provider]);
- await db.query(`insert into peragus_customer_purchase_intents(id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot)
- values($1,$2,$3,$4,$5,1000,200,'{}',$6,now(),'{}')`,[purchase,customer.id,randomUUID(),quote,provider,wallet]);
+ await db.query(`insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,environment) values($1,$2,$3,$4,1000,'test')`,[quote,customer.id,randomUUID(),provider]);
+ await db.query(`insert into peragus_customer_purchase_intents(id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network)
+ values($1,$2,$3,$4,$5,1000,200,'{}',$6,now(),'{}','test','solana:devnet')`,[purchase,customer.id,randomUUID(),quote,provider,wallet]);
  const transfer="ozav_tr_"+randomUUID().replaceAll("-","");
- await db.query(`insert into peragus_customer_sandbox_pix(id,customer_id,request_id,purchase_intent_id,provider_customer_id,provider_quote_id,source_amount_brl,wallet_address,provider_wallet_id,idempotency_key,create_attempted,provider_transfer_id,observation)
- values($1,$2,$3,$4,$5,'ozav_q_example',1000,$6,'ozav_wal_example',$7,true,$8,$9)`,[pix,customer.id,randomUUID(),purchase,provider,wallet,randomUUID(),transfer,{id:transfer,customerId:provider,quoteId:"ozav_q_example",source:{type:"fiat_payment",currency:"BRL",rail:"pix"},status:"completed",sourceLegStatus:"completed",destinationLegStatus:"completed",amounts:{source:{currency:"BRL",amount:"1000.00"},target:{currency:"USDT",amount:"200.000000"}},private_data:"PRIVATE_PROVIDER_DETAILS"}]);
- const service=new ManualRefundService(pool,new Set([operator.id]),true);
+ await db.query(`insert into peragus_customer_sandbox_pix(id,customer_id,request_id,purchase_intent_id,provider_customer_id,provider_quote_id,source_amount_brl,wallet_address,provider_wallet_id,idempotency_key,create_attempted,provider_transfer_id,observation,environment)
+ values($1,$2,$3,$4,$5,'ozav_q_example',1000,$6,'ozav_wal_example',$7,true,$8,$9,'test')`,[pix,customer.id,randomUUID(),purchase,provider,wallet,randomUUID(),transfer,{id:transfer,customerId:provider,quoteId:"ozav_q_example",source:{type:"fiat_payment",currency:"BRL",rail:"pix"},status:"completed",sourceLegStatus:"completed",destinationLegStatus:"completed",amounts:{source:{currency:"BRL",amount:"1000.00"},target:{currency:"USDT",amount:"200.000000"}},private_data:"PRIVATE_PROVIDER_DETAILS"}]);
+ const service=new ManualRefundService(pool,new Set([operator.id]),true,"test");
  const appFor=async(identity:{id:string;assuranceLevel?:"aal2"}={id:owner},manual=service)=>{
   const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},manualRefundService:manual});apps.push(app);return app;
  };
@@ -107,14 +108,14 @@ describe("manual refund case tracking",()=>{
  it("requires operator role, MFA and a separate non-customer account",async()=>{
   const f=await fixture(),request=await f.service.request(f.customer.id,f.purchase,f.requestId,reason);
   for(const [identity,code] of [[{id:f.operator.id},"WITHDRAWAL_OPERATOR_MFA_REQUIRED"],[{id:randomUUID(),assuranceLevel:"aal2"},"WITHDRAWAL_OPERATOR_REQUIRED"],[{id:f.owner,assuranceLevel:"aal2"},"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"]] as const){
-   const service=new ManualRefundService(pool,new Set([f.operator.id,f.owner]),true),app=await f.appFor(identity,service);
+   const service=new ManualRefundService(pool,new Set([f.operator.id,f.owner]),true,"test"),app=await f.appFor(identity,service);
    const response=await app.inject({method:"GET",url:`/v1/admin/refund-requests/${request.data.id}`,headers});
    expect(response.statusCode).toBe(403);expect(response.json().error.code).toBe(code);
   }
  });
  it("keeps reads available with writes disabled and validates operator confirmation",async()=>{
   const f=await fixture(),request=await f.service.request(f.customer.id,f.purchase,f.requestId,reason);
-  const disabled=new ManualRefundService(pool,new Set([f.operator.id]),false),app=await f.appFor({id:f.owner},disabled);
+  const disabled=new ManualRefundService(pool,new Set([f.operator.id]),false,"test"),app=await f.appFor({id:f.owner},disabled);
   const path=`/v1/me/operations/${f.purchase}/refund-request`;
   expect((await app.inject({method:"GET",url:path,headers})).statusCode).toBe(200);
   expect((await app.inject({method:"POST",url:path,headers,payload:{request_id:randomUUID(),reason}})).statusCode).toBe(503);

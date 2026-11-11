@@ -18,6 +18,7 @@ const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated;");const dir=new URL("../migrations/",import.meta.url);
  for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await db.exec(await readFile(new URL(f,dir),"utf8"));
+ await db.exec("insert into peragus_database_environment(environment) values('test')");
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 async function setup(type:"pf"|"pj"="pf"){
@@ -34,7 +35,7 @@ async function seed(s:Awaited<ReturnType<typeof setup>>){
  const observation={id:"ozav_vrf_test",customerId:provider,status:"completed",checks:{kyc_document:"pass",liveness:"pass",face_match:"pass",aml_name_screening:"not_started",private_data:"never expose"}};
  await db.query("insert into peragus_customer_verifications(customer_id,provider_customer_id,verification_id,observation,refreshed_at) values($1,$2,$3,$4,now())",[id,provider,`ozav_vrf_${id.replaceAll("-","")}`,observation]);
  await db.query("insert into peragus_customer_screenings(customer_id,provider_customer_id,idempotency_key,screening_id,observation,refreshed_at) values($1,$2,$3,$4,$5,now())",[id,provider,randomUUID(),`ozav_scr_${id.replaceAll("-","")}`,{status:"completed",result:"clear",lists:["sanctions","pep"],matchesCount:0,suggestedDecision:"clear",private_data:"not exposed"}]);
- await db.query("insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature) values($1,$2,$3,now(),'test message','test signature')",[id,Keypair.generate().publicKey.toBase58(),randomUUID()]);
+ await db.query("insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature,environment,network) values($1,$2,$3,now(),'test message','test signature','test','solana:devnet')",[id,Keypair.generate().publicKey.toBase58(),randomUUID()]);
  return{terms,provider};
 }
 const path="/v1/me/onboarding/status",headers={authorization:"Bearer valid"};

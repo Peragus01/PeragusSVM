@@ -1,5 +1,7 @@
 import {randomUUID} from "node:crypto";
 import type {Pool} from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
 import {PurchaseIntentError,type PurchaseIntent,type PurchaseIntentRepository} from "../purchases/customer-purchase-intents.js";
 interface Row {id:string;customer_id:string;request_id:string;quote_id:string;source_amount_brl:string;
  estimated_target_amount_usdt:string;quote_snapshot:PurchaseIntent["quoteSnapshot"];wallet_address:string;wallet_verified_at:Date|string;created_at:Date|string;}
@@ -7,9 +9,10 @@ const map=(r:Row):PurchaseIntent=>({id:r.id,customerId:r.customer_id,requestId:r
  estimatedTargetAmountUsdt:r.estimated_target_amount_usdt,quoteSnapshot:r.quote_snapshot,walletAddress:r.wallet_address,
  walletVerifiedAt:new Date(r.wallet_verified_at).toISOString(),createdAt:new Date(r.created_at).toISOString()});
 export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentRepository {
- constructor(private readonly pool:Pool){}
- async read(customerId:string,id:string){const r=await this.pool.query<Row>("select * from peragus_customer_purchase_intents where customer_id=$1 and id=$2 and environment='test'",[customerId,id]);return r.rows[0]?map(r.rows[0]):null;}
- private async findRequest(customerId:string,requestId:string){const r=await this.pool.query<Row>("select * from peragus_customer_purchase_intents where customer_id=$1 and request_id=$2 and environment='test'",[customerId,requestId]);return r.rows[0]?map(r.rows[0]):null;}
+ private readonly e:RowEnvironment;
+ constructor(private readonly pool:Pool,mode:MoneyMode){this.e=rowEnvironment(mode);}
+ async read(customerId:string,id:string){const r=await this.pool.query<Row>(`select * from peragus_customer_purchase_intents where customer_id=$1 and id=$2 and environment='${this.e.mode}'`,[customerId,id]);return r.rows[0]?map(r.rows[0]):null;}
+ private async findRequest(customerId:string,requestId:string){const r=await this.pool.query<Row>(`select * from peragus_customer_purchase_intents where customer_id=$1 and request_id=$2 and environment='${this.e.mode}'`,[customerId,requestId]);return r.rows[0]?map(r.rows[0]):null;}
  private replay(record:PurchaseIntent,quoteId:string){if(record.quoteId!==quoteId)throw new PurchaseIntentError("PURCHASE_IDEMPOTENCY_CONFLICT");return{record,replayed:true};}
  async record(customerId:string,requestId:string,quoteId:string){
   const prior=await this.findRequest(customerId,requestId);if(prior)return this.replay(prior,quoteId);
@@ -17,20 +20,21 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
   // No caller-supplied amount, address, provider ID or approval can enter it.
   const r=await this.pool.query<Row>(`insert into peragus_customer_purchase_intents(
     id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,
-    quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot)
+    quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network)
    select $1,q.customer_id,$3,q.id,q.provider_customer_id,q.source_amount_brl,(q.observation->'target'->>'amount')::numeric,
     jsonb_build_object('rate',q.observation->>'rate','rate_type',q.observation->>'rateType','quoted_at',q.observation->>'createdAt',
      'exchange_conditions',jsonb_build_object('spread_bps',q.observation->'spreadBps','rate_without_spread',q.observation->'rateWithoutSpread','amount_deducted',q.observation->'amountDeducted')),
     w.wallet_address,w.verified_at,jsonb_build_object('registration_snapshot_version',s.snapshot_version,
-     'verification_revision',v.revision,'screening_revision',sc.revision,'terms_session_id',t.id,'wallet_proof_id',w.proof_challenge_id)
+     'verification_revision',v.revision,'screening_revision',sc.revision,'terms_session_id',t.id,'wallet_proof_id',w.proof_challenge_id),
+    '${this.e.mode}','${this.e.network}'
    from peragus_customer_indicative_quotes q
    join peragus_customers c on c.id=q.customer_id and c.customer_type='pf' and not c.suspended
    join peragus_customer_onboarding_submissions s on s.customer_id=q.customer_id and s.environment='test'
    join peragus_customer_terms_sessions t on t.id=s.terms_session_id and t.customer_id=q.customer_id and t.environment='test'
    join peragus_customer_verifications v on v.customer_id=q.customer_id and v.environment='test'
    join peragus_customer_screenings sc on sc.customer_id=q.customer_id and sc.environment='test'
-   join peragus_customer_wallets w on w.customer_id=q.customer_id and w.environment='test' and w.network='solana:devnet'
-   where q.id=$4 and q.customer_id=$2 and q.environment='test' and q.provider_quote_id is not null
+   join peragus_customer_wallets w on w.customer_id=q.customer_id and w.environment='${this.e.mode}' and w.network='${this.e.network}'
+   where q.id=$4 and q.customer_id=$2 and q.environment='${this.e.mode}' and q.provider_quote_id is not null
     and q.create_attempted and q.observation->>'customerId'=q.provider_customer_id
     and q.observation->>'id'=q.provider_quote_id and (q.observation->>'rate')::numeric>0
     and q.observation->>'rateType'='floating' and q.observation->'expiresAt'='null'::jsonb
@@ -52,9 +56,9 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
   if(r.rows[0])return{record:map(r.rows[0]),replayed:false};
   // Resolve competing inserts without overwriting an already recorded intent.
   const raced=await this.findRequest(customerId,requestId);if(raced)return this.replay(raced,quoteId);
-  const quote=await this.pool.query("select id from peragus_customer_indicative_quotes where customer_id=$1 and id=$2 and environment='test'",[customerId,quoteId]);
+  const quote=await this.pool.query(`select id from peragus_customer_indicative_quotes where customer_id=$1 and id=$2 and environment='${this.e.mode}'`,[customerId,quoteId]);
   if(!quote.rows[0])throw new PurchaseIntentError("PURCHASE_QUOTE_NOT_FOUND");
-  const used=await this.pool.query("select id from peragus_customer_purchase_intents where customer_id=$1 and quote_id=$2 and environment='test'",[customerId,quoteId]);
+  const used=await this.pool.query(`select id from peragus_customer_purchase_intents where customer_id=$1 and quote_id=$2 and environment='${this.e.mode}'`,[customerId,quoteId]);
   if(used.rows[0])throw new PurchaseIntentError("PURCHASE_QUOTE_ALREADY_RECORDED");
   throw new PurchaseIntentError("PURCHASE_PREREQUISITES_NOT_RECORDED");
  }

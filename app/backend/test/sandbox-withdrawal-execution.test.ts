@@ -19,11 +19,12 @@ const pool={query:async(sql:string,params?:unknown[])=>{
  if(failInsert && sql.startsWith("insert into peragus_customer_purchase_intents")){failInsert=false;throw new Error("private database details");}
  const r=await db.query(sql,params);return{...r,rowCount:r.rows.length};
 }} as unknown as Pool;
-const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool),service=new CustomerPurchaseIntentService(repo);
+const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool,"test"),service=new CustomerPurchaseIntentService(repo);
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");const dir=new URL("../migrations/",import.meta.url);
  for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await db.exec(await readFile(new URL(f,dir),"utf8"));
+ await db.exec("insert into peragus_database_environment(environment) values('test')");
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 async function setup(type:"pf"|"pj"="pf"){
@@ -33,12 +34,12 @@ async function setup(type:"pf"|"pj"="pf"){
  values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now()-interval '1 day',now()-interval '2 days','{}','{}')`,[terms,id,randomUUID()]);
  await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version)
  values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full',$7,2)`,[randomUUID(),id,terms,"a".repeat(64),randomUUID(),provider,{requirements_pending:false}]);
- await db.query("insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature) values($1,$2,$3,now(),'private proof message','private proof signature')",[id,wallet,randomUUID()]);
+ await db.query("insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature,environment,network) values($1,$2,$3,now(),'private proof message','private proof signature','test','solana:devnet')",[id,wallet,randomUUID()]);
  await db.query("insert into peragus_customer_verifications(customer_id,provider_customer_id,verification_id,observation,revision,refreshed_at) values($1,$2,$3,$4,3,now())",[id,provider,`ozav_vrf_${id.replaceAll("-","")}`,{status:"completed",checks:{kyc_document:"pass",liveness:"pass",face_match:"pass",aml_name_screening:"not_started"}}]);
  await db.query("insert into peragus_customer_screenings(customer_id,provider_customer_id,idempotency_key,screening_id,observation,revision,refreshed_at) values($1,$2,$3,$4,$5,4,now())",[id,provider,randomUUID(),`ozav_scr_${id.replaceAll("-","")}`,{status:"completed",result:"clear",matchesCount:0,suggestedDecision:"clear",lists:["sanctions","pep"]}]);
  const makeQuote=async()=>{
   const localId=randomUUID(),providerId=`ozav_q_${localId.replaceAll("-","")}`,observation={id:providerId,customerId:provider,rateType:"floating",rate:"0.2",source:{currency:"BRL",amount:"500.00"},target:{currency:"USDT",amount:"100.000000"},spreadBps:0,rateWithoutSpread:"0.2",amountDeducted:null,expiresAt:null,createdAt:new Date().toISOString(),private_data:"never return"};
-  await db.query("insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,create_attempted,provider_quote_id,observation) values($1,$2,$3,$4,'500.00',true,$5,$6)",[localId,id,randomUUID(),provider,providerId,observation]);return localId;
+  await db.query("insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,create_attempted,provider_quote_id,observation,environment) values($1,$2,$3,$4,'500.00',true,$5,$6,'test')",[localId,id,randomUUID(),provider,providerId,observation]);return localId;
  };
  const actualQuoteId=await makeQuote();
  return{owner,customer,provider,terms,wallet,quoteId:actualQuoteId,makeQuote,requestId:randomUUID()};
@@ -54,7 +55,7 @@ import type {OzavTransfer} from "../src/providers/ozav-client.js";
 async function fixture(){
  const s=await setup();
  await db.query("update peragus_customer_indicative_quotes set source_amount_brl=1000,observation=jsonb_set(observation,'{source,amount}','\"1000.00\"') where id=$1",[s.quoteId]);
- const p=await service.record(s.customer.id,s.requestId,s.quoteId),pixRepo=new PostgresCustomerPixRepository(pool);
+ const p=await service.record(s.customer.id,s.requestId,s.quoteId),pixRepo=new PostgresCustomerPixRepository(pool,"test");
  let posts=0,gets=0,simulations=0,listed:string|null=null;let mode="normal";
  const transfer:OzavTransfer={id:`ozav_tr_${randomUUID().replaceAll('-','')}`,status:"awaiting_payment",customerId:s.provider,
   quoteId:(await pixRepo.context(s.customer.id,p.data.id))!.providerQuoteId,
@@ -80,7 +81,7 @@ async function fixture(){
 
 import {PostgresCustomerWithdrawalRequestRepository} from "../src/repositories/postgres-customer-withdrawal-requests.js";
 import {CustomerWithdrawalRequestService} from "../src/withdrawals/customer-withdrawal-requests.js";
-const withdrawalRepo=new PostgresCustomerWithdrawalRequestRepository(pool),withdrawals=new CustomerWithdrawalRequestService(withdrawalRepo);
+const withdrawalRepo=new PostgresCustomerWithdrawalRequestRepository(pool,"test"),withdrawals=new CustomerWithdrawalRequestService(withdrawalRepo);
 async function completedFixture(){
  const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
  await f.pix.simulatePayment(f.s.customer.id,charge.data.id);
@@ -93,7 +94,7 @@ const withdrawalPath="/v1/me/withdrawal-requests";
 
 import {PostgresWithdrawalOperatorApprovalRepository} from "../src/repositories/postgres-withdrawal-operator-approvals.js";
 import {WithdrawalOperatorApprovalService,parseWithdrawalOperators} from "../src/withdrawals/operator-approvals.js";
-const approvalRepo=new PostgresWithdrawalOperatorApprovalRepository(pool);
+const approvalRepo=new PostgresWithdrawalOperatorApprovalRepository(pool,"test");
 async function approvalFixture(){
  const f=await completedFixture(),wr=await withdrawals.record(f.s.customer.id,f.withdrawalRequestId,f.pixId),operatorId=randomUUID(),user={id:operatorId,email:"operator@example.test",assuranceLevel:"aal2" as const};
  const approvals=new WithdrawalOperatorApprovalService(approvalRepo,new Set([operatorId]));
@@ -115,7 +116,7 @@ async function executionFixture(){
  const provider={funding:{getTransfer:async()=>f.transfer},capabilities:async()=>{},identity:async()=>{identityReads++;return identity;},available:async()=>"10200.00",
   send:async(input:any)=>{sends++;expect(input.amount).toBe("200.000000");expect(input.address).toBe(f.s.wallet);expect(input.identity).toBe(identity);if(mode==="timeout")throw new Error("secret provider payload");return sendId;},
   transfer:async()=>observed,find:async()=>found} as any;
- const repo=new PostgresSandboxExecutionRepository(pool),execution=new SandboxWithdrawalExecutionService(repo,provider,f.approvals);
+ const repo=new PostgresSandboxExecutionRepository(pool,"test"),execution=new SandboxWithdrawalExecutionService(repo,provider,f.approvals);
  return{...f,provider,repo,execution,observed,sendId,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;}};
 }
 describe("approved sandbox withdrawal execution",()=>{
@@ -484,7 +485,7 @@ describe("stored operational alerts",()=>{
   const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},operatorAlertService:reader});apps.push(app);return app;
  }
  it("keeps pending and approved refunds actionable without recording a return",async()=>{
-  const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true);
+  const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true,"test");
   const requested=await refunds.request(f.s.customer.id,f.p.data.id,randomUUID(),"Synthetic refund for manual review only.");
   const app=await alertApp(f),url="/v1/admin/operational-alerts";
   const pending=await app.inject({url,headers});expect(pending.statusCode).toBe(200);
@@ -499,12 +500,12 @@ describe("stored operational alerts",()=>{
   expect((await db.query("select * from peragus_manual_refund_completions")).rows).toHaveLength(0);
  });
  it("does not list rejected or externally recorded refund cases",async()=>{
-  const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true);
+  const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true,"test");
   const r=await refunds.request(f.s.customer.id,f.p.data.id,randomUUID(),"Synthetic request with rejected decision.");
   await refunds.decide(f.user,r.data.id,randomUUID(),"rejected","Synthetic rejected manual review reason.");
   expect((await new OperatorAlertService(pool,new Set([f.user.id])).list(f.user,{})).data).toHaveLength(0);
   // Positive completion belongs only to this isolated database, not staging.
-  const other=await approvalFixture(),service=new ManualRefundService(pool,new Set([other.user.id]),true);
+  const other=await approvalFixture(),service=new ManualRefundService(pool,new Set([other.user.id]),true,"test");
   const next=await service.request(other.s.customer.id,other.p.data.id,randomUUID(),"Synthetic request with isolated completion.");
   await service.decide(other.user,next.data.id,randomUUID(),"approved","Synthetic isolated manual review approval.");
   await service.complete(other.user,next.data.id,randomUUID(),"1000.00","synthetic-external-reference");
@@ -530,8 +531,8 @@ describe("stored operational alerts",()=>{
  });
  it("surfaces review and stalled checkpoints but excludes healthy terminal records and active leases",async()=>{
   const f=await approvalFixture(),id=randomUUID();
-  await db.query(`insert into peragus_customer_reconciliation(id,customer_id,purchase_intent_id,pix_id,state,manual_review_required)
-   values($1,$2,$3,$4,'needs_review',true)`,[id,f.s.customer.id,f.p.data.id,f.pixId]);
+  await db.query(`insert into peragus_customer_reconciliation(id,customer_id,purchase_intent_id,pix_id,state,manual_review_required,environment)
+   values($1,$2,$3,$4,'needs_review',true,'test')`,[id,f.s.customer.id,f.p.data.id,f.pixId]);
   const alerts=new OperatorAlertService(pool,new Set([f.user.id]));
   expect((await alerts.list(f.user,{})).data[0]).toMatchObject({kind:"reconciliation_review"});
   await db.query("update peragus_customer_reconciliation set state='pending',manual_review_required=false,next_check_at=now()-interval '16 minutes' where id=$1",[id]);
@@ -542,12 +543,12 @@ describe("stored operational alerts",()=>{
   expect((await alerts.list(f.user,{})).data).toHaveLength(0);
  });
  it("paginates tied alerts without duplicates and applies severity/kind filters",async()=>{
-  const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true);
+  const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true,"test");
   await refunds.request(f.s.customer.id,f.p.data.id,randomUUID(),"Synthetic refund for pagination checking.");
-  await db.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,pix_id,state,manual_review_required,created_at)
-    values($1,$2,$3,'needs_review',true,'2026-01-01T00:00:00.123456Z')`,[f.s.customer.id,f.p.data.id,f.pixId]);
-  await db.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,withdrawal_request_id,state,manual_review_required,created_at)
-    values($1,$2,$3,'needs_review',true,'2026-01-01T00:00:00.123456Z')`,[f.s.customer.id,f.p.data.id,f.wr.data.id]);
+  await db.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,pix_id,state,manual_review_required,created_at,environment)
+    values($1,$2,$3,'needs_review',true,'2026-01-01T00:00:00.123456Z','test')`,[f.s.customer.id,f.p.data.id,f.pixId]);
+  await db.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,withdrawal_request_id,state,manual_review_required,created_at,environment)
+    values($1,$2,$3,'needs_review',true,'2026-01-01T00:00:00.123456Z','test')`,[f.s.customer.id,f.p.data.id,f.wr.data.id]);
   const alerts=new OperatorAlertService(pool,new Set([f.user.id]));let cursor:string|undefined;const ids:string[]=[];
   for(let i=0;i<3;i++){
    const page=await alerts.list(f.user,{limit:'1',...(cursor?{cursor}:{})});ids.push(page.data[0]!.id);cursor=page.meta.next_cursor??undefined;
