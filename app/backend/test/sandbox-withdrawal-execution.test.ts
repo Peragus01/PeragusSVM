@@ -208,10 +208,11 @@ describe("approved sandbox withdrawal execution",()=>{
  });
  it("reports historical binding mismatch and rejects unknown IDs, selectors and private DB errors",async()=>{
   const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]),"test");
-  // Legacy data predating the immutability trigger (045): bypass triggers to simulate it.
-  await db.exec("set session_replication_role=replica");
-  await db.query("update peragus_customer_purchase_intents set wallet_address=$1 where id=$2",[Keypair.generate().publicKey.toBase58(),f.p.data.id]);
-  await db.exec("set session_replication_role=origin");
+  // Legacy data predating the immutability trigger (045): disable only that trigger
+  // to simulate it (foreign keys and the 043 environment guard stay active).
+  await db.exec("alter table peragus_customer_purchase_intents disable trigger peragus_purchase_financial_immutable");
+  try{await db.query("update peragus_customer_purchase_intents set wallet_address=$1 where id=$2",[Keypair.generate().publicKey.toBase58(),f.p.data.id]);}
+  finally{await db.exec("alter table peragus_customer_purchase_intents enable trigger peragus_purchase_financial_immutable");}
   await db.query("update peragus_customers set suspended=true where id=$1",[f.s.customer.id]);
   expect((await audit.read(f.user,f.wr.data.id)).integrity.purchase_matches).toBe(false);
   await db.query("update peragus_customer_withdrawal_requests set amount_usdt='99999999999999.000001' where id=$1",[f.wr.data.id]);

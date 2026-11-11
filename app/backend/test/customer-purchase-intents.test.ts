@@ -193,4 +193,17 @@ describe("operation status, limits and concurrency",()=>{
   await expect(strict.record(s.customer.id,s.requestId,s.quoteId)).rejects.toThrow("QUOTE_AMOUNT_OUT_OF_RANGE");
   expect((await db.query("select count(*)::int n from peragus_customer_purchase_intents where customer_id=$1",[s.customer.id])).rows).toEqual([{n:0}]);
  });
+ it("runs accepts and transitions at read committed and, if rollback fails, keeps the original error and discards the connection",async()=>{
+  const sent:string[]=[],released:unknown[]=[];
+  const client={query:async(sql:string)=>{sent.push(sql.trim().split(/\s+/).slice(0,4).join(" "));
+    if(sql.startsWith("insert into peragus_customer_purchase_intents") || sql.startsWith("select status,customer_id"))throw new Error("original failure");
+    if(sql==="rollback")throw new Error("rollback failure");return{rows:[]};},
+   release:(err?:unknown)=>{released.push(err);}};
+  const fake={query:async()=>({rows:[]}),connect:async()=>client} as unknown as Pool;
+  const broken=new PostgresCustomerPurchaseIntentRepository(fake,"test",wide);
+  await expect(broken.record(randomUUID(),randomUUID(),randomUUID())).rejects.toThrow("original failure");
+  await expect(broken.transitionOperation(randomUUID(),"failed","system","synthetic")).rejects.toThrow("original failure");
+  expect(sent.filter(s=>s.startsWith("begin"))).toEqual(["begin isolation level read","begin isolation level read"]);
+  expect(released).toHaveLength(2);for(const err of released)expect((err as Error).message).toBe("rollback failure");
+ });
 });

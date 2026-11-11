@@ -63,21 +63,11 @@ begin raise exception 'OPERATION_STATUS_EVENTS_APPEND_ONLY'; end $$;
 create trigger peragus_operation_status_events_immutable before update or delete on peragus_operation_status_events
  for each row execute function peragus_operation_status_events_append_only();
 
--- Backfill: legacy rows are record-only intents. The newest per customer stays
--- 'accepted' (open); older ones become 'expired' so the one-open-operation
--- index below can be created on existing data.
-with ranked as (
- select id,created_at,row_number() over(partition by customer_id,environment order by created_at desc,id desc) rn
- from peragus_customer_purchase_intents
-)
-update peragus_customer_purchase_intents p
- set status=case when r.rn=1 then 'accepted' else 'expired' end,
-  status_changed_at=case when r.rn=1 then r.created_at else now() end
- from ranked r where r.id=p.id;
+-- Backfill: legacy rows are record-only intents that can never progress, so all
+-- of them expire. No legacy row holds open capacity (per customer or global).
+update peragus_customer_purchase_intents set status='expired',status_changed_at=now();
 insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
- select id,customer_id,null,status,'system:migration_045',
-  case when status='accepted' then 'legacy record-only purchase intent' else 'legacy intent superseded by a newer intent of the same customer' end,
-  environment
+ select id,customer_id,null,'expired','system:migration_045','legacy record-only purchase intent expired by migration',environment
  from peragus_customer_purchase_intents order by created_at,id;
 
 create unique index peragus_purchase_one_open_per_customer on peragus_customer_purchase_intents(customer_id)
@@ -115,6 +105,10 @@ create function peragus_purchase_financial_immutable() returns trigger language 
 declare i int;
 begin
  for i in 0..tg_nargs-1 loop
+  -- A misspelled or dropped column must not silently stop being locked.
+  if not (to_jsonb(old) ? tg_argv[i]) then
+   raise exception 'PURCHASE_LOCKED_COLUMN_UNKNOWN: %', tg_argv[i];
+  end if;
   if (to_jsonb(new)->tg_argv[i]) is distinct from (to_jsonb(old)->tg_argv[i]) then
    raise exception 'PURCHASE_FINANCIAL_FIELDS_IMMUTABLE: %', tg_argv[i];
   end if;

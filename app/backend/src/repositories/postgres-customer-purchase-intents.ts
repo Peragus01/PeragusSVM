@@ -59,9 +59,8 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
     and sc.observation->'lists' @> '["sanctions","pep"]'::jsonb`;}
  async record(customerId:string,requestId:string,quoteId:string){
   const prior=await this.findRequest(this.pool,customerId,requestId);if(prior)return this.replay(prior,quoteId);
-  const client=await this.pool.connect();
-  try{
-   await client.query("begin");await client.query(ACCEPT_LOCK);
+  try{return await this.inTransaction("begin isolation level read committed",async client=>{
+   await client.query(ACCEPT_LOCK);
    const params=[randomUUID(),customerId,requestId,quoteId,this.options.limits.minCents.toString(),this.options.limits.maxCents.toString()];
    // Derivation, prerequisite reads, range check and insert use ONE SQL statement.
    const r=await client.query<Row>(`insert into peragus_customer_purchase_intents(
@@ -82,12 +81,27 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
     values($1,$2,null,'accepted',$3,'quote_accepted','${this.e.mode}')`,[row.id,row.customer_id,`customer:${customerId}`]);
    const open=await client.query<{n:number}>(`select count(*)::int n from peragus_customer_purchase_intents where environment='${this.e.mode}' and ${OPEN}`);
    if(Number(open.rows[0]!.n)>this.options.maxOpenGlobal)throw new PurchaseIntentError("PURCHASE_GLOBAL_CAPACITY_REACHED");
-   await client.query("commit");return{record:map(row),replayed:false};
-  }catch(error){
-   await client.query("rollback");
+   return{record:map(row),replayed:false};
+  });}catch(error){
    if(error instanceof Replay)return this.replay(error.record,quoteId);
    throw error;
-  }finally{client.release();}
+  }
+ }
+ /**
+  * Runs work in one transaction. A failed rollback keeps the original error and
+  * releases the connection as broken so the pool discards it.
+  */
+ private async inTransaction<T>(begin:string,work:(client:PoolClient)=>Promise<T>):Promise<T>{
+  const client=await this.pool.connect();let broken:Error|undefined;
+  try{
+   await client.query(begin);
+   const result=await work(client);
+   await client.query("commit");
+   return result;
+  }catch(error){
+   try{await client.query("rollback");}catch(rollbackError){broken=rollbackError instanceof Error?rollbackError:new Error("ROLLBACK_FAILED");}
+   throw error;
+  }finally{client.release(broken);}
  }
  // Explains an insert that wrote nothing, in order of precedence.
  private async diagnose(client:PoolClient,params:string[]):Promise<Error>{
@@ -101,7 +115,8 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
   const ready=await client.query<{ok:boolean}>(`select exists(select 1 ${this.prerequisites("$1","$2")}) ok`,[customerId,quoteId]);
   if(!ready.rows[0]?.ok)return new PurchaseIntentError("PURCHASE_PREREQUISITES_NOT_RECORDED");
   if(!quote.rows[0].in_range)return new PurchaseIntentError("QUOTE_AMOUNT_OUT_OF_RANGE");
-  const open=await client.query(`select id from peragus_customer_purchase_intents where customer_id=$1 and environment='${this.e.mode}' and ${OPEN}`,[customerId]);
+  // Any environment: the one-open-operation index is per customer, not per environment.
+  const open=await client.query(`select id from peragus_customer_purchase_intents where customer_id=$1 and ${OPEN}`,[customerId]);
   if(open.rows[0])return new PurchaseIntentError("PURCHASE_CUSTOMER_HAS_OPEN_OPERATION");
   return new PurchaseIntentError("PURCHASE_PREREQUISITES_NOT_RECORDED");
  }
@@ -114,27 +129,23 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
   if(!isOperationStatus(to))throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
   if(typeof actor!=="string" || actor.length<1 || actor.length>200 || typeof reason!=="string" || reason.length<1 || reason.length>500)
    throw new Error("OPERATION_TRANSITION_INPUT_INVALID");
-  const client=await this.pool.connect();
-  try{
-   await client.query("begin");
+  try{return await this.inTransaction("begin isolation level read committed",async client=>{
    const current=await client.query<{status:OperationStatus;customer_id:string;status_changed_at:Date|string}>(
     `select status,customer_id,status_changed_at from peragus_customer_purchase_intents where id=$1 and environment='${this.e.mode}' for update`,[purchaseId]);
    const row=current.rows[0];
    if(!row)throw new PurchaseIntentError("PURCHASE_INTENT_NOT_FOUND");
-   if(row.status===to){await client.query("commit");return{from:to,to,changed:false,changedAt:new Date(row.status_changed_at).toISOString()};}
+   if(row.status===to)return{from:to,to,changed:false,changedAt:new Date(row.status_changed_at).toISOString()};
    if(!canTransition(row.status,to))throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
    const updated=await client.query<{status_changed_at:Date|string}>(
     `update peragus_customer_purchase_intents set status=$2 where id=$1 and environment='${this.e.mode}' returning status_changed_at`,[purchaseId,to]);
    await client.query(`insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
     values($1,$2,$3,$4,$5,$6,'${this.e.mode}')`,[purchaseId,row.customer_id,row.status,to,actor,reason]);
-   await client.query("commit");
    return{from:row.status,to,changed:true,changedAt:new Date(updated.rows[0]!.status_changed_at).toISOString()};
-  }catch(error){
-   await client.query("rollback");
+  });}catch(error){
    if(error instanceof Error && !(error instanceof PurchaseIntentError) && error.message.includes("OPERATION_INVALID_TRANSITION"))
     throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
    throw error;
-  }finally{client.release();}
+  }
  }
 }
 class Replay extends Error{constructor(readonly record:PurchaseIntent){super("PURCHASE_REPLAY");}}

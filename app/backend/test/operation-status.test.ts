@@ -24,10 +24,11 @@ async function legacyIntent(db:PGlite,customerId:string,createdAt:string){
  const quote=randomUUID(),id=randomUUID();
  // Fixture only: skip the onboarding foreign keys behind the quote (and triggers).
  await db.exec("set session_replication_role=replica");
- await db.query("insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,environment) values($1,$2,$3,'ozav_cus_synthetic','500.00','test')",[quote,customerId,randomUUID()]);
- await db.query(`insert into peragus_customer_purchase_intents(id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network,created_at)
-  values($1,$2,$3,$4,'ozav_cus_synthetic','500.00','100.000000','{}',$5,now(),'{}','test','solana:devnet',$6)`,[id,customerId,randomUUID(),quote,Keypair.generate().publicKey.toBase58(),createdAt]);
- await db.exec("set session_replication_role=origin");
+ try{
+  await db.query("insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,environment) values($1,$2,$3,'ozav_cus_synthetic','500.00','test')",[quote,customerId,randomUUID()]);
+  await db.query(`insert into peragus_customer_purchase_intents(id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network,created_at)
+   values($1,$2,$3,$4,'ozav_cus_synthetic','500.00','100.000000','{}',$5,now(),'{}','test','solana:devnet',$6)`,[id,customerId,randomUUID(),quote,Keypair.generate().publicKey.toBase58(),createdAt]);
+ }finally{await db.exec("set session_replication_role=origin");}
  return id;
 }
 async function customer(db:PGlite){
@@ -84,15 +85,15 @@ describe("operation status in SQL (migration 045)",()=>{
   expect(r.rows).toHaveLength(OPERATION_STATUSES.length**2);
   for(const row of r.rows)expect(row.ok,`${row.f}->${row.t}`).toBe(canTransition(row.f as OperationStatus,row.t as OperationStatus));
  });
- it("backfills legacy rows: newest per customer stays accepted, older ones expire, and the open-operation index holds",async()=>{
+ it("backfills every legacy row to expired so none holds open capacity, and the open-operation index holds",async()=>{
   const db=await migrated(MIGRATION),a=await customer(db),b=await customer(db);
   await db.query("insert into peragus_database_environment(environment) values('test')");
   const oldA=await legacyIntent(db,a,"2026-10-01T00:00:00Z"),newA=await legacyIntent(db,a,"2026-10-02T00:00:00Z"),onlyB=await legacyIntent(db,b,"2026-10-01T00:00:00Z");
   await db.exec(await readFile(new URL(`../migrations/${MIGRATION}`,import.meta.url),"utf8"));
   const rows=(await db.query<{id:string;status:string}>("select id,status from peragus_customer_purchase_intents")).rows;
-  expect(Object.fromEntries(rows.map(r=>[r.id,r.status]))).toEqual({[oldA]:"expired",[newA]:"accepted",[onlyB]:"accepted"});
+  expect(Object.fromEntries(rows.map(r=>[r.id,r.status]))).toEqual({[oldA]:"expired",[newA]:"expired",[onlyB]:"expired"});
   const events=(await db.query<{purchase_id:string;from_status:string|null;to_status:string;actor:string}>("select purchase_id,from_status,to_status,actor from peragus_operation_status_events order by to_status")).rows;
-  expect(events).toHaveLength(3);expect(events.every(e=>e.actor==="system:migration_045")).toBe(true);
+  expect(events).toHaveLength(3);expect(events.every(e=>e.actor==="system:migration_045" && e.from_status===null && e.to_status==="expired")).toBe(true);
  });
  it("keeps the status event log append-only and environment-guarded",async()=>{
   const db=await migrated(),id=await customer(db);
@@ -114,5 +115,17 @@ describe("operation status in SQL (migration 045)",()=>{
   await expect(db.query("update peragus_customer_purchase_intents set status='bogus' where id=$1",[purchase])).rejects.toThrow();
   await expect(db.query(`insert into peragus_customer_purchase_intents(id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network,status)
    values($1,$2,$3,$4,'ozav_cus_synthetic','500.00','100.000000','{}',$5,now(),'{}','test','solana:devnet','awaiting_pix')`,[randomUUID(),id,randomUUID(),randomUUID(),Keypair.generate().publicKey.toBase58()])).rejects.toThrow("OPERATION_INVALID_TRANSITION");
+ });
+ it("locks only real columns: every immutability trigger argument is a column, and an unknown one fails loudly",async()=>{
+  const db=await migrated(),id=await customer(db);
+  const t=await db.query<{a:string}>("select encode(tgargs,'escape') a from pg_trigger where tgname='peragus_purchase_financial_immutable' and tgrelid='peragus_customer_purchase_intents'::regclass");
+  const locked=t.rows[0]!.a.split("\\000").filter(Boolean);
+  expect(locked).toEqual(expect.arrayContaining(["quote_id","source_amount_brl","estimated_target_amount_usdt","wallet_address"]));
+  const cols=(await db.query<{c:string}>("select column_name c from information_schema.columns where table_name='peragus_customer_purchase_intents'")).rows.map(r=>r.c);
+  for(const column of locked)expect(cols,column).toContain(column);
+  await db.query("insert into peragus_database_environment(environment) values('test')");
+  const purchase=await legacyIntent(db,id,new Date().toISOString());
+  await db.exec("create trigger zz_bogus_lock before update on peragus_customer_purchase_intents for each row execute function peragus_purchase_financial_immutable('no_such_column')");
+  await expect(db.query("update peragus_customer_purchase_intents set status='expired' where id=$1",[purchase])).rejects.toThrow("PURCHASE_LOCKED_COLUMN_UNKNOWN: no_such_column");
  });
 });
