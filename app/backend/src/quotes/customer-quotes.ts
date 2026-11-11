@@ -8,13 +8,28 @@ import {
   onboardingExternalRef,
   type SubmissionRepository,
 } from "../onboarding/submission-types.js";
-export function normalizeQuoteBrl(value: string): string {
+import {
+  DEFAULT_PURCHASE_LIMITS,
+  type PurchaseLimits,
+} from "../purchases/operation-status.js";
+/**
+ * Validates a BRL decimal string and the configured purchase range
+ * (PURCHASE_MIN_BRL..PURCHASE_MAX_BRL, in cents). Malformed, nonpositive or
+ * above the storage ceiling (10000.00) is QUOTE_AMOUNT_INVALID; outside the
+ * configured range is QUOTE_AMOUNT_OUT_OF_RANGE.
+ */
+export function normalizeQuoteBrl(
+  value: string,
+  limits: PurchaseLimits,
+): string {
   if (!/^(0|[1-9]\d{0,4})(\.\d{1,2})?$/.test(value))
     throw new CustomerQuoteError("QUOTE_AMOUNT_INVALID");
   const [whole, fraction = ""] = value.split("."),
     cents = BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, "0"));
   if (cents <= 0n || cents > 1000000n)
     throw new CustomerQuoteError("QUOTE_AMOUNT_INVALID");
+  if (cents < limits.minCents || cents > limits.maxCents)
+    throw new CustomerQuoteError("QUOTE_AMOUNT_OUT_OF_RANGE");
   return `${whole}.${fraction.padEnd(2, "0")}`;
 }
 export function normalizeQuoteUsdt(value: string): string {
@@ -67,6 +82,7 @@ export class CustomerQuoteError extends Error {
   constructor(
     public readonly code:
       | "QUOTE_AMOUNT_INVALID"
+      | "QUOTE_AMOUNT_OUT_OF_RANGE"
       | "QUOTE_CUSTOMER_REQUIRED"
       | "QUOTE_CUSTOMER_NOT_READY"
       | "QUOTE_CAPABILITY_REQUIRED"
@@ -128,6 +144,7 @@ export class CustomerQuoteService {
       | "createCustomerIndicativeQuote"
     >,
     private readonly mode: MoneyMode = "test",
+    private readonly limits: PurchaseLimits = DEFAULT_PURCHASE_LIMITS,
   ) {}
   private view(row: CustomerQuoteRecord) {
     return renderView(row, this.mode);
@@ -158,7 +175,9 @@ export class CustomerQuoteService {
     target = false,
   ) {
     const targetAmount = target ? normalizeQuoteUsdt(inputAmount) : undefined;
-    const amountBrl = target ? "0.00" : normalizeQuoteBrl(inputAmount),
+    const amountBrl = target
+        ? "0.00"
+        : normalizeQuoteBrl(inputAmount, this.limits),
       binding = await this.submissions.find(customerId);
     if (!binding || binding.state !== "linked" || !binding.providerId)
       throw new CustomerQuoteError("QUOTE_CUSTOMER_REQUIRED");

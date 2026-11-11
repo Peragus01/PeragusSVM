@@ -12,11 +12,13 @@ import {
   CustomerQuoteService,
   normalizeQuoteBrl,
 } from "../src/quotes/customer-quotes.js";
+import { DEFAULT_PURCHASE_LIMITS } from "../src/purchases/operation-status.js";
 import {
   OzavClient,
   type OzavWriteRequest,
 } from "../src/providers/ozav-client.js";
 const db = new PGlite();
+const WIDE = { minCents: 1n, maxCents: 1000000n };
 let failSave = false;
 const pool = {
   query: async (sql: string, params?: unknown[]) => {
@@ -155,13 +157,15 @@ async function setup(type: "pf" | "pj" = "pf") {
     transport,
     writeTransport,
   });
-  const service = new CustomerQuoteService(repo, submissions, provider);
+  const service = new CustomerQuoteService(repo, submissions, provider, "test", WIDE),
+    strictService = new CustomerQuoteService(repo, submissions, provider);
   return {
     owner,
     customer,
     providerId,
     caps,
     service,
+    strictService,
     provider,
     transport,
     writeTransport,
@@ -246,9 +250,9 @@ describe("owned indicative BRL to USDT quotes", () => {
     expect(Number((empty.rows[0] as any).settlements)).toBe(0);
   });
   it("normalizes decimal strings exactly and refuses nonpositive, oversized, exponent, leading-zero, float and excess-precision inputs", () => {
-    expect(normalizeQuoteBrl("0.01")).toBe("0.01");
-    expect(normalizeQuoteBrl("1.2")).toBe("1.20");
-    expect(normalizeQuoteBrl("10000")).toBe("10000.00");
+    expect(normalizeQuoteBrl("0.01", WIDE)).toBe("0.01");
+    expect(normalizeQuoteBrl("1.2", WIDE)).toBe("1.20");
+    expect(normalizeQuoteBrl("10000", WIDE)).toBe("10000.00");
     for (const value of [
       "0",
       "0.00",
@@ -261,7 +265,7 @@ describe("owned indicative BRL to USDT quotes", () => {
       " 1 ",
       "NaN",
     ])
-      expect(() => normalizeQuoteBrl(value)).toThrow("QUOTE_AMOUNT_INVALID");
+      expect(() => normalizeQuoteBrl(value, WIDE)).toThrow("QUOTE_AMOUNT_INVALID");
   });
   it("replays the same normalized intent without a provider call, conflicts on a changed amount and isolates identical request IDs by customer", async () => {
     const s = await setup(),
@@ -590,5 +594,39 @@ describe("target-side indicative quotes", () => {
       ).rejects.toThrow();
       expect(s.writeTransport).toHaveBeenCalledTimes(1);
     }
+  });
+});
+describe("configured purchase range", () => {
+  it("quote 999.99 and 1000.01 are rejected and 1000.00 accepted with default limits", async () => {
+    const s = await setup(),
+      app = await buildApp({
+        customerAccess: {
+          customers,
+          authenticate: async () => ({ id: s.owner, email: "private@example.test" }),
+        },
+        customerQuoteService: s.strictService,
+      });
+    apps.push(app);
+    for (const amount of ["999.99", "1000.01", "1", "10000"]) {
+      expect(() => normalizeQuoteBrl(amount, DEFAULT_PURCHASE_LIMITS)).toThrow("QUOTE_AMOUNT_OUT_OF_RANGE");
+      const r = await app.inject({
+        method: "POST",
+        url: path,
+        headers,
+        payload: { request_id: randomUUID(), source_amount_brl: amount },
+      });
+      expect(r.statusCode).toBe(422);
+      expect(r.json().error.code).toBe("QUOTE_AMOUNT_OUT_OF_RANGE");
+    }
+    expect(s.writeTransport).not.toHaveBeenCalled();
+    expect(normalizeQuoteBrl("1000", DEFAULT_PURCHASE_LIMITS)).toBe("1000.00");
+    const ok = await app.inject({
+      method: "POST",
+      url: path,
+      headers,
+      payload: { request_id: s.requestId, source_amount_brl: "1000.00" },
+    });
+    expect(ok.statusCode).toBe(201);
+    expect(ok.json().data.source.amount).toBe("1000.00");
   });
 });

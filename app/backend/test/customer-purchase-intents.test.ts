@@ -8,13 +8,21 @@ import {buildApp} from "../src/app.js";
 import {AuthenticationError} from "../src/auth/customer-access.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerPurchaseIntentRepository} from "../src/repositories/postgres-customer-purchase-intents.js";
-import {CustomerPurchaseIntentService} from "../src/purchases/customer-purchase-intents.js";
-const db=new PGlite();let failInsert=false;
-const pool={query:async(sql:string,params?:unknown[])=>{
+import {CustomerPurchaseIntentService,PurchaseIntentError} from "../src/purchases/customer-purchase-intents.js";
+const db=new PGlite();let failInsert=false;let connection=Promise.resolve();
+const query=async(sql:string,params?:unknown[])=>{
  if(failInsert && sql.startsWith("insert into peragus_customer_purchase_intents")){failInsert=false;throw new Error("private database details");}
  const r=await db.query(sql,params);return{...r,rowCount:r.rows.length};
+};
+// PGlite has one session: connections are handed out one at a time.
+const pool={query,connect:async()=>{
+ const previous=connection;let release!:()=>void;connection=new Promise<void>(resolve=>{release=resolve;});await previous;
+ return{query,release};
 }} as unknown as Pool;
-const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool,"test"),service=new CustomerPurchaseIntentService(repo);
+const wide={maxOpenGlobal:1000,limits:{minCents:1n,maxCents:1000000n}};
+const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool,"test",wide),service=new CustomerPurchaseIntentService(repo);
+const OPEN_SQL="status not in ('delivered_verified','expired','failed','refunded')";
+const closeAllOpen=()=>db.query("update peragus_customer_purchase_intents set status='expired' where status in ('accepted','awaiting_pix')");
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");const dir=new URL("../migrations/",import.meta.url);
@@ -117,5 +125,72 @@ describe("record-only sandbox purchase intents",()=>{
   const s=await setup(),other=await setup(),one=await service.record(s.customer.id,s.requestId,s.quoteId);
   for(const assignment of ["environment='live'","record_only=false","state='funded'","wallet_proof_network='solana:mainnet'",`customer_id='${other.customer.id}'`])await expect(db.query(`update peragus_customer_purchase_intents set ${assignment} where id=$1`,[one.data.id])).rejects.toThrow();
   const r=await db.query("select relrowsecurity,has_table_privilege('anon','peragus_customer_purchase_intents','SELECT') as anon_select,has_table_privilege('authenticated','peragus_customer_purchase_intents','INSERT') as auth_insert from pg_class where relname='peragus_customer_purchase_intents'");expect(r.rows[0]).toEqual({relrowsecurity:true,anon_select:false,auth_insert:false});
+ });
+});
+
+describe("operation status, limits and concurrency",()=>{
+ it("records the purchase at accepted with an initial status event",async()=>{
+  const s=await setup(),one=await service.record(s.customer.id,s.requestId,s.quoteId);
+  expect(one.data.status).toBe("accepted");
+  const events=(await db.query("select from_status,to_status,actor,environment from peragus_operation_status_events where purchase_id=$1",[one.data.id])).rows;
+  expect(events).toEqual([{from_status:null,to_status:"accepted",actor:`customer:${s.customer.id}`,environment:"test"}]);
+ });
+ it("rejects an invalid transition",async()=>{
+  const s=await setup(),one=await service.record(s.customer.id,s.requestId,s.quoteId);
+  await expect(db.query("update peragus_customer_purchase_intents set status='sent' where id=$1",[one.data.id])).rejects.toThrow("OPERATION_INVALID_TRANSITION");
+  await expect(repo.transitionOperation(one.data.id,"sent","system","synthetic")).rejects.toThrow("OPERATION_INVALID_TRANSITION");
+  expect((await db.query("select status from peragus_customer_purchase_intents where id=$1",[one.data.id])).rows).toEqual([{status:"accepted"}]);
+ });
+ it("transitionOperation moves along the lifecycle, stamps the change and appends one event per change",async()=>{
+  const s=await setup(),one=await service.record(s.customer.id,s.requestId,s.quoteId);
+  const before=(await db.query<{status_changed_at:Date}>("select status_changed_at from peragus_customer_purchase_intents where id=$1",[one.data.id])).rows[0]!.status_changed_at;
+  expect(await repo.transitionOperation(one.data.id,"awaiting_pix","system:pix","pix transfer created")).toMatchObject({from:"accepted",to:"awaiting_pix",changed:true});
+  expect(await repo.transitionOperation(one.data.id,"awaiting_pix","system:pix","duplicate webhook")).toMatchObject({from:"awaiting_pix",to:"awaiting_pix",changed:false});
+  const row=(await db.query<{status:string;status_changed_at:Date}>("select status,status_changed_at from peragus_customer_purchase_intents where id=$1",[one.data.id])).rows[0]!;
+  expect(row.status).toBe("awaiting_pix");expect(new Date(row.status_changed_at).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
+  const events=(await db.query("select from_status,to_status,actor,reason from peragus_operation_status_events where purchase_id=$1 order by id",[one.data.id])).rows;
+  expect(events).toEqual([{from_status:null,to_status:"accepted",actor:`customer:${s.customer.id}`,reason:"quote_accepted"},{from_status:"accepted",to_status:"awaiting_pix",actor:"system:pix",reason:"pix transfer created"}]);
+  await expect(repo.transitionOperation(randomUUID(),"failed","system","synthetic")).rejects.toThrow("PURCHASE_INTENT_NOT_FOUND");
+  await expect(repo.transitionOperation(one.data.id,"failed","","synthetic")).rejects.toThrow();
+  await expect(new PostgresCustomerPurchaseIntentRepository(pool,"live",wide).transitionOperation(one.data.id,"failed","system","x")).rejects.toThrow("PURCHASE_INTENT_NOT_FOUND");
+ });
+ it("rejects updating the locked USDT amount and the other accepted financial fields",async()=>{
+  const s=await setup(),one=await service.record(s.customer.id,s.requestId,s.quoteId),other=await s.makeQuote();
+  for(const assignment of ["estimated_target_amount_usdt=99","source_amount_brl=1","quote_snapshot='{}'",`quote_id='${other}'`,
+   `wallet_address='${Keypair.generate().publicKey.toBase58()}'`,"wallet_verified_at=now()","provider_customer_id='ozav_cus_other'"])
+   await expect(db.query(`update peragus_customer_purchase_intents set ${assignment} where id=$1`,[one.data.id]),assignment).rejects.toThrow("PURCHASE_FINANCIAL_FIELDS_IMMUTABLE");
+  await db.query("update peragus_customer_purchase_intents set status='expired' where id=$1",[one.data.id]);
+  await expect(db.query("update peragus_customer_purchase_intents set estimated_target_amount_usdt=99 where id=$1",[one.data.id])).rejects.toThrow("PURCHASE_FINANCIAL_FIELDS_IMMUTABLE");
+ });
+ it("rejects a second open operation for the same customer until the first is terminal",async()=>{
+  const s=await setup(),one=await service.record(s.customer.id,s.requestId,s.quoteId),second=await s.makeQuote();
+  const refused=await service.record(s.customer.id,randomUUID(),second).catch(e=>e);
+  expect(refused).toBeInstanceOf(PurchaseIntentError);expect(refused.code).toBe("PURCHASE_CUSTOMER_HAS_OPEN_OPERATION");
+  const r=await (await appFor(s)).inject({method:"POST",url:path,headers,payload:{request_id:randomUUID(),quote_id:second}});
+  expect(r.statusCode).toBe(409);expect(r.json().error.code).toBe("PURCHASE_CUSTOMER_HAS_OPEN_OPERATION");
+  // The partial unique index enforces it even without the repository.
+  await expect(db.query(`insert into peragus_customer_purchase_intents(id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network)
+   values($1,$2,$3,$4,$5,'500.00','100.000000','{}',$6,now(),'{}','test','solana:devnet')`,[randomUUID(),s.customer.id,randomUUID(),second,s.provider,s.wallet])).rejects.toThrow(/peragus_purchase_one_open_per_customer/);
+  await repo.transitionOperation(one.data.id,"expired","system","synthetic expiry");
+  expect((await service.record(s.customer.id,randomUUID(),second)).data.status).toBe("accepted");
+ });
+ it("rejects a second open operation globally when cap is 1, including competing calls",async()=>{
+  await closeAllOpen();
+  const capped=new PostgresCustomerPurchaseIntentRepository(pool,"test",{...wide,maxOpenGlobal:1}),a=await setup(),b=await setup(),c=await setup();
+  const results=await Promise.allSettled([capped.record(a.customer.id,a.requestId,a.quoteId),capped.record(b.customer.id,b.requestId,b.quoteId)]);
+  expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(1);
+  const rejected=results.find(r=>r.status==="rejected") as PromiseRejectedResult;expect(rejected.reason.code).toBe("PURCHASE_GLOBAL_CAPACITY_REACHED");
+  expect((await db.query(`select count(*)::int n from peragus_customer_purchase_intents where ${OPEN_SQL}`)).rows).toEqual([{n:1}]);
+  await expect(capped.record(c.customer.id,c.requestId,c.quoteId)).rejects.toThrow("PURCHASE_GLOBAL_CAPACITY_REACHED");
+  // A replay of the accepted request is not a new operation.
+  const winner=results.find(r=>r.status==="fulfilled") as PromiseFulfilledResult<{record:{id:string;requestId:string;quoteId:string;customerId:string}}>;
+  const w=winner.value.record;expect((await capped.record(w.customerId,w.requestId,w.quoteId)).replayed).toBe(true);
+  await closeAllOpen();expect((await capped.record(c.customer.id,c.requestId,c.quoteId)).replayed).toBe(false);
+  await closeAllOpen();
+ });
+ it("enforces the configured BRL range when recording, so target-amount quotes cannot bypass it",async()=>{
+  const s=await setup(),strict=new PostgresCustomerPurchaseIntentRepository(pool,"test",{maxOpenGlobal:1000,limits:{minCents:100000n,maxCents:100000n}});
+  await expect(strict.record(s.customer.id,s.requestId,s.quoteId)).rejects.toThrow("QUOTE_AMOUNT_OUT_OF_RANGE");
+  expect((await db.query("select count(*)::int n from peragus_customer_purchase_intents where customer_id=$1",[s.customer.id])).rows).toEqual([{n:0}]);
  });
 });

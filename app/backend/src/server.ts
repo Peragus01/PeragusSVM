@@ -29,6 +29,7 @@ import { CustomerSandboxPixService } from "./purchases/customer-sandbox-pix.js";
 import { PostgresCustomerPixRepository } from "./repositories/postgres-customer-sandbox-pix.js";
 import { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
 import { PostgresCustomerPurchaseIntentRepository } from "./repositories/postgres-customer-purchase-intents.js";
+import { purchaseLimits } from "./purchases/operation-status.js";
 import { CustomerQuoteService } from "./quotes/customer-quotes.js";
 import { PostgresCustomerQuoteRepository } from "./repositories/postgres-customer-quotes.js";
 import { CustomerWalletService } from "./wallets/customer-wallet.js";
@@ -638,7 +639,10 @@ const app = await buildApp({
   ...(env.CUSTOMER_PURCHASE_INTENTS_ENABLED
     ? {
         customerPurchaseIntentService: new CustomerPurchaseIntentService(
-          new PostgresCustomerPurchaseIntentRepository(pool!, moneyModeFor(env)),
+          new PostgresCustomerPurchaseIntentRepository(pool!, moneyModeFor(env), {
+            maxOpenGlobal: env.PURCHASE_MAX_OPEN_GLOBAL,
+            limits: purchaseLimits(env),
+          }),
           moneyMode,
         ),
       }
@@ -655,6 +659,7 @@ const app = await buildApp({
             timeoutMs: 5000,
           }),
           moneyMode,
+          purchaseLimits(env),
         ),
       }
     : {}),

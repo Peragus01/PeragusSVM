@@ -16,7 +16,9 @@ const GUARDED=["peragus_customer_wallet_challenges","peragus_customer_wallets","
  "peragus_ozav_sandbox_customer_links","peragus_customer_webhook_events","peragus_individual_onboarding_drafts",
  "peragus_customer_terms_sessions","peragus_customer_onboarding_submissions","peragus_customer_verifications",
  "peragus_customer_screenings","peragus_pilot_invites","peragus_onboarding_email_outbox",
- "peragus_customer_document_uploads","peragus_invite_email_outbox"];
+ "peragus_customer_document_uploads","peragus_invite_email_outbox",
+ // purchase operation status log (045)
+ "peragus_operation_status_events"];
 const NETWORK_COLUMNS:Record<string,string>={peragus_customer_wallets:"network",
  peragus_customer_purchase_intents:"wallet_proof_network",peragus_customer_withdrawal_requests:"proof_network"};
 vi.setConfig({testTimeout:60000});

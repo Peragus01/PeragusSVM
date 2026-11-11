@@ -14,12 +14,18 @@ import {AuthenticationError} from "../src/auth/customer-access.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerPurchaseIntentRepository} from "../src/repositories/postgres-customer-purchase-intents.js";
 import {CustomerPurchaseIntentService} from "../src/purchases/customer-purchase-intents.js";
-const db=new PGlite();let failInsert=false;
-const pool={query:async(sql:string,params?:unknown[])=>{
+const db=new PGlite();let failInsert=false;let connection=Promise.resolve();
+const query=async(sql:string,params?:unknown[])=>{
  if(failInsert && sql.startsWith("insert into peragus_customer_purchase_intents")){failInsert=false;throw new Error("private database details");}
  const r=await db.query(sql,params);return{...r,rowCount:r.rows.length};
+};
+// PGlite has one session: connections are handed out one at a time.
+const pool={query,connect:async()=>{
+ const previous=connection;let release!:()=>void;connection=new Promise<void>(resolve=>{release=resolve;});await previous;
+ return{query,release};
 }} as unknown as Pool;
-const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool,"test"),service=new CustomerPurchaseIntentService(repo);
+const wide={maxOpenGlobal:1000,limits:{minCents:1n,maxCents:1000000n}};
+const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool,"test",wide),service=new CustomerPurchaseIntentService(repo);
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");const dir=new URL("../migrations/",import.meta.url);
@@ -202,7 +208,10 @@ describe("approved sandbox withdrawal execution",()=>{
  });
  it("reports historical binding mismatch and rejects unknown IDs, selectors and private DB errors",async()=>{
   const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]),"test");
+  // Legacy data predating the immutability trigger (045): bypass triggers to simulate it.
+  await db.exec("set session_replication_role=replica");
   await db.query("update peragus_customer_purchase_intents set wallet_address=$1 where id=$2",[Keypair.generate().publicKey.toBase58(),f.p.data.id]);
+  await db.exec("set session_replication_role=origin");
   await db.query("update peragus_customers set suspended=true where id=$1",[f.s.customer.id]);
   expect((await audit.read(f.user,f.wr.data.id)).integrity.purchase_matches).toBe(false);
   await db.query("update peragus_customer_withdrawal_requests set amount_usdt='99999999999999.000001' where id=$1",[f.wr.data.id]);
@@ -296,13 +305,14 @@ describe("approved sandbox withdrawal execution",()=>{
   const s=await setup(),history=new CustomerOperationHistoryService(pool,"test");
   const ids:string[]=[];
   ids.push((await service.record(s.customer.id,randomUUID(),s.quoteId)).data.id);
-  for(let i=0;i<2;i++)ids.push((await service.record(s.customer.id,randomUUID(),await s.makeQuote())).data.id);
+  for(let i=0;i<2;i++){await repo.transitionOperation(ids.at(-1)!,"expired","system:test","one open operation per customer");ids.push((await service.record(s.customer.id,randomUUID(),await s.makeQuote())).data.id);}
   await db.query("update peragus_customer_purchase_intents set created_at='2026-10-20T12:00:00.123456Z' where customer_id=$1",[s.customer.id]);
   const expected=[...ids].sort().reverse();
   const first=await history.list(s.customer.id,parseHistoryQuery({limit:"1"}));
   expect(first.data.map(r=>r.id)).toEqual(expected.slice(0,1));
   expect(first.data[0]).toMatchObject({stage:"purchase_recorded",pix:null,withdrawal:null,converted_target:null});
   expect(first.data[0]!.created_at).toBe("2026-10-20T12:00:00.123456Z");
+  await repo.transitionOperation(ids.at(-1)!,"expired","system:test","one open operation per customer");
   const inserted=(await service.record(s.customer.id,randomUUID(),await s.makeQuote())).data.id;
   await db.query("update peragus_customer_purchase_intents set created_at='2026-10-20T12:00:00.123457Z' where id=$1",[inserted]);
   const second=await history.list(s.customer.id,parseHistoryQuery({limit:"1",cursor:first.meta.next_cursor!}));
@@ -433,6 +443,7 @@ describe("owned operation detail",()=>{
  it("reads an old operation directly with write services absent and preserves the history projection",async()=>{
   const f=await completedFixture(),history=new CustomerOperationHistoryService(pool,"test");
   await db.query("update peragus_customer_purchase_intents set created_at=now()-interval '4 years' where id=$1",[f.p.data.id]);
+  await repo.transitionOperation(f.p.data.id,"expired","system:test","one open operation per customer");
   await service.record(f.s.customer.id,randomUUID(),await f.s.makeQuote());
   const recent=await history.list(f.s.customer.id,parseHistoryQuery({limit:"1"}));
   expect(recent.data.map(row=>row.id)).not.toContain(f.p.data.id);

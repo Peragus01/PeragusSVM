@@ -1,6 +1,7 @@
 import { parseWithdrawalOperators } from "../withdrawals/operator-approvals.js";
 import "dotenv/config";
 import { moneyPathsNotLiveReady, providerKeyMatchesMode } from "./money-environment.js";
+import { purchaseLimits } from "../purchases/operation-status.js";
 
 import { z } from "zod";
 
@@ -96,6 +97,21 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    // Purchase range (BRL, decimal strings) and global open-operation cap.
+    PURCHASE_MIN_BRL: z
+      .string()
+      .regex(/^(0|[1-9]\d{0,4})(\.\d{1,2})?$/)
+      .default("1000.00"),
+    PURCHASE_MAX_BRL: z
+      .string()
+      .regex(/^(0|[1-9]\d{0,4})(\.\d{1,2})?$/)
+      .default("1000.00"),
+    PURCHASE_MAX_OPEN_GLOBAL: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1_000)
+      .default(1),
     CUSTOMER_WALLET_LINKING_ENABLED: z
       .enum(["true", "false"])
       .default("false")
@@ -260,6 +276,16 @@ const envSchema = z
         path: [flag],
         message: `MONEY_PATH_NOT_LIVE_READY: ${flag}`,
       });
+    }
+    {
+      const { minCents, maxCents } = purchaseLimits(env);
+      if (minCents <= 0n || maxCents > 1_000_000n || minCents > maxCents)
+        context.addIssue({
+          code: "custom",
+          path: ["PURCHASE_MAX_BRL"],
+          message:
+            "PURCHASE_MIN_BRL must be positive and not above PURCHASE_MAX_BRL (at most 10000.00)",
+        });
     }
     if (env.OZAV_API_KEY) {
       if (!providerKeyMatchesMode(env.OZAV_API_KEY, expected)) {

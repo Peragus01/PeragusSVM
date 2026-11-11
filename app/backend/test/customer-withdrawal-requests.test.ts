@@ -9,12 +9,18 @@ import {AuthenticationError} from "../src/auth/customer-access.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerPurchaseIntentRepository} from "../src/repositories/postgres-customer-purchase-intents.js";
 import {CustomerPurchaseIntentService} from "../src/purchases/customer-purchase-intents.js";
-const db=new PGlite();let failInsert=false;
-const pool={query:async(sql:string,params?:unknown[])=>{
+const db=new PGlite();let failInsert=false;let connection=Promise.resolve();
+const query=async(sql:string,params?:unknown[])=>{
  if(failInsert && sql.startsWith("insert into peragus_customer_purchase_intents")){failInsert=false;throw new Error("private database details");}
  const r=await db.query(sql,params);return{...r,rowCount:r.rows.length};
+};
+// PGlite has one session: connections are handed out one at a time.
+const pool={query,connect:async()=>{
+ const previous=connection;let release!:()=>void;connection=new Promise<void>(resolve=>{release=resolve;});await previous;
+ return{query,release};
 }} as unknown as Pool;
-const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool,"test"),service=new CustomerPurchaseIntentService(repo);
+const wide={maxOpenGlobal:1000,limits:{minCents:1n,maxCents:1000000n}};
+const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool,"test",wide),service=new CustomerPurchaseIntentService(repo);
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");const dir=new URL("../migrations/",import.meta.url);

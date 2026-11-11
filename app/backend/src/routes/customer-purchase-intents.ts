@@ -24,7 +24,7 @@ export async function registerCustomerPurchaseIntentRoutes(app:FastifyInstance,s
      reply.header("Location",`/v1/me/purchase-intents/${result.data.id}`);
      return reply.code(result.replayed?200:201).send({data:result.data,meta:{idempotent_replay:result.replayed,record_only:true,job_enqueued:false,operations_enabled:false}});
     }catch(error){
-     if(error instanceof PurchaseIntentError)return reply.code(error.code==="PURCHASE_INTENT_NOT_FOUND" || error.code==="PURCHASE_QUOTE_NOT_FOUND"?404:409).send({error:{code:error.code}});
+     if(error instanceof PurchaseIntentError)return reply.code(error.code==="PURCHASE_INTENT_NOT_FOUND" || error.code==="PURCHASE_QUOTE_NOT_FOUND"?404:error.code==="QUOTE_AMOUNT_OUT_OF_RANGE"?422:409).send({error:{code:error.code}});
      request.log.warn({event:"customer_purchase_intent_unavailable"});return reply.code(503).send({error:{code:"CUSTOMER_PURCHASE_INTENT_UNAVAILABLE"}});
     }
    }

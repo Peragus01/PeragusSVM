@@ -94,9 +94,11 @@ export async function registerCustomerQuoteRoutes(
                 .code(
                   error.code === "QUOTE_NOT_FOUND"
                     ? 404
-                    : error.code === "QUOTE_AMOUNT_INVALID"
-                      ? 400
-                      : 409,
+                    : error.code === "QUOTE_AMOUNT_OUT_OF_RANGE"
+                      ? 422
+                      : error.code === "QUOTE_AMOUNT_INVALID"
+                        ? 400
+                        : 409,
                 )
                 .send({
                   error: {
