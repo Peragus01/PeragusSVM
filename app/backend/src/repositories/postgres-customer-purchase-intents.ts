@@ -29,10 +29,10 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
     '${this.e.mode}','${this.e.network}'
    from peragus_customer_indicative_quotes q
    join peragus_customers c on c.id=q.customer_id and c.customer_type='pf' and not c.suspended
-   join peragus_customer_onboarding_submissions s on s.customer_id=q.customer_id and s.environment='test'
-   join peragus_customer_terms_sessions t on t.id=s.terms_session_id and t.customer_id=q.customer_id and t.environment='test'
-   join peragus_customer_verifications v on v.customer_id=q.customer_id and v.environment='test'
-   join peragus_customer_screenings sc on sc.customer_id=q.customer_id and sc.environment='test'
+   join peragus_customer_onboarding_submissions s on s.customer_id=q.customer_id and s.environment='${this.e.mode}'
+   join peragus_customer_terms_sessions t on t.id=s.terms_session_id and t.customer_id=q.customer_id and t.environment='${this.e.mode}'
+   join peragus_customer_verifications v on v.customer_id=q.customer_id and v.environment='${this.e.mode}'
+   join peragus_customer_screenings sc on sc.customer_id=q.customer_id and sc.environment='${this.e.mode}'
    join peragus_customer_wallets w on w.customer_id=q.customer_id and w.environment='${this.e.mode}' and w.network='${this.e.network}'
    where q.id=$4 and q.customer_id=$2 and q.environment='${this.e.mode}' and q.provider_quote_id is not null
     and q.create_attempted and q.observation->>'customerId'=q.provider_customer_id

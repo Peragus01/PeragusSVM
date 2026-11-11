@@ -109,11 +109,12 @@ const pool = { query, connect: async () => {
   tail = new Promise<void>(resolve => { release = resolve; });
   await previous; return { query, release };
 } } as unknown as Pool;
-const links = new PostgresSandboxCustomerLinkRepository(pool), customers = new PostgresCustomerRepository(pool);
+const links = new PostgresSandboxCustomerLinkRepository(pool,"test"), customers = new PostgresCustomerRepository(pool);
 beforeAll(async () => {
   await db.exec("create role anon; create role authenticated;");
   const dir = new URL("../migrations/", import.meta.url);
   for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file, dir), "utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
 }, 30000);
 afterAll(async () => { await db.close(); });
 async function setup() {
@@ -127,7 +128,7 @@ async function setup() {
     createSandboxCustomer: vi.fn(async (input: any) => ({ id: providerId, externalRef: input.externalRef, email: input.email, status: "approved", verificationMode: "full" as const })),
     getSandboxCustomerSnapshot: getSnapshot };
   await new OzavSandboxCustomerService(links, provider).execute(actor.id);
-  const processor = new PostgresCustomerWebhookProcessor(pool, provider);
+  const processor = new PostgresCustomerWebhookProcessor(pool, provider,"test");
   return { actor, owner, providerId, provider, processor, getSnapshot, snapshot };
 }
 describe("transactional webhook deduplication and safe refresh", () => {

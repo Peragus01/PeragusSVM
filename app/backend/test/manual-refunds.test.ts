@@ -26,10 +26,10 @@ async function fixture(){
  const owner=randomUUID(),operator={id:randomUUID(),assuranceLevel:"aal2" as const};
  const customer=(await customers.createOrGet({ownerUserId:owner,type:"pf",displayName:"Synthetic customer"})).customer;
  const provider="ozav_cus_"+randomUUID().replaceAll("-",""),terms=randomUUID(),quote=randomUUID(),purchase=randomUUID(),pix=randomUUID(),wallet=Keypair.generate().publicKey.toBase58();
- await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance)
- values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now(),now(),'{}','{}')`,[terms,customer.id,randomUUID()]);
- await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version)
- values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full','{}',1)`,[randomUUID(),customer.id,terms,"a".repeat(64),randomUUID(),provider]);
+ await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance,environment)
+ values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now(),now(),'{}','{}','test')`,[terms,customer.id,randomUUID()]);
+ await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version,environment)
+ values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full','{}',1,'test')`,[randomUUID(),customer.id,terms,"a".repeat(64),randomUUID(),provider]);
  await db.query(`insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,environment) values($1,$2,$3,$4,1000,'test')`,[quote,customer.id,randomUUID(),provider]);
  await db.query(`insert into peragus_customer_purchase_intents(id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network)
  values($1,$2,$3,$4,$5,1000,200,'{}',$6,now(),'{}','test','solana:devnet')`,[purchase,customer.id,randomUUID(),quote,provider,wallet]);
@@ -51,9 +51,9 @@ describe("manual refund case tracking",()=>{
   const item=response.json().data;
   expect(item).toMatchObject({state:"pending_review",requested_amount:{currency:"BRL",amount:"1000.00"},returned_amount:null,refund_execution_automated:false,provider_verified:false,original_transfer_cancelled:false});
   expect((await app.inject({method:"GET",url:path,headers})).json().data).toEqual(item);
-  const history=await new CustomerOperationHistoryService(pool).list(f.customer.id,parseHistoryQuery({}));
+  const history=await new CustomerOperationHistoryService(pool,"test").list(f.customer.id,parseHistoryQuery({}));
   expect(history.data[0]!.refund_request).toMatchObject({id:item.id,state:"pending_review"});
-  const detail=await new CustomerOperationHistoryService(pool).get(f.customer.id,f.purchase);
+  const detail=await new CustomerOperationHistoryService(pool,"test").get(f.customer.id,f.purchase);
   expect(detail).toEqual(history.data[0]);
   expect(JSON.stringify(detail)).not.toContain("PRIVATE_PROVIDER_DETAILS");
   expect((await db.query("select count(*) as n from settlements")).rows[0]).toEqual({n:0});

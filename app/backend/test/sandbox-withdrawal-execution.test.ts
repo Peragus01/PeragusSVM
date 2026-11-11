@@ -30,13 +30,13 @@ afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();})
 async function setup(type:"pf"|"pj"="pf"){
  const owner=randomUUID(),customer=(await customers.createOrGet({ownerUserId:owner,type,displayName:"Synthetic name"})).customer;
  const id=customer.id,provider=`ozav_cus_${id.replaceAll("-","")}`,terms=randomUUID(),wallet=Keypair.generate().publicKey.toBase58();
- await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance)
- values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now()-interval '1 day',now()-interval '2 days','{}','{}')`,[terms,id,randomUUID()]);
- await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version)
- values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full',$7,2)`,[randomUUID(),id,terms,"a".repeat(64),randomUUID(),provider,{requirements_pending:false}]);
+ await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance,environment)
+ values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now()-interval '1 day',now()-interval '2 days','{}','{}','test')`,[terms,id,randomUUID()]);
+ await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version,environment)
+ values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full',$7,2,'test')`,[randomUUID(),id,terms,"a".repeat(64),randomUUID(),provider,{requirements_pending:false}]);
  await db.query("insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature,environment,network) values($1,$2,$3,now(),'private proof message','private proof signature','test','solana:devnet')",[id,wallet,randomUUID()]);
- await db.query("insert into peragus_customer_verifications(customer_id,provider_customer_id,verification_id,observation,revision,refreshed_at) values($1,$2,$3,$4,3,now())",[id,provider,`ozav_vrf_${id.replaceAll("-","")}`,{status:"completed",checks:{kyc_document:"pass",liveness:"pass",face_match:"pass",aml_name_screening:"not_started"}}]);
- await db.query("insert into peragus_customer_screenings(customer_id,provider_customer_id,idempotency_key,screening_id,observation,revision,refreshed_at) values($1,$2,$3,$4,$5,4,now())",[id,provider,randomUUID(),`ozav_scr_${id.replaceAll("-","")}`,{status:"completed",result:"clear",matchesCount:0,suggestedDecision:"clear",lists:["sanctions","pep"]}]);
+ await db.query("insert into peragus_customer_verifications(customer_id,provider_customer_id,verification_id,observation,revision,refreshed_at,environment) values($1,$2,$3,$4,3,now(),'test')",[id,provider,`ozav_vrf_${id.replaceAll("-","")}`,{status:"completed",checks:{kyc_document:"pass",liveness:"pass",face_match:"pass",aml_name_screening:"not_started"}}]);
+ await db.query("insert into peragus_customer_screenings(customer_id,provider_customer_id,idempotency_key,screening_id,observation,revision,refreshed_at,environment) values($1,$2,$3,$4,$5,4,now(),'test')",[id,provider,randomUUID(),`ozav_scr_${id.replaceAll("-","")}`,{status:"completed",result:"clear",matchesCount:0,suggestedDecision:"clear",lists:["sanctions","pep"]}]);
  const makeQuote=async()=>{
   const localId=randomUUID(),providerId=`ozav_q_${localId.replaceAll("-","")}`,observation={id:providerId,customerId:provider,rateType:"floating",rate:"0.2",source:{currency:"BRL",amount:"500.00"},target:{currency:"USDT",amount:"100.000000"},spreadBps:0,rateWithoutSpread:"0.2",amountDeducted:null,expiresAt:null,createdAt:new Date().toISOString(),private_data:"never return"};
   await db.query("insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,create_attempted,provider_quote_id,observation,environment) values($1,$2,$3,$4,'500.00',true,$5,$6,'test')",[localId,id,randomUUID(),provider,providerId,observation]);return localId;
@@ -165,7 +165,7 @@ describe("approved sandbox withdrawal execution",()=>{
   expect(Object.keys(reader).sort()).toEqual(["find","transfer"]);expect(Object.isFrozen(reader)).toBe(true);
  });
  it("reads stored audit before approval and after completion with writes disabled",async()=>{
-  const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]));
+  const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]),"test");
   const before=await audit.read(f.user,f.wr.data.id);
   expect(before).toMatchObject({withdrawal_request_id:f.wr.data.id,approval:null,execution:null,pix:{conversion_completed:true},integrity:{purchase_matches:true,pix_matches:true,converted_amount_matches:true,approval_matches:null,execution_matches:null}});
   await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
@@ -179,7 +179,7 @@ describe("approved sandbox withdrawal execution",()=>{
   expect((await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"},payload:{request_id:randomUUID(),confirmation:"SANDBOX_ONLY"}})).statusCode).toBe(503);
  });
  it("audits uncertain recovery and retains unknown net amounts without repeating sends",async()=>{
-  const f=await executionFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]));
+  const f=await executionFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]),"test");
   f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
   const uncertain=await audit.read(f.user,f.wr.data.id);
   expect(uncertain.execution).toMatchObject({state:"uncertain",withdrawal_started:true,recovery_required:true,provider_target_amount:null,pilot_slot_held:true});
@@ -191,7 +191,7 @@ describe("approved sandbox withdrawal execution",()=>{
   expect(JSON.stringify(complete)).not.toContain("PRIVATE_SYNTHETIC");
  });
  it("blocks audit without MFA or role and rejects customer-role overlap",async()=>{
-  const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id,f.s.owner]));
+  const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id,f.s.owner]),"test");
   for(const [identity,code] of [[{id:f.user.id},"WITHDRAWAL_OPERATOR_MFA_REQUIRED"],[{id:randomUUID(),assuranceLevel:"aal2"},"WITHDRAWAL_OPERATOR_REQUIRED"],[{id:f.s.owner,assuranceLevel:"aal2"},"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"]] as const){
    const app=await buildApp({customerAccess:{customers,authenticate:async()=>identity},operatorWithdrawalAuditService:audit});apps.push(app);
    const response=await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`,headers:{authorization:"Bearer valid"}});
@@ -201,7 +201,7 @@ describe("approved sandbox withdrawal execution",()=>{
   expect((await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`})).statusCode).toBe(401);
  });
  it("reports historical binding mismatch and rejects unknown IDs, selectors and private DB errors",async()=>{
-  const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]));
+  const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id]),"test");
   await db.query("update peragus_customer_purchase_intents set wallet_address=$1 where id=$2",[Keypair.generate().publicKey.toBase58(),f.p.data.id]);
   await db.query("update peragus_customers set suspended=true where id=$1",[f.s.customer.id]);
   expect((await audit.read(f.user,f.wr.data.id)).integrity.purchase_matches).toBe(false);
@@ -213,13 +213,13 @@ describe("approved sandbox withdrawal execution",()=>{
    const response=await app.inject({method:"GET",url,headers:{authorization:"Bearer valid"}});
    expect(response.statusCode).toBe(code);expect(response.headers["cache-control"]).toBe("no-store");
   }
-  const broken=new OperatorWithdrawalAuditService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,new Set([f.user.id]));
+  const broken=new OperatorWithdrawalAuditService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,new Set([f.user.id]),"test");
   const brokenApp=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:broken});apps.push(brokenApp);
   const response=await brokenApp.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`,headers:{authorization:"Bearer valid"}});
   expect(response.statusCode).toBe(503);expect(response.body).not.toContain("PRIVATE_DATABASE_PASSWORD");
  });
  it("lists pending operator withdrawals with MFA while approval and sends stay disabled",async()=>{
-  const f=await approvalFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id]));
+  const f=await approvalFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id]),"test");
   const stats=f.stats(),app=await buildApp({customerAccess:{customers,authenticate:async token=>{
    if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return f.user;
   }},operatorWithdrawalQueueService:queue});apps.push(app);
@@ -234,7 +234,7 @@ describe("approved sandbox withdrawal execution",()=>{
   expect((await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"},payload:{request_id:randomUUID(),confirmation:"SANDBOX_ONLY"}})).statusCode).toBe(503);
  });
  it("blocks operator queue without MFA, revoked roles and customer-role overlap",async()=>{
-  const f=await approvalFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id,f.s.owner]));
+  const f=await approvalFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id,f.s.owner]),"test");
   for(const [identity,code] of [[{id:f.user.id},"WITHDRAWAL_OPERATOR_MFA_REQUIRED"],[{id:randomUUID(),assuranceLevel:"aal2"},"WITHDRAWAL_OPERATOR_REQUIRED"],[{id:f.s.owner,assuranceLevel:"aal2"},"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"]] as const){
    const app=await buildApp({customerAccess:{customers,authenticate:async()=>identity},operatorWithdrawalQueueService:queue});apps.push(app);
    const response=await app.inject({method:"GET",url:"/v1/admin/withdrawal-requests",headers:{authorization:"Bearer valid"}});
@@ -242,7 +242,7 @@ describe("approved sandbox withdrawal execution",()=>{
   }
  });
  it("filters uncertain, completed and review records without another provider call",async()=>{
-  const f=await executionFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id]));
+  const f=await executionFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id]),"test");
   const own=async(state:string)=>(await queue.list(f.user,{state})).data.find(r=>r.id===f.wr.data.id);
   expect(await own("approved")).toMatchObject({state:"approved"});
   f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
@@ -254,7 +254,7 @@ describe("approved sandbox withdrawal execution",()=>{
   expect(await own("needs_review")).toMatchObject({manual_review_required:true,provider_completed:false});
  });
  it("paginates operator queue ties and rejects selectors and private DB errors",async()=>{
-  const f=await approvalFixture(),other=await approvalFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id]));
+  const f=await approvalFixture(),other=await approvalFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id]),"test");
   for(const id of [f.wr.data.id,other.wr.data.id])await db.query("update peragus_customer_withdrawal_requests set created_at='2200-01-01T00:00:00.123456Z' where id=$1",[id]);
   const expected=[f.wr.data.id,other.wr.data.id].sort().reverse();
   const first=await queue.list(f.user,{state:"all",limit:"1"});
@@ -266,14 +266,14 @@ describe("approved sandbox withdrawal execution",()=>{
    const response=await app.inject({method:"GET",url:"/v1/admin/withdrawal-requests?"+query,headers:{authorization:"Bearer valid"}});
    expect(response.statusCode).toBe(400);expect(response.headers["cache-control"]).toBe("no-store");
   }
-  const broken=new OperatorWithdrawalQueueService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,new Set([f.user.id]));
+  const broken=new OperatorWithdrawalQueueService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,new Set([f.user.id]),"test");
   const brokenApp=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalQueueService:broken});apps.push(brokenApp);
   const failure=await brokenApp.inject({method:"GET",url:"/v1/admin/withdrawal-requests",headers:{authorization:"Bearer valid"}});
   expect(failure.statusCode).toBe(503);expect(failure.body).not.toContain("PRIVATE_DATABASE_PASSWORD");
  });
  it("lists only owned operations with write gates off and no provider refresh",async()=>{
   const f=await executionFixture(),other=await executionFixture();
-  const history=new CustomerOperationHistoryService(pool),stats=f.stats(),reads=f.identityReads();
+  const history=new CustomerOperationHistoryService(pool,"test"),stats=f.stats(),reads=f.identityReads();
   const app=await buildApp({customerAccess:{customers,authenticate:async token=>{
    if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");
    return{id:f.s.owner,email:"synthetic@example.test"};
@@ -293,7 +293,7 @@ describe("approved sandbox withdrawal execution",()=>{
   expect((await app.inject({method:"POST",url:"/v1/me/withdrawal-requests",headers:{authorization:"Bearer valid"},payload:{}})).statusCode).toBe(503);
  });
  it("paginates microsecond timestamps and UUID ties without leaking across customers",async()=>{
-  const s=await setup(),history=new CustomerOperationHistoryService(pool);
+  const s=await setup(),history=new CustomerOperationHistoryService(pool,"test");
   const ids:string[]=[];
   ids.push((await service.record(s.customer.id,randomUUID(),s.quoteId)).data.id);
   for(let i=0;i<2;i++)ids.push((await service.record(s.customer.id,randomUUID(),await s.makeQuote())).data.id);
@@ -313,7 +313,7 @@ describe("approved sandbox withdrawal execution",()=>{
   expect(await history.list(foreign.customer.id,parseHistoryQuery({cursor:first.meta.next_cursor!}))).toEqual({data:[],meta:{has_more:false,next_cursor:null}});
  });
  it("keeps uncertain and completed custody states distinct from real delivery",async()=>{
-  const f=await executionFixture(),history=new CustomerOperationHistoryService(pool);
+  const f=await executionFixture(),history=new CustomerOperationHistoryService(pool,"test");
   f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
   const uncertain=await history.list(f.s.customer.id,parseHistoryQuery({}));
   expect(uncertain.data[0]!.withdrawal).toMatchObject({state:"uncertain",recovery_required:true,provider_completed:false});
@@ -324,10 +324,10 @@ describe("approved sandbox withdrawal execution",()=>{
   expect(f.sends()).toBe(1);
  });
  it("hides partial conversion amounts and database error details",async()=>{
-  const f=await completedFixture(),history=new CustomerOperationHistoryService(pool);
+  const f=await completedFixture(),history=new CustomerOperationHistoryService(pool,"test");
   await db.query("update peragus_customer_sandbox_pix set observation=jsonb_set(observation,'{destinationLegStatus}','\"pending\"') where id=$1",[f.pixId]);
   expect((await history.list(f.s.customer.id,parseHistoryQuery({}))).data[0]).toMatchObject({stage:"pix",converted_target:null,pix:{conversion_completed:false}});
-  const broken=new CustomerOperationHistoryService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any);
+  const broken=new CustomerOperationHistoryService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,"test");
   const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner})},customerOperationHistoryService:broken});apps.push(app);
   const response=await app.inject({method:"GET",url:"/v1/me/operations",headers:{authorization:"Bearer valid"}});
   expect(response.statusCode).toBe(503);expect(response.headers["cache-control"]).toBe("no-store");
@@ -335,7 +335,7 @@ describe("approved sandbox withdrawal execution",()=>{
  });
  it("serves owned stored results while all write services are disabled",async()=>{
   const f=await executionFixture();await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
-  const reads=new CustomerWithdrawalResultService(pool);
+  const reads=new CustomerWithdrawalResultService(pool,"test");
   const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner,email:"synthetic@example.test"})},customerWithdrawalResultService:reads});
   apps.push(app);
   const path=`/v1/me/withdrawal-requests/${f.wr.data.id}/result`;
@@ -353,7 +353,7 @@ describe("approved sandbox withdrawal execution",()=>{
   await expect(reads.read(other.s.customer.id,f.wr.data.id)).rejects.toThrow("WITHDRAWAL_REQUEST_NOT_FOUND");
  });
  it("preserves unknown amounts through approval, uncertainty and omitted target completion",async()=>{
-  const f=await executionFixture(),reads=new CustomerWithdrawalResultService(pool);
+  const f=await executionFixture(),reads=new CustomerWithdrawalResultService(pool,"test");
   expect(await reads.read(f.s.customer.id,f.wr.data.id)).toMatchObject({state:"approved",provider_completed:false,amounts:{net_amount:null,deducted_amount:null,basis:"not_reported"}});
   f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
   expect(await reads.read(f.s.customer.id,f.wr.data.id)).toMatchObject({state:"uncertain",recovery_required:true});
@@ -431,7 +431,7 @@ describe("approved sandbox withdrawal execution",()=>{
 
 describe("owned operation detail",()=>{
  it("reads an old operation directly with write services absent and preserves the history projection",async()=>{
-  const f=await completedFixture(),history=new CustomerOperationHistoryService(pool);
+  const f=await completedFixture(),history=new CustomerOperationHistoryService(pool,"test");
   await db.query("update peragus_customer_purchase_intents set created_at=now()-interval '4 years' where id=$1",[f.p.data.id]);
   await service.record(f.s.customer.id,randomUUID(),await f.s.makeQuote());
   const recent=await history.list(f.s.customer.id,parseHistoryQuery({limit:"1"}));
@@ -448,7 +448,7 @@ describe("owned operation detail",()=>{
   expect(f.stats()).toEqual(stats);
  });
  it("uses identical 404s for foreign and missing records and rejects selectors and invalid IDs",async()=>{
-  const f=await completedFixture(),other=await setup(),history=new CustomerOperationHistoryService(pool);
+  const f=await completedFixture(),other=await setup(),history=new CustomerOperationHistoryService(pool,"test");
   const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:other.owner})},customerOperationHistoryService:history});apps.push(app);
   const foreign=await app.inject({method:"GET",url:`/v1/me/operations/${f.p.data.id}`,headers});
   const missing=await app.inject({method:"GET",url:`/v1/me/operations/${randomUUID()}`,headers});
@@ -463,13 +463,13 @@ describe("owned operation detail",()=>{
   expect((await app.inject({method:"GET",url:`/v1/me/operations/${f.p.data.id}`})).statusCode).toBe(401);
  });
  it("rejects PJ and suspended profiles and hides private repository errors",async()=>{
-  const pj=await setup("pj"),f=await completedFixture(),history=new CustomerOperationHistoryService(pool);
+  const pj=await setup("pj"),f=await completedFixture(),history=new CustomerOperationHistoryService(pool,"test");
   const appFor=async(owner:string,reader=history)=>{
    const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:owner})},customerOperationHistoryService:reader});apps.push(app);return app;
   };
   const url=`/v1/me/operations/${f.p.data.id}`;
   expect((await (await appFor(pj.owner)).inject({method:"GET",url,headers})).statusCode).toBe(403);
-  const broken=new CustomerOperationHistoryService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any);
+  const broken=new CustomerOperationHistoryService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,"test");
   const error=await (await appFor(f.s.owner,broken)).inject({method:"GET",url,headers});
   expect(error.statusCode).toBe(503);expect(error.json().error.code).toBe("OPERATION_HISTORY_UNAVAILABLE");expect(error.body).not.toContain("PRIVATE_DATABASE_PASSWORD");
   await db.query("update peragus_customers set suspended=true where id=$1",[f.s.customer.id]);
@@ -481,7 +481,7 @@ import {OperatorAlertService} from "../src/operations/operator-alerts.js";
 import {ManualRefundService} from "../src/refunds/manual-refunds.js";
 describe("stored operational alerts",()=>{
  beforeEach(async()=>{await db.exec("truncate peragus_customer_reconciliation,peragus_customer_refund_requests cascade");});
- async function alertApp(f:Awaited<ReturnType<typeof approvalFixture>>,identity:any=f.user,reader=new OperatorAlertService(pool,new Set([f.user.id]))){
+ async function alertApp(f:Awaited<ReturnType<typeof approvalFixture>>,identity:any=f.user,reader=new OperatorAlertService(pool,new Set([f.user.id]),"test")){
   const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},operatorAlertService:reader});apps.push(app);return app;
  }
  it("keeps pending and approved refunds actionable without recording a return",async()=>{
@@ -503,17 +503,17 @@ describe("stored operational alerts",()=>{
   const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true,"test");
   const r=await refunds.request(f.s.customer.id,f.p.data.id,randomUUID(),"Synthetic request with rejected decision.");
   await refunds.decide(f.user,r.data.id,randomUUID(),"rejected","Synthetic rejected manual review reason.");
-  expect((await new OperatorAlertService(pool,new Set([f.user.id])).list(f.user,{})).data).toHaveLength(0);
+  expect((await new OperatorAlertService(pool,new Set([f.user.id]),"test").list(f.user,{})).data).toHaveLength(0);
   // Positive completion belongs only to this isolated database, not staging.
   const other=await approvalFixture(),service=new ManualRefundService(pool,new Set([other.user.id]),true,"test");
   const next=await service.request(other.s.customer.id,other.p.data.id,randomUUID(),"Synthetic request with isolated completion.");
   await service.decide(other.user,next.data.id,randomUUID(),"approved","Synthetic isolated manual review approval.");
   await service.complete(other.user,next.data.id,randomUUID(),"1000.00","synthetic-external-reference");
-  expect((await new OperatorAlertService(pool,new Set([other.user.id])).list(other.user,{})).data).toHaveLength(0);
+  expect((await new OperatorAlertService(pool,new Set([other.user.id]),"test").list(other.user,{})).data).toHaveLength(0);
  });
  it("surfaces uncertain withdrawals and clears them after GET-only recovery without another send",async()=>{
   const f=await executionFixture();f.setMode("timeout");await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
-  const alerts=new OperatorAlertService(pool,new Set([f.user.id]));
+  const alerts=new OperatorAlertService(pool,new Set([f.user.id]),"test");
   expect((await alerts.list(f.user,{})).data).toEqual([expect.objectContaining({kind:"withdrawal_uncertain",severity:"high"})]);
   const sends=f.sends();f.setFound(f.sendId);
   await new SandboxWithdrawalRecoveryService(f.repo,{find:f.provider.find,transfer:f.provider.transfer},new Set([f.user.id])).reconcile(f.user,f.wr.data.id);
@@ -522,7 +522,7 @@ describe("stored operational alerts",()=>{
  });
  it("flags failed and partially completed withdrawal evidence for manual review",async()=>{
   const f=await executionFixture();await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
-  const alerts=new OperatorAlertService(pool,new Set([f.user.id]));
+  const alerts=new OperatorAlertService(pool,new Set([f.user.id]),"test");
   for(const observation of [{...f.observed,status:'failed'},{...f.observed,destinationLegStatus:'pending'}]){
    await db.query('update peragus_sandbox_withdrawal_executions set observation=$1 where withdrawal_request_id=$2',[observation,f.wr.data.id]);
    expect((await alerts.list(f.user,{})).data).toEqual([expect.objectContaining({kind:'withdrawal_review',severity:'high'})]);
@@ -533,7 +533,7 @@ describe("stored operational alerts",()=>{
   const f=await approvalFixture(),id=randomUUID();
   await db.query(`insert into peragus_customer_reconciliation(id,customer_id,purchase_intent_id,pix_id,state,manual_review_required,environment)
    values($1,$2,$3,$4,'needs_review',true,'test')`,[id,f.s.customer.id,f.p.data.id,f.pixId]);
-  const alerts=new OperatorAlertService(pool,new Set([f.user.id]));
+  const alerts=new OperatorAlertService(pool,new Set([f.user.id]),"test");
   expect((await alerts.list(f.user,{})).data[0]).toMatchObject({kind:"reconciliation_review"});
   await db.query("update peragus_customer_reconciliation set state='pending',manual_review_required=false,next_check_at=now()-interval '16 minutes' where id=$1",[id]);
   expect((await alerts.list(f.user,{})).data[0]).toMatchObject({kind:"reconciliation_stalled"});
@@ -549,7 +549,7 @@ describe("stored operational alerts",()=>{
     values($1,$2,$3,'needs_review',true,'2026-01-01T00:00:00.123456Z','test')`,[f.s.customer.id,f.p.data.id,f.pixId]);
   await db.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,withdrawal_request_id,state,manual_review_required,created_at,environment)
     values($1,$2,$3,'needs_review',true,'2026-01-01T00:00:00.123456Z','test')`,[f.s.customer.id,f.p.data.id,f.wr.data.id]);
-  const alerts=new OperatorAlertService(pool,new Set([f.user.id]));let cursor:string|undefined;const ids:string[]=[];
+  const alerts=new OperatorAlertService(pool,new Set([f.user.id]),"test");let cursor:string|undefined;const ids:string[]=[];
   for(let i=0;i<3;i++){
    const page=await alerts.list(f.user,{limit:'1',...(cursor?{cursor}:{})});ids.push(page.data[0]!.id);cursor=page.meta.next_cursor??undefined;
   }
@@ -564,10 +564,10 @@ describe("stored operational alerts",()=>{
   expect((await noMfa.inject({url,headers})).json().error.code).toBe('WITHDRAWAL_OPERATOR_MFA_REQUIRED');
   const foreign=await alertApp(f,{id:randomUUID(),assuranceLevel:'aal2'});
   expect((await foreign.inject({url,headers})).statusCode).toBe(403);
-  const customer=await alertApp(f,{id:f.s.owner,assuranceLevel:'aal2'},new OperatorAlertService(pool,new Set([f.s.owner])));
+  const customer=await alertApp(f,{id:f.s.owner,assuranceLevel:'aal2'},new OperatorAlertService(pool,new Set([f.s.owner]),"test"));
   expect((await customer.inject({url,headers})).json().error.code).toBe('OPERATOR_ACCOUNT_SEPARATION_REQUIRED');
   expect((await app.inject({url:url+'?customer_id='+f.s.customer.id,headers})).statusCode).toBe(400);
-  const broken=await alertApp(f,f.user,new OperatorAlertService({query:async()=>{throw Error('PRIVATE_DATABASE_PASSWORD');}} as any,new Set([f.user.id])));
+  const broken=await alertApp(f,f.user,new OperatorAlertService({query:async()=>{throw Error('PRIVATE_DATABASE_PASSWORD');}} as any,new Set([f.user.id]),"test"));
   const failed=await broken.inject({url,headers});expect(failed.statusCode).toBe(503);expect(failed.body).not.toContain('PRIVATE_DATABASE_PASSWORD');
  });
 });
@@ -578,7 +578,7 @@ describe('audited sandbox withdrawal closure',()=>{
  async function ready(){
   const f=await executionFixture();await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
   let reads=0;
-  const closure=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>{reads++;return f.observed;}});
+  const closure=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),"test",true,{transfer:async()=>{reads++;return f.observed;}});
   return {...f,closure,reads:()=>reads,closureKey:randomUUID()};
  }
  async function closureApp(f:Awaited<ReturnType<typeof ready>>,identity:any=f.user,service=f.closure){
@@ -600,7 +600,7 @@ describe('audited sandbox withdrawal closure',()=>{
   await expect(f.execution.execute(f.user,f.wr.data.id,randomUUID())).rejects.toThrow('WITHDRAWAL_EXECUTION_ALREADY_REQUESTED');
   const again=await app.inject({method:'POST',url,headers,payload:payload(f)});
   expect(again.statusCode).toBe(200);expect(again.json().meta.idempotent_replay).toBe(true);expect(f.reads()).toBe(1);
-  const off=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),false);
+  const off=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),"test",false);
   expect(await off.read(f.user,f.wr.data.id)).toMatchObject({id:response.json().data.id});
   expect(response.body).not.toMatch(/ozav_|destinationAddress|sourceWalletId|private/);
  });
@@ -623,7 +623,7 @@ describe('audited sandbox withdrawal closure',()=>{
  it('keeps uncertain and unattempted executions locked without a provider call',async()=>{
   const f=await executionFixture(),context=(await f.repo.context(f.wr.data.id))!;
   await f.repo.reserve(f.user.id,f.executionRequestId,context);
-  let reads=0;const closure=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>{reads++;return f.observed;}});
+  let reads=0;const closure=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),"test",true,{transfer:async()=>{reads++;return f.observed;}});
   await expect(closure.close(f.user,f.wr.data.id,randomUUID(),reason)).rejects.toThrow('WITHDRAWAL_CLOSURE_NOT_READY');
   f.setMode('timeout');await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
   await expect(closure.close(f.user,f.wr.data.id,randomUUID(),reason)).rejects.toThrow('WITHDRAWAL_CLOSURE_NOT_READY');
@@ -632,10 +632,10 @@ describe('audited sandbox withdrawal closure',()=>{
  it('retains the slot when fresh evidence is partial, mismatched or unavailable',async()=>{
   const f=await ready();
   for(const observation of [{...f.observed,status:'failed'},{...f.observed,destinationLegStatus:'pending'},{...f.observed,sourceAmount:'1.00'},{...f.observed,destinationAddress:Keypair.generate().publicKey.toBase58()}]){
-   const service=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>observation});
+   const service=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),"test",true,{transfer:async()=>observation});
    await expect(service.close(f.user,f.wr.data.id,randomUUID(),reason)).rejects.toThrow();
   }
-  const unavailable=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>{throw Error('private provider timeout');}});
+  const unavailable=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),"test",true,{transfer:async()=>{throw Error('private provider timeout');}});
   const app=await closureApp(f,f.user,unavailable);
   const response=await app.inject({method:'POST',url:closurePath(f.wr.data.id),headers,payload:payload(f)});
   expect(response.statusCode).toBe(503);expect(response.body).not.toContain('private provider');
@@ -644,7 +644,7 @@ describe('audited sandbox withdrawal closure',()=>{
  });
  it('rejects changed local evidence between GET and commit without partial closure',async()=>{
   const f=await ready();
-  const service=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),true,{transfer:async()=>{
+  const service=new SandboxClosureService(pool,f.repo,new Set([f.user.id]),"test",true,{transfer:async()=>{
    await db.query('update peragus_sandbox_withdrawal_executions set observation=$1 where withdrawal_request_id=$2',[{...f.observed,status:'needs_review'},f.wr.data.id]);return f.observed;
   }});
   await expect(service.close(f.user,f.wr.data.id,randomUUID(),reason)).rejects.toThrow('WITHDRAWAL_CLOSURE_CONTEXT_CHANGED');
@@ -661,7 +661,7 @@ describe('audited sandbox withdrawal closure',()=>{
   const {confirmation,...without}=payload(f);
   expect((await app.inject({method:'POST',url,headers,payload:without})).statusCode).toBe(400);
   expect((await app.inject({method:'POST',url:url+'?customer_id='+f.s.customer.id,headers,payload:payload(f)})).statusCode).toBe(400);
-  const off=await closureApp(f,f.user,new SandboxClosureService(pool,f.repo,new Set([f.user.id]),false));
+  const off=await closureApp(f,f.user,new SandboxClosureService(pool,f.repo,new Set([f.user.id]),"test",false));
   expect((await off.inject({method:'POST',url,headers,payload:payload(f)})).json().error.code).toBe('SANDBOX_WITHDRAWAL_CLOSURE_DISABLED');
   expect(f.reads()).toBe(0);
  });

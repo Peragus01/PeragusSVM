@@ -463,14 +463,14 @@ if (env.DATABASE_URL) {
 
 const draftService = individualDraftCipher
   ? new IndividualDraftService(
-      new PostgresIndividualDraftRepository(pool!),
+      new PostgresIndividualDraftRepository(pool!, moneyModeFor(env)),
       individualDraftCipher,
     )
   : undefined;
 const customerTermsService =
   env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED
     ? new CustomerTermsService(
-        new PostgresCustomerTermsRepository(pool!),
+        new PostgresCustomerTermsRepository(pool!, moneyModeFor(env)),
         new TermsVault(
           env.CUSTOMER_DATA_ENCRYPTION_KEY ?? "",
           env.CUSTOMER_DATA_ENCRYPTION_KEY_ID,
@@ -490,7 +490,7 @@ const app = await buildApp({
         sandboxClosureService: new SandboxClosureService(
           pool,
           new PostgresSandboxExecutionRepository(pool, moneyModeFor(env)),
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
           env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED,
           env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED
             ? createSandboxRecoveryReader(env.OZAV_API_KEY!)
@@ -502,7 +502,7 @@ const app = await buildApp({
     ? {
         operatorAlertService: new OperatorAlertService(
           pool,
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
         ),
       }
     : {}),
@@ -513,7 +513,7 @@ const app = await buildApp({
     ? {
         pilotInviteService: new PilotInviteService(
           pool,
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
           env.PILOT_INVITES_ENABLED,
           env.PILOT_INVITE_EMAIL_HASH_KEY,
           env.INVITE_EMAIL_OUTBOX_ENABLED
@@ -557,7 +557,7 @@ const app = await buildApp({
     ? {
         operatorWithdrawalAuditService: new OperatorWithdrawalAuditService(
           pool,
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
         ),
       }
     : {}),
@@ -565,21 +565,21 @@ const app = await buildApp({
     ? {
         operatorWithdrawalQueueService: new OperatorWithdrawalQueueService(
           pool,
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
         ),
       }
     : {}),
   ...(pool
     ? {
         customerOperationHistoryService: new CustomerOperationHistoryService(
-          pool,
+          pool, moneyModeFor(env),
         ),
       }
     : {}),
   ...(pool
     ? {
         customerWithdrawalResultService: new CustomerWithdrawalResultService(
-          pool,
+          pool, moneyModeFor(env),
         ),
       }
     : {}),
@@ -638,7 +638,7 @@ const app = await buildApp({
     ? {
         customerQuoteService: new CustomerQuoteService(
           new PostgresCustomerQuoteRepository(pool!, moneyModeFor(env)),
-          new PostgresOnboardingSubmissionRepository(pool!),
+          new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
             mode: moneyModeFor(env),
@@ -658,7 +658,7 @@ const app = await buildApp({
   ...(env.CUSTOMER_ONBOARDING_STATUS_ENABLED
     ? {
         customerOnboardingOverview: new CustomerOnboardingOverview(
-          new PostgresOnboardingOverviewRepository(pool!),
+          new PostgresOnboardingOverviewRepository(pool!, moneyModeFor(env)),
           {
             draft: env.CUSTOMER_ONBOARDING_ENABLED,
             terms: env.CUSTOMER_TERMS_ENABLED,
@@ -676,8 +676,8 @@ const app = await buildApp({
   ...(env.CUSTOMER_SCREENINGS_ENABLED
     ? {
         customerScreeningService: new CustomerScreeningService(
-          new PostgresCustomerScreeningRepository(pool!),
-          new PostgresOnboardingSubmissionRepository(pool!),
+          new PostgresCustomerScreeningRepository(pool!, moneyModeFor(env)),
+          new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
             mode: moneyModeFor(env),
@@ -688,7 +688,7 @@ const app = await buildApp({
       }
     : {}),
   ...(env.CUSTOMER_DOCUMENTS_ENABLED ? {customerDocumentService: new CustomerDocumentService(
-    new DocumentRepository(pool!), new PostgresOnboardingSubmissionRepository(pool!),
+    new DocumentRepository(pool!, moneyModeFor(env)), new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
     new OzavClient({apiKey: env.OZAV_API_KEY!,mode: moneyModeFor(env), attempts:1, timeoutMs:5000}), documentOrigins,
     (url, bytes, mime, binding) => uploadDocumentBytes(url, bytes, mime, {apiKey: env.OZAV_API_KEY!, ...binding}),
     (event) => console.warn(JSON.stringify({event:"customer_document_upload_failure", ...event})),
@@ -696,8 +696,8 @@ const app = await buildApp({
   ...(env.CUSTOMER_VERIFICATIONS_ENABLED
     ? {
         customerVerificationService: new CustomerVerificationService(
-          new PostgresCustomerVerificationRepository(pool!),
-          new PostgresOnboardingSubmissionRepository(pool!),
+          new PostgresCustomerVerificationRepository(pool!, moneyModeFor(env)),
+          new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
             mode: moneyModeFor(env),
@@ -712,7 +712,7 @@ const app = await buildApp({
   ...(env.CUSTOMER_SUBMISSION_ENABLED
     ? {
         customerSubmissionService: new CustomerSubmissionService(
-          new PostgresOnboardingSubmissionRepository(pool!),
+          new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
           new SubmissionVault(
             env.CUSTOMER_DATA_ENCRYPTION_KEY ?? "",
             env.CUSTOMER_DATA_ENCRYPTION_KEY_ID,
@@ -745,13 +745,13 @@ const app = await buildApp({
               mode: moneyModeFor(env),
               attempts: 1,
               timeoutMs: 3000,
-            }),
+            }), moneyModeFor(env),
           ),
         },
       }
     : {}),
   ...(env.INVITE_EMAIL_OUTBOX_ENABLED && env.INVITE_EMAIL_WEBHOOK_SECRET
-    ? { inviteDelivery: { secret: env.INVITE_EMAIL_WEBHOOK_SECRET, service: new InviteEmailDelivery(pool!) } }
+    ? { inviteDelivery: { secret: env.INVITE_EMAIL_WEBHOOK_SECRET, service: new InviteEmailDelivery(pool!, moneyModeFor(env)) } }
     : {}),
   customerAccess: {
     authenticate,
@@ -760,7 +760,7 @@ const app = await buildApp({
   ...(env.OZAV_SANDBOX_CUSTOMERS_ENABLED
     ? {
         ozavSandboxCustomerService: new OzavSandboxCustomerService(
-          new PostgresSandboxCustomerLinkRepository(pool!),
+          new PostgresSandboxCustomerLinkRepository(pool!, moneyModeFor(env)),
           new OzavClient({ apiKey: env.OZAV_API_KEY!, mode: moneyModeFor(env), attempts: 1 }),
         ),
       }

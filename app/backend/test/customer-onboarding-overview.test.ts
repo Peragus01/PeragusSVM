@@ -11,7 +11,7 @@ import {PostgresOnboardingOverviewRepository} from "../src/repositories/postgres
 import {CustomerOnboardingOverview} from "../src/onboarding/customer-onboarding-overview.js";
 const db=new PGlite(),queries:string[]=[];
 const pool={query:async(sql:string,params?:unknown[])=>{queries.push(sql);const r=await db.query(sql,params);return{...r,rowCount:r.rows.length};}} as unknown as Pool;
-const customers=new PostgresCustomerRepository(pool),repo=new PostgresOnboardingOverviewRepository(pool);
+const customers=new PostgresCustomerRepository(pool),repo=new PostgresOnboardingOverviewRepository(pool,"test");
 const actions={draft:false,terms:false,submission:false,verification:false,screening:false,wallet:false};
 const service=new CustomerOnboardingOverview(repo,actions,()=>new Date("2026-10-20T12:00:00Z"));
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
@@ -27,14 +27,14 @@ async function setup(type:"pf"|"pj"="pf"){
 }
 async function seed(s:Awaited<ReturnType<typeof setup>>){
  const id=s.customer.id,terms=randomUUID(),provider=`ozav_cus_${id.replaceAll("-","")}`;
- await db.query("insert into peragus_individual_onboarding_drafts(customer_id,encrypted_payload) values($1,$2)",[id,{ciphertext:"secret draft",cpf:"never select"}]);
- await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance)
-  values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0','2026-10-19T00:00:00Z','2026-10-18T00:00:00Z',$4,$5)`,[terms,id,randomUUID(),{secret:"ts_private"},{legal_name:"Private legal name"}]);
- await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,refreshed_at)
- values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full',$7,now())`,[randomUUID(),id,terms,"a".repeat(64),randomUUID(),provider,{requirements_pending:false,due_count:0,missing_fields_count:0,documents_due_count:0}]);
+ await db.query("insert into peragus_individual_onboarding_drafts(customer_id,encrypted_payload,environment) values($1,$2,'test')",[id,{ciphertext:"secret draft",cpf:"never select"}]);
+ await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance,environment)
+  values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0','2026-10-19T00:00:00Z','2026-10-18T00:00:00Z',$4,$5,'test')`,[terms,id,randomUUID(),{secret:"ts_private"},{legal_name:"Private legal name"}]);
+ await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,refreshed_at,environment)
+ values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full',$7,now(),'test')`,[randomUUID(),id,terms,"a".repeat(64),randomUUID(),provider,{requirements_pending:false,due_count:0,missing_fields_count:0,documents_due_count:0}]);
  const observation={id:"ozav_vrf_test",customerId:provider,status:"completed",checks:{kyc_document:"pass",liveness:"pass",face_match:"pass",aml_name_screening:"not_started",private_data:"never expose"}};
- await db.query("insert into peragus_customer_verifications(customer_id,provider_customer_id,verification_id,observation,refreshed_at) values($1,$2,$3,$4,now())",[id,provider,`ozav_vrf_${id.replaceAll("-","")}`,observation]);
- await db.query("insert into peragus_customer_screenings(customer_id,provider_customer_id,idempotency_key,screening_id,observation,refreshed_at) values($1,$2,$3,$4,$5,now())",[id,provider,randomUUID(),`ozav_scr_${id.replaceAll("-","")}`,{status:"completed",result:"clear",lists:["sanctions","pep"],matchesCount:0,suggestedDecision:"clear",private_data:"not exposed"}]);
+ await db.query("insert into peragus_customer_verifications(customer_id,provider_customer_id,verification_id,observation,refreshed_at,environment) values($1,$2,$3,$4,now(),'test')",[id,provider,`ozav_vrf_${id.replaceAll("-","")}`,observation]);
+ await db.query("insert into peragus_customer_screenings(customer_id,provider_customer_id,idempotency_key,screening_id,observation,refreshed_at,environment) values($1,$2,$3,$4,$5,now(),'test')",[id,provider,randomUUID(),`ozav_scr_${id.replaceAll("-","")}`,{status:"completed",result:"clear",lists:["sanctions","pep"],matchesCount:0,suggestedDecision:"clear",private_data:"not exposed"}]);
  await db.query("insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature,environment,network) values($1,$2,$3,now(),'test message','test signature','test','solana:devnet')",[id,Keypair.generate().publicKey.toBase58(),randomUUID()]);
  return{terms,provider};
 }
@@ -59,12 +59,12 @@ describe("stored onboarding overview",()=>{
  });
  it("preserves submitted terms history after session renewal and does not demand renewal for a linked submission",async()=>{
   const s=await setup(),old=await seed(s);await db.query("update peragus_customer_terms_sessions set active=false where id=$1",[old.terms]);
-  await db.query("insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until) values($1,$2,$3,now())",[randomUUID(),s.customer.id,randomUUID()]);
+  await db.query("insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,environment) values($1,$2,$3,now(),'test')",[randomUUID(),s.customer.id,randomUUID()]);
   const view=await service.read(s.customer);expect(view.provider_terms).toMatchObject({session_id:old.terms,state:"accepted",active:false,expired:true,linked_to_submission:true});
   expect(view.pending_steps).not.toContain("PROVIDER_TERMS_RENEWAL_REQUIRED");
  });
  it("reports active terms expiry before submission and uncertain sessions without inventing acceptance",async()=>{
-  const s=await setup(),t=randomUUID();await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,encrypted_token,encrypted_acceptance,terms_version,expires_at,accepted_at) values($1,$2,$3,now(),'accepted','https://ozav.io/terms','{}','{}','2.0','2026-10-19T00:00:00Z','2026-10-18T00:00:00Z')`,[t,s.customer.id,randomUUID()]);
+  const s=await setup(),t=randomUUID();await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,encrypted_token,encrypted_acceptance,terms_version,expires_at,accepted_at,environment) values($1,$2,$3,now(),'accepted','https://ozav.io/terms','{}','{}','2.0','2026-10-19T00:00:00Z','2026-10-18T00:00:00Z','test')`,[t,s.customer.id,randomUUID()]);
   expect((await service.read(s.customer)).pending_steps).toContain("PROVIDER_TERMS_RENEWAL_REQUIRED");
   await db.query("update peragus_customer_terms_sessions set state='uncertain',accepted_at=null where id=$1",[t]);expect((await service.read(s.customer)).pending_steps).toContain("PROVIDER_TERMS_RECOVERY_REQUIRED");
  });

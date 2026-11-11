@@ -1,5 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import type { Pool } from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import type { InviteEmailCipher } from "./invite-email-cipher.js";
 import { invitationMessage } from "./invite-email-template.js";
 import type { AuthenticatedUser } from "../auth/customer-access.js";
@@ -83,12 +85,16 @@ export class PilotInviteService {
   constructor(
     private readonly pool: Pick<Pool, "query">,
     private readonly operators: ReadonlySet<string>,
+    mode: MoneyMode,
     private readonly enabled = false,
     private readonly emailKey?: string,
     private readonly inviteEmailCipher?: InviteEmailCipher,
     private readonly inviteEmailFrom?: string,
     private readonly inviteFrontendOrigin?: string,
-  ) {}
+  ) {
+    this.e = rowEnvironment(mode);
+  }
+  private readonly e: RowEnvironment;
   authorize(user: AuthenticatedUser) {
     authorizeWithdrawalOperator(user, this.operators);
   }
@@ -111,7 +117,7 @@ export class PilotInviteService {
   }
   private async find(where: string, args: unknown[]) {
     const r = await this.pool.query<InviteRow>(
-      `select i.* ${this.inviteEmailCipher ? ", (select jsonb_build_object('state',o.state,'accepted_at',o.accepted_at,'delivered_at',o.delivered_at,'retry_blocked',o.retry_blocked_at is not null,'last_error',o.last_error) from peragus_invite_email_outbox o where o.invite_id=i.id) as email_delivery" : ""} from peragus_pilot_invites i where environment='test' and ${where}`,
+      `select i.* ${this.inviteEmailCipher ? ", (select jsonb_build_object('state',o.state,'accepted_at',o.accepted_at,'delivered_at',o.delivered_at,'retry_blocked',o.retry_blocked_at is not null,'last_error',o.last_error) from peragus_invite_email_outbox o where o.invite_id=i.id) as email_delivery" : ""} from peragus_pilot_invites i where environment='${this.e.mode}' and ${where}`,
       args,
     );
     return r.rows[0] ?? null;
@@ -265,13 +271,13 @@ export class PilotInviteService {
    ), assigned as (
     select slot from allocated union all select slot from claimed
    ), issued as (
-    insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,code_hash,duration_hours,reason,expires_at,target_email_hash)
-    select $1,slot,$3,$2,$4,$5,$6,$7,now()+($6::int*interval '1 hour'),$8 from assigned returning *
+    insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,code_hash,duration_hours,reason,expires_at,target_email_hash,environment)
+    select $1,slot,$3,$2,$4,$5,$6,$7,now()+($6::int*interval '1 hour'),$8,'${this.e.mode}' from assigned returning *
    ) ${
      sealed
        ? `, queued as (
-    insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload)
-    select id,'peragus-invitation-test/'||id::text,$9::jsonb from issued returning invite_id
+    insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload,environment)
+    select id,'peragus-invitation-test/'||id::text,$9::jsonb,'${this.e.mode}' from issued returning invite_id
    )`
        : ""
    } select * from issued`,
@@ -321,7 +327,7 @@ export class PilotInviteService {
   async list(user: AuthenticatedUser) {
     this.authorize(user);
     const rows = await this.pool.query<InviteRow>(
-      `select i.* ${this.inviteEmailCipher ? ", (select jsonb_build_object('state',o.state,'accepted_at',o.accepted_at,'delivered_at',o.delivered_at,'retry_blocked',o.retry_blocked_at is not null,'last_error',o.last_error) from peragus_invite_email_outbox o where o.invite_id=i.id) as email_delivery" : ""} from peragus_pilot_invites i where environment='test' order by created_at desc,id desc limit 50`,
+      `select i.* ${this.inviteEmailCipher ? ", (select jsonb_build_object('state',o.state,'accepted_at',o.accepted_at,'delivered_at',o.delivered_at,'retry_blocked',o.retry_blocked_at is not null,'last_error',o.last_error) from peragus_invite_email_outbox o where o.invite_id=i.id) as email_delivery" : ""} from peragus_pilot_invites i where environment='${this.e.mode}' order by created_at desc,id desc limit 50`,
     );
     // Raw codes and email hashes are never persisted in or returned by the list API.
     return rows.rows.map(view);
@@ -353,7 +359,7 @@ export class PilotInviteService {
     try {
       const result = await this.pool.query<InviteRow>(
         `update peragus_pilot_invites set state='revoked',revoked_by=$2,revocation_request_id=$3,revocation_reason=$4,revoked_at=now()
-    where id=$1 and state='issued' and environment='test' and not exists(select 1 from peragus_customers where owner_user_id=$2) returning *`,
+    where id=$1 and state='issued' and environment='${this.e.mode}' and not exists(select 1 from peragus_customers where owner_user_id=$2) returning *`,
         [id, user.id, requestId, reason],
       );
       if (result.rows[0])
@@ -432,7 +438,7 @@ export class PilotInviteService {
       const result = await this.pool.query<ProfileRow>(
         `with eligible as (
     select i.id,i.slot from peragus_pilot_invites i join peragus_pilot_invite_slots s on s.slot=i.slot and s.current_invite_id=i.id
-    where i.code_hash=$1 and (i.target_user_id=$2 or (i.target_user_id is null and i.target_email_hash=$6)) and i.state='issued' and i.expires_at>now() and i.environment='test'
+    where i.code_hash=$1 and (i.target_user_id=$2 or (i.target_user_id is null and i.target_email_hash=$6)) and i.state='issued' and i.expires_at>now() and i.environment='${this.e.mode}'
      and s.admitted_user_id is null and not exists(select 1 from peragus_customers where owner_user_id=$2)
     for update of i,s
    ), customer as (

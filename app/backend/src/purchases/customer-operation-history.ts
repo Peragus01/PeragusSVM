@@ -1,4 +1,6 @@
 import type {Pool} from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {z} from "zod";
 
 const uuid=z.string().uuid();
@@ -41,7 +43,8 @@ function positiveAmount(value:string|null){
 
 /** One read-only query, scoped by authenticated customer at every join. */
 export class CustomerOperationHistoryService {
-  constructor(private readonly pool:Pick<Pool,"query">){}
+  private readonly e:RowEnvironment;
+  constructor(private readonly pool:Pick<Pool,"query">,mode:MoneyMode){this.e=rowEnvironment(mode);}
   async list(customerId:string,options:HistoryOptions){
     return this.read(customerId,options);
   }
@@ -53,7 +56,7 @@ export class CustomerOperationHistoryService {
     const {limit,cursor}=options;
     const result=await this.pool.query<Row>(`with page as (
       select p.* from peragus_customer_purchase_intents p
-      where p.customer_id=$1 and p.environment='test'
+      where p.customer_id=$1 and p.environment='${this.e.mode}'
         and ($5::uuid is null or p.id=$5::uuid)
         and ($2::timestamptz is null or (p.created_at,p.id)<($2::timestamptz,$3::uuid))
       order by p.created_at desc,p.id desc limit $4
@@ -71,11 +74,11 @@ export class CustomerOperationHistoryService {
       e.observation->>'sourceLegStatus' as execution_source_status,
       e.observation->>'destinationLegStatus' as execution_destination_status
       from page p
-      left join peragus_customer_sandbox_pix x on x.purchase_intent_id=p.id and x.customer_id=p.customer_id and x.environment='test'
-      left join peragus_customer_withdrawal_requests r on r.purchase_intent_id=p.id and r.customer_id=p.customer_id and r.environment='test'
-      left join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id and a.customer_id=p.customer_id and a.environment='test'
-      left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=r.id and e.customer_id=p.customer_id and e.environment='test'
-      left join peragus_customer_refund_requests rf on rf.purchase_intent_id=p.id and rf.customer_id=p.customer_id and rf.environment='test'
+      left join peragus_customer_sandbox_pix x on x.purchase_intent_id=p.id and x.customer_id=p.customer_id and x.environment='${this.e.mode}'
+      left join peragus_customer_withdrawal_requests r on r.purchase_intent_id=p.id and r.customer_id=p.customer_id and r.environment='${this.e.mode}'
+      left join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id and a.customer_id=p.customer_id and a.environment='${this.e.mode}'
+      left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=r.id and e.customer_id=p.customer_id and e.environment='${this.e.mode}'
+      left join peragus_customer_refund_requests rf on rf.purchase_intent_id=p.id and rf.customer_id=p.customer_id and rf.environment='${this.e.mode}'
       left join peragus_manual_refund_decisions rd on rd.refund_request_id=rf.id and rd.customer_id=p.customer_id
       left join peragus_manual_refund_completions rc on rc.refund_request_id=rf.id and rc.customer_id=p.customer_id
       order by p.created_at desc,p.id desc`,[customerId,cursor?.created_at??null,cursor?.id??null,limit+1,operationId??null]);

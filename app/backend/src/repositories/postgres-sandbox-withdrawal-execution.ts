@@ -9,10 +9,10 @@ const eligible=(env:RowEnvironment)=>`select r.id as withdrawal_request_id,r.cus
  x.source_amount_brl as amount_brl,r.amount_usdt,r.wallet_address,r.wallet_verified_at as verified_at
    from peragus_customer_withdrawal_requests r join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.amount_usdt=r.amount_usdt and a.wallet_address=r.wallet_address and a.environment='${env.mode}' and a.assurance_level='aal2' join peragus_customer_sandbox_pix x on x.id=r.pix_id and x.customer_id=r.customer_id and x.purchase_intent_id=r.purchase_intent_id join peragus_customer_purchase_intents p on p.id=x.purchase_intent_id and p.customer_id=x.customer_id join peragus_customer_indicative_quotes q on q.id=p.quote_id and q.customer_id=p.customer_id
    join peragus_customers c on c.id=q.customer_id and c.customer_type='pf' and not c.suspended
-   join peragus_customer_onboarding_submissions s on s.customer_id=q.customer_id and s.environment='test'
-   join peragus_customer_terms_sessions t on t.id=s.terms_session_id and t.customer_id=q.customer_id and t.environment='test'
-   join peragus_customer_verifications v on v.customer_id=q.customer_id and v.environment='test'
-   join peragus_customer_screenings sc on sc.customer_id=q.customer_id and sc.environment='test'
+   join peragus_customer_onboarding_submissions s on s.customer_id=q.customer_id and s.environment='${env.mode}'
+   join peragus_customer_terms_sessions t on t.id=s.terms_session_id and t.customer_id=q.customer_id and t.environment='${env.mode}'
+   join peragus_customer_verifications v on v.customer_id=q.customer_id and v.environment='${env.mode}'
+   join peragus_customer_screenings sc on sc.customer_id=q.customer_id and sc.environment='${env.mode}'
    join peragus_customer_wallets w on w.customer_id=q.customer_id and w.environment='${env.mode}' and w.network='${env.network}'
    where r.id=$1 and q.environment='${env.mode}' and q.provider_quote_id is not null
     and q.create_attempted and q.observation->>'customerId'=q.provider_customer_id

@@ -1,5 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import type {Pool} from 'pg';
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import type {AuthenticatedUser} from '../auth/customer-access.js';
 import type {WithdrawalObservation} from '../providers/ozav-sandbox-withdrawal.js';
 import {authorizeWithdrawalOperator} from './operator-approvals.js';
@@ -15,8 +17,9 @@ const completed=(t:WithdrawalObservation|null)=>t?.status==='completed' && t.sou
 /** Only transfer GET capability is accepted. Never reserves, claims or sends. */
 export class SandboxClosureService {
  constructor(private readonly pool:Pick<Pool,'query'>,private readonly repository:Pick<SandboxExecutionRepository,'read'>,
-  private readonly operators:ReadonlySet<string>,private readonly enabled=false,
-  private readonly reader?:{transfer(id:string):Promise<WithdrawalObservation>}){}
+  private readonly operators:ReadonlySet<string>,mode:MoneyMode,private readonly enabled=false,
+  private readonly reader?:{transfer(id:string):Promise<WithdrawalObservation>}){this.e=rowEnvironment(mode);}
+ private readonly e:RowEnvironment;
  authorize(user:AuthenticatedUser){authorizeWithdrawalOperator(user,this.operators);}
  private async find(where:string,args:unknown[]){return (await this.pool.query<Row>(`select * from peragus_sandbox_withdrawal_closures where environment='test' and ${where}`,args)).rows[0];}
  async read(user:AuthenticatedUser,id:string){this.authorize(user);const row=await this.find('withdrawal_request_id=$1',[id]);if(!row)throw new SandboxClosureError('WITHDRAWAL_CLOSURE_NOT_FOUND');return view(row);}
@@ -41,7 +44,7 @@ export class SandboxClosureService {
   if(!completed(fresh))throw new SandboxClosureError('WITHDRAWAL_CLOSURE_NOT_READY');
   try {
    const result=await this.pool.query<Row>(`with locked as (
-    select * from peragus_sandbox_withdrawal_executions where id=$1 and withdrawal_request_id=$2 and environment='test'
+    select * from peragus_sandbox_withdrawal_executions where id=$1 and withdrawal_request_id=$2 and environment='${this.e.mode}'
      and create_attempted and closed_at is null and provider_send_id=$3 and observation=$4::jsonb
      and not exists(select 1 from peragus_customers where owner_user_id=$5) for update
    ), closed as (

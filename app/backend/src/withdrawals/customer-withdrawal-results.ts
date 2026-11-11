@@ -1,4 +1,6 @@
 import type {Pool} from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {WithdrawalRequestError} from "./customer-withdrawal-requests.js";
 
 interface ResultRow {
@@ -15,7 +17,8 @@ const format=(value:bigint)=>`${value/1000000n}.${String(value%1000000n).padStar
 
 /** Stored evidence only: no provider, signer, queue, or mutation dependency. */
 export class CustomerWithdrawalResultService {
-  constructor(private readonly pool:Pick<Pool,"query">){}
+  private readonly e:RowEnvironment;
+  constructor(private readonly pool:Pick<Pool,"query">,mode:MoneyMode){this.e=rowEnvironment(mode);}
   async read(customerId:string,id:string){
     const result=await this.pool.query<ResultRow>(`select r.id,r.amount_usdt,r.wallet_address,
       (a.id is not null) as approved,coalesce(e.create_attempted,false) as attempted,
@@ -26,10 +29,10 @@ export class CustomerWithdrawalResultService {
       case when e.observation is not null then e.updated_at end as observed_at
       from peragus_customer_withdrawal_requests r
       left join peragus_withdrawal_operator_approvals a
-        on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.environment='test'
+        on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.environment='${this.e.mode}'
       left join peragus_sandbox_withdrawal_executions e
-        on e.withdrawal_request_id=r.id and e.customer_id=r.customer_id and e.environment='test'
-      where r.id=$2 and r.customer_id=$1 and r.environment='test'`,[customerId,id]);
+        on e.withdrawal_request_id=r.id and e.customer_id=r.customer_id and e.environment='${this.e.mode}'
+      where r.id=$2 and r.customer_id=$1 and r.environment='${this.e.mode}'`,[customerId,id]);
     const row=result.rows[0];
     if(!row)throw new WithdrawalRequestError("WITHDRAWAL_REQUEST_NOT_FOUND");
     const completed=row.status==="completed" && row.source_status==="completed" && row.destination_status==="completed";

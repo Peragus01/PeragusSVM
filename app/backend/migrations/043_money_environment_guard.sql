@@ -1,4 +1,5 @@
 -- One money environment per database: test+solana:devnet or live+solana:mainnet.
+-- Guards the money tables and the customer onboarding/invitation tables.
 -- scripts/migrate.mjs records the environment after migrating; until then every
 -- insert or update on a money table is rejected (fail closed).
 create table peragus_database_environment (
@@ -18,6 +19,8 @@ create function peragus_guard_database_environment() returns trigger language pl
 begin raise exception 'DATABASE_ENVIRONMENT_IMMUTABLE'; end $$;
 create trigger peragus_database_environment_immutable before update or delete on peragus_database_environment
  for each row execute function peragus_guard_database_environment();
+create trigger peragus_database_environment_no_truncate before truncate on peragus_database_environment
+ for each statement execute function peragus_guard_database_environment();
 
 create function peragus_enforce_row_environment() returns trigger language plpgsql
  set search_path = pg_catalog, public as $$
@@ -50,7 +53,20 @@ begin
   ['peragus_withdrawal_operator_approvals',''],
   ['peragus_sandbox_withdrawal_executions',''],
   ['peragus_customer_refund_requests',''],
-  ['peragus_customer_reconciliation','']
+  ['peragus_customer_reconciliation',''],
+  -- Customer onboarding and invitation tables (012-019, 030, 037, 038, 040).
+  -- Legacy hackathon tables (003, 004, 007) and sandbox-only 031/033 stay test-only.
+  ['peragus_ozav_sandbox_customer_links',''],
+  ['peragus_customer_webhook_events',''],
+  ['peragus_individual_onboarding_drafts',''],
+  ['peragus_customer_terms_sessions',''],
+  ['peragus_customer_onboarding_submissions',''],
+  ['peragus_customer_verifications',''],
+  ['peragus_customer_screenings',''],
+  ['peragus_pilot_invites',''],
+  ['peragus_onboarding_email_outbox',''],
+  ['peragus_customer_document_uploads',''],
+  ['peragus_invite_email_outbox','']
  ] loop
   t := spec[1];
   net := spec[2];

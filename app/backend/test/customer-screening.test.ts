@@ -15,20 +15,21 @@ const pool = { query: async (sql: string, params?: unknown[]) => {
   if (failSave && sql.includes("set screening_id=")) { failSave=false; throw new Error("save unavailable"); }
   const r=await db.query(sql,params);return {...r,rowCount:r.rows.length};
 } } as unknown as Pool;
-const customers=new PostgresCustomerRepository(pool), submissions=new PostgresOnboardingSubmissionRepository(pool), repo=new PostgresCustomerScreeningRepository(pool);
+const customers=new PostgresCustomerRepository(pool), submissions=new PostgresOnboardingSubmissionRepository(pool,"test"), repo=new PostgresCustomerScreeningRepository(pool,"test");
 const apps: Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
   const dir=new URL("../migrations/",import.meta.url);
   for(const file of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file,dir),"utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 async function setup(type:"pf"|"pj"="pf") {
   const owner=randomUUID(),actor=(await customers.createOrGet({ownerUserId:owner,type,displayName:"Synthetic test"})).customer;
   const providerId=`ozav_cus_${actor.id.replaceAll("-","")}`,screeningId=`ozav_scr_${randomUUID().replaceAll("-","")}`, terms=randomUUID();
-  await db.query("insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until) values($1,$2,$3,now())",[terms,actor.id,randomUUID()]);
-  await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,verification_mode)
-    values($1,$2,1,$3,$4,$5,'{}','linked',$6,'full')`,[randomUUID(),actor.id,terms,"a".repeat(64),randomUUID(),providerId]);
+  await db.query("insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,environment) values($1,$2,$3,now(),'test')",[terms,actor.id,randomUUID()]);
+  await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,verification_mode,environment)
+    values($1,$2,1,$3,$4,$5,'{}','linked',$6,'full','test')`,[randomUUID(),actor.id,terms,"a".repeat(64),randomUUID(),providerId]);
   const caps={environment:"test",entitlements:["customers","compliance"],scopes:["customers:read","screenings:read","screenings:write"]};
   let screenings:any[]=[], timeout=false, missList=false;
   const raw=()=>({id:screeningId,object:"screening",subject:{customer_id:providerId},lists:["sanctions","pep"],status:"completed",result:"clear",matches:[],suggested_decision:"clear",signals:[{private_data:"do not retain"}]});

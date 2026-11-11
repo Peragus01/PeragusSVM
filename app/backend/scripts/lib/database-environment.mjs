@@ -1,6 +1,13 @@
-/** production -> live; every other deployment (staging, local) -> test. */
+/**
+ * production -> live; staging -> test. Any other value, including unset, is
+ * refused so a database is never recorded by accident.
+ */
 export function databaseEnvironmentFor(deploymentEnv) {
-  return deploymentEnv === "production" ? "live" : "test";
+  if (deploymentEnv === "production") return "live";
+  if (deploymentEnv === "staging") return "test";
+  throw Object.assign(new Error("DATABASE_DEPLOYMENT_ENV_INVALID"), {
+    code: "DATABASE_DEPLOYMENT_ENV_INVALID",
+  });
 }
 
 /**

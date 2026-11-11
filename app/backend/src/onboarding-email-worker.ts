@@ -72,16 +72,16 @@ async function main() {
   const environment = assertNotificationEnvironment(env, process.env);
   const pool = createDatabasePool(env.DATABASE_URL!, env.DATABASE_SSL);
   const customers = new PostgresCustomerRepository(pool),
-    facts = new PostgresOnboardingOverviewRepository(pool);
-  const submissions = new PostgresOnboardingSubmissionRepository(pool),
+    facts = new PostgresOnboardingOverviewRepository(pool, moneyModeFor(env));
+  const submissions = new PostgresOnboardingSubmissionRepository(pool, moneyModeFor(env)),
     provider = new OzavClient({
       apiKey: env.OZAV_API_KEY!,
       mode: moneyModeFor(env),
       attempts: 1,
       timeoutMs: 5000,
     });
-  const verifications = new PostgresCustomerVerificationRepository(pool),
-    screenings = new PostgresCustomerScreeningRepository(pool);
+  const verifications = new PostgresCustomerVerificationRepository(pool, moneyModeFor(env)),
+    screenings = new PostgresCustomerScreeningRepository(pool, moneyModeFor(env));
   const verification = new CustomerVerificationService(
       verifications,
       submissions,
@@ -129,7 +129,7 @@ async function main() {
         new ResendSender(config.key!),
         config.from!,
         config.accountUrl!,
-        fresh,
+        fresh, moneyModeFor(env),
       );
       for (const owner of config.owners) {
         try {

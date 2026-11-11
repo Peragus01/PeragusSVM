@@ -65,12 +65,13 @@ const pool = { query, connect: async () => {
   tail = new Promise<void>(resolve => { release = resolve; }); await prior;
   return { query, release };
 } } as unknown as Pool;
-const repo = new PostgresCustomerTermsRepository(pool), customers = new PostgresCustomerRepository(pool);
+const repo = new PostgresCustomerTermsRepository(pool,"test"), customers = new PostgresCustomerRepository(pool);
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 beforeAll(async () => {
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
   const dir = new URL("../migrations/", import.meta.url);
   for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file, dir), "utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
 }, 30000);
 afterAll(async () => { await Promise.all(apps.map(app => app.close())); await db.close(); });
 async function setup(type: "pf" | "pj" = "pf") {

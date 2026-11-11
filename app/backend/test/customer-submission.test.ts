@@ -29,8 +29,8 @@ const query = async (sql: string, params?: unknown[]) => {
 };
 const pool = { query, connect: async () => { const previous = tail; let release!: () => void; tail = new Promise<void>(resolve => { release = resolve; }); await previous; return { query, release }; } } as unknown as Pool;
 const key = randomBytes(32).toString("base64"), termsVault = new TermsVault(key, "v1"), submissionVault = new SubmissionVault(key, "v1");
-const customers = new PostgresCustomerRepository(pool), repo = new PostgresOnboardingSubmissionRepository(pool), termsRepo = new PostgresCustomerTermsRepository(pool);
-const drafts = new IndividualDraftService(new PostgresIndividualDraftRepository(pool), new DraftCipher(key, "v1"));
+const customers = new PostgresCustomerRepository(pool), repo = new PostgresOnboardingSubmissionRepository(pool,"test"), termsRepo = new PostgresCustomerTermsRepository(pool,"test");
+const drafts = new IndividualDraftService(new PostgresIndividualDraftRepository(pool,"test"), new DraftCipher(key, "v1"));
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 const fixedNow = new Date("2026-10-18T18:00:00Z"), expiresAt = "2026-10-19T16:12:34.882Z", token = "ts_secret_submission_token_once_123456";
 const fixture = () => individualDraftSchema(fixedNow).parse({ legal_name: "Pessoa Sintetica", cpf: "52998224725", date_of_birth: "1990-01-01", nationality: "BR",
@@ -40,6 +40,7 @@ beforeAll(async () => {
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
   const dir = new URL("../migrations/", import.meta.url);
   for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file, dir), "utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
 }, 30000);
 afterAll(async () => { await Promise.all(apps.map(app => app.close())); await db.close(); });
 async function setup(type: "pf" | "pj" = "pf") {
@@ -48,8 +49,8 @@ async function setup(type: "pf" | "pj" = "pf") {
   const termsId = randomUUID(), context = { id: termsId, customerId: actor.id, termsUrl: "https://ozav.io/terms", termsVersion: "2.0", expiresAt };
   const evidence = { accepted_by: { legal_name: fixture().legal_name }, accepted_at: fixedNow.toISOString() };
   await db.query(`insert into peragus_customer_terms_sessions
-    (id,customer_id,state,idempotency_key,lease_until,encrypted_token,terms_url,terms_version,expires_at,encrypted_acceptance,accepted_at)
-    values($1,$2,'accepted',$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10)`,
+    (id,customer_id,state,idempotency_key,lease_until,encrypted_token,terms_url,terms_version,expires_at,encrypted_acceptance,accepted_at,environment)
+    values($1,$2,'accepted',$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10,'test')`,
     [termsId, actor.id, randomUUID(), fixedNow.toISOString(), JSON.stringify(termsVault.seal(context,"token",{token})), context.termsUrl,context.termsVersion,expiresAt,
       JSON.stringify(termsVault.seal(context,"acceptance",evidence)),evidence.accepted_at]);
   let now = fixedNow, writeError: number | null = null, failNetwork = false, resultMode = "full", status = "approved", externalId = `ozav_cus_form${actor.id.replaceAll("-", "")}`;
@@ -134,8 +135,8 @@ describe("form registration from encrypted draft and accepted terms", () => {
     const reliance = await setup(); reliance.setMode("reliance");
     await expect(reliance.service.submit(reliance.actor.id, 1, reliance.termsId)).rejects.toThrow();
     const fixtureId = await setup();
-    await db.query(`insert into peragus_ozav_sandbox_customer_links(customer_id,idempotency_key,request_hash,state,ozav_customer_id)
-      values($1,$2,$3,'linked',$4)`, [fixtureId.actor.id, randomUUID(), "a".repeat(64), fixtureId.getId()]);
+    await db.query(`insert into peragus_ozav_sandbox_customer_links(customer_id,idempotency_key,request_hash,state,ozav_customer_id,environment)
+      values($1,$2,$3,'linked',$4,'test')`, [fixtureId.actor.id, randomUUID(), "a".repeat(64), fixtureId.getId()]);
     await expect(fixtureId.service.submit(fixtureId.actor.id, 1, fixtureId.termsId)).rejects.toThrow("ONBOARDING_CONFLICT");
   });
   it("requires explicit synthetic confirmation and isolates owners, PJ, suspended, disabled and anonymous callers", async () => {
@@ -152,7 +153,7 @@ describe("form registration from encrypted draft and accepted terms", () => {
   });
   it("refreshes the submitted binding through the signed-event processor and atomically rolls back failures", async () => {
     const s = await setup(); await s.service.submit(s.actor.id, 1, s.termsId); s.setStatus("rejected");
-    const processor = new PostgresCustomerWebhookProcessor(pool, s.provider);
+    const processor = new PostgresCustomerWebhookProcessor(pool, s.provider,"test");
     const e = { id: `ozav_evt_${randomUUID().replaceAll("-", "")}`, object: "event" as const, type: "customer.updated", livemode: false, created_at: fixedNow.toISOString(), data: { customer: { id: s.getId(), status: "approved" } } };
     const hash = createHash("sha256").update(JSON.stringify(e)).digest("hex");
     failReceipt = true; await expect(processor.process(e, hash)).rejects.toThrow("receipt failed");

@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import type { Customer } from "../auth/customer-access.js";
 import type { OverviewFacts } from "../onboarding/customer-onboarding-overview.js";
 import {
@@ -31,7 +33,11 @@ export class OnboardingEmailProcessor {
     private readonly from: string,
     private readonly accountUrl: string,
     private readonly readFresh: (customer: Customer) => Promise<OverviewFacts>,
-  ) {}
+    mode: MoneyMode,
+  ) {
+    this.e = rowEnvironment(mode);
+  }
+  private readonly e: RowEnvironment;
   async process(customer: Customer, email: string): Promise<void> {
     // Caller supplies a verified Auth address, never a browser-selected recipient.
     const facts = await this.readFresh(customer);
@@ -51,9 +57,9 @@ export class OnboardingEmailProcessor {
       .update(JSON.stringify(message))
       .digest("hex");
     await this.db.query(
-      `insert into peragus_onboarding_email_outbox(id,customer_id,outcome,payload_hash)
-      values($1,$2,$3,$4) on conflict(customer_id,environment,outcome) do nothing`,
-      [randomUUID(), customer.id, outcome, hash],
+      `insert into peragus_onboarding_email_outbox(id,customer_id,outcome,payload_hash,environment)
+      values($1,$2,$3,$4,$5) on conflict(customer_id,environment,outcome) do nothing`,
+      [randomUUID(), customer.id, outcome, hash, this.e.mode],
     );
     // Persist attempt time BEFORE contacting Resend. A crash can safely retry only within its 24h idempotency window.
     const claim = await this.db.query<{ id: string }>(

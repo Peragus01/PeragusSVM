@@ -1,4 +1,6 @@
 import type {Pool} from 'pg';
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {z} from 'zod';
 import type {AuthenticatedUser} from '../auth/customer-access.js';
 import {authorizeWithdrawalOperator} from '../withdrawals/operator-approvals.js';
@@ -31,7 +33,8 @@ interface Row {
 
 /** Derived stored-data alerts, never calls a provider or changes an operation. */
 export class OperatorAlertService {
- constructor(private readonly pool:Pick<Pool,'query'>,private readonly operators:ReadonlySet<string>){}
+ private readonly e:RowEnvironment;
+ constructor(private readonly pool:Pick<Pool,'query'>,private readonly operators:ReadonlySet<string>,mode:MoneyMode){this.e=rowEnvironment(mode);}
  async list(user:AuthenticatedUser,query:unknown){
   authorizeWithdrawalOperator(user,this.operators);
   const options=parseAlertQuery(query),cursor=options.cursor;
@@ -40,15 +43,15 @@ export class OperatorAlertService {
     else 'reconciliation_stalled' end as kind,0 as priority,c.created_at as recorded_at,
     c.purchase_intent_id,c.pix_id,c.withdrawal_request_id,null::uuid as refund_request_id
    from peragus_customer_reconciliation c
-   where c.environment='test' and (c.state='needs_review' or c.manual_review_required or
+   where c.environment='${this.e.mode}' and (c.state='needs_review' or c.manual_review_required or
     (c.state='pending' and c.next_check_at<=now()-interval '15 minutes' and (c.lease_until is null or c.lease_until<=now())))
    union all
    select e.id,
     case when e.observation is null then 'withdrawal_uncertain' else 'withdrawal_review' end,
     0,e.created_at,w.purchase_intent_id,e.pix_id,e.withdrawal_request_id,null::uuid
    from peragus_sandbox_withdrawal_executions e
-   join peragus_customer_withdrawal_requests w on w.id=e.withdrawal_request_id and w.customer_id=e.customer_id and w.environment='test'
-   where e.environment='test' and e.create_attempted and (
+   join peragus_customer_withdrawal_requests w on w.id=e.withdrawal_request_id and w.customer_id=e.customer_id and w.environment='${this.e.mode}'
+   where e.environment='${this.e.mode}' and e.create_attempted and (
     e.observation is null or e.observation->>'status' in ('needs_review','failed','cancelled','expired')
     or (e.observation->>'status'='completed' and (
      e.observation->>'sourceLegStatus' is distinct from 'completed'
@@ -59,7 +62,7 @@ export class OperatorAlertService {
    from peragus_customer_refund_requests r
    left join peragus_manual_refund_decisions d on d.refund_request_id=r.id and d.customer_id=r.customer_id
    left join peragus_manual_refund_completions f on f.refund_request_id=r.id and f.customer_id=r.customer_id
-   where r.environment='test' and f.id is null and (d.id is null or d.decision='approved')
+   where r.environment='${this.e.mode}' and f.id is null and (d.id is null or d.decision='approved')
   ) select id,kind,priority,
    to_char(recorded_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as recorded_at,
    purchase_intent_id,pix_id,withdrawal_request_id,refund_request_id

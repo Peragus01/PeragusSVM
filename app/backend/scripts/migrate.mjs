@@ -10,7 +10,10 @@ import { fileURLToPath } from "node:url";
 
 import { Pool } from "pg";
 
-import { recordDatabaseEnvironment } from "./lib/database-environment.mjs";
+import {
+  databaseEnvironmentFor,
+  recordDatabaseEnvironment,
+} from "./lib/database-environment.mjs";
 
 const backendDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -27,6 +30,10 @@ const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
   throw new Error("DATABASE_URL is required to run migrations");
 }
+
+// Fail before touching the database when the deployment is unset or unknown
+// (only staging|production); the uncaught error exits non-zero.
+databaseEnvironmentFor(process.env.PERAGUS_DEPLOYMENT_ENV);
 
 const pool = new Pool({
   connectionString,

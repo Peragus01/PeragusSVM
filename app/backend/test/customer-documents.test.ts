@@ -23,7 +23,7 @@ const pool = {
     return { ...r, rowCount: r.rows.length };
   },
 } as unknown as Pool;
-const repo = new DocumentRepository(pool);
+const repo = new DocumentRepository(pool,"test");
 const jpeg = () => Buffer.from([255, 216, 255, 224, 11, 12, 13, 14, 255, 217]);
 const origins = new Set(["https://storage.ozav.io"]);
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];

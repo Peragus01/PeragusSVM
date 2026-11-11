@@ -1,4 +1,6 @@
 import type {Pool} from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import type {AuthenticatedUser} from "../auth/customer-access.js";
 import {authorizeWithdrawalOperator} from "./operator-approvals.js";
 
@@ -26,7 +28,8 @@ const completed=(state:string|null,source:string|null,destination:string|null)=>
 
 /** Immutable decision evidence and saved lifecycle facts; never refreshes or executes. */
 export class OperatorWithdrawalAuditService {
- constructor(private readonly pool:Pick<Pool,"query">,private readonly operators:ReadonlySet<string>){}
+ private readonly e:RowEnvironment;
+ constructor(private readonly pool:Pick<Pool,"query">,private readonly operators:ReadonlySet<string>,mode:MoneyMode){this.e=rowEnvironment(mode);}
  authorize(user:AuthenticatedUser){authorizeWithdrawalOperator(user,this.operators);}
  async read(user:AuthenticatedUser,id:string){
   this.authorize(user);
@@ -51,14 +54,14 @@ export class OperatorWithdrawalAuditService {
     and e.provider_customer_id=r.provider_customer_id and e.provider_wallet_id=r.provider_wallet_id
     and e.funding_transfer_id=r.provider_transfer_id) as execution_matches
    from peragus_customer_withdrawal_requests r
-   left join peragus_customer_purchase_intents p on p.id=r.purchase_intent_id and p.customer_id=r.customer_id and p.environment='test'
-   left join peragus_customer_sandbox_pix x on x.id=r.pix_id and x.customer_id=r.customer_id and x.environment='test'
-   left join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.environment='test'
-   left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=r.id and e.customer_id=r.customer_id and e.environment='test'
-   left join peragus_customer_refund_requests rf on rf.purchase_intent_id=r.purchase_intent_id and rf.customer_id=r.customer_id and rf.environment='test'
+   left join peragus_customer_purchase_intents p on p.id=r.purchase_intent_id and p.customer_id=r.customer_id and p.environment='${this.e.mode}'
+   left join peragus_customer_sandbox_pix x on x.id=r.pix_id and x.customer_id=r.customer_id and x.environment='${this.e.mode}'
+   left join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.environment='${this.e.mode}'
+   left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=r.id and e.customer_id=r.customer_id and e.environment='${this.e.mode}'
+   left join peragus_customer_refund_requests rf on rf.purchase_intent_id=r.purchase_intent_id and rf.customer_id=r.customer_id and rf.environment='${this.e.mode}'
    left join peragus_manual_refund_decisions rd on rd.refund_request_id=rf.id and rd.customer_id=r.customer_id
    left join peragus_manual_refund_completions rc on rc.refund_request_id=rf.id and rc.customer_id=r.customer_id
-   where r.id=$1 and r.environment='test' `,[id]);
+   where r.id=$1 and r.environment='${this.e.mode}' `,[id]);
   const r=result.rows[0];if(!r)throw new OperatorAuditNotFound();
   const conversionCompleted=completed(r.pix_status,r.pix_source_status,r.pix_destination_status);
   const convertedAmount=conversionCompleted?positive(r.pix_converted_amount):null;

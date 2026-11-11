@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Pool } from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import { z } from "zod";
 const eventSchema = z.object({
   type: z.enum([
@@ -51,7 +53,8 @@ export function verifyInviteDelivery(
     });
 }
 export class InviteEmailDelivery {
-  constructor(private readonly db: Pick<Pool, "query">) {}
+  private readonly e: RowEnvironment;
+  constructor(private readonly db: Pick<Pool, "query">, mode: MoneyMode) { this.e = rowEnvironment(mode); }
   async receive(input: unknown) {
     const event = eventSchema.safeParse(input);
     if (!event.success) throw Error("INVITE_DELIVERY_EVENT_INVALID");
@@ -67,7 +70,7 @@ export class InviteEmailDelivery {
    last_error=case when $2='email.complained' then 'COMPLAINED' when $2='email.bounced' and last_error is distinct from 'COMPLAINED' then 'BOUNCED'
      when $2='email.failed' and last_error is null then 'PROVIDER_FAILED' else last_error end,
    last_checked_at=clock_timestamp(),updated_at=clock_timestamp()
-   where environment='test' and provider_email_id=$1 and state in ('accepted','delivered','failed') returning invite_id`,
+   where environment='${this.e.mode}' and provider_email_id=$1 and state in ('accepted','delivered','failed') returning invite_id`,
       [data.email_id, type],
     );
     // Acceptance may not have committed yet. A signed retry closes that race.

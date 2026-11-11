@@ -29,7 +29,7 @@ const pool = {
   },
 } as unknown as Pool;
 const customers = new PostgresCustomerRepository(pool),
-  submissions = new PostgresOnboardingSubmissionRepository(pool),
+  submissions = new PostgresOnboardingSubmissionRepository(pool,"test"),
   repo = new PostgresCustomerQuoteRepository(pool,"test");
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 beforeAll(async () => {
@@ -61,12 +61,12 @@ async function setup(type: "pf" | "pj" = "pf") {
   const providerId = `ozav_cus_${customer.id.replaceAll("-", "")}`,
     terms = randomUUID();
   await db.query(
-    "insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until) values($1,$2,$3,now())",
+    "insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,environment) values($1,$2,$3,now(),'test')",
     [terms, customer.id, randomUUID()],
   );
   await db.query(
-    `insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode)
- values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full')`,
+    `insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,environment)
+ values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full','test')`,
     [
       randomUUID(),
       customer.id,

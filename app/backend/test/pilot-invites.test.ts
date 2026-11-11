@@ -24,7 +24,7 @@ const operator = {
   },
   reason = "Operador autoriza entrada no piloto fechado.";
 const service = (enabled = true) =>
-  new PilotInviteService(pool, new Set([operator.id]), enabled);
+  new PilotInviteService(pool, new Set([operator.id]),"test", enabled);
 let seeded: number;
 beforeAll(async () => {
   await db.exec(
@@ -44,6 +44,9 @@ beforeAll(async () => {
     }
     await db.exec(await readFile(new URL(f, dir), "utf8"));
   }
+  await db.exec(
+    "insert into peragus_database_environment(environment) values('test')",
+  );
   seeded = Number(
     (
       await db.query<{ n: number }>(
@@ -95,7 +98,7 @@ describe("closed PF pilot invitations", () => {
     );
     const svc = new PilotInviteService(
       pool,
-      new Set([operator.id]),
+      new Set([operator.id]),"test",
       true,
       "ab".repeat(32),
       cipher,
@@ -135,7 +138,7 @@ describe("closed PF pilot invitations", () => {
     );
     const svc = new PilotInviteService(
       pool,
-      new Set([operator.id]),
+      new Set([operator.id]),"test",
       true,
       "ab".repeat(32),
       cipher,
@@ -311,7 +314,7 @@ describe("closed PF pilot invitations", () => {
       id = randomUUID(),
       code = "pginv_" + "b".repeat(43);
     await db.query(
-      "insert into peragus_pilot_invites(id,slot,target_user_id,code_hash,operator_user_id,request_id,reason,duration_hours,created_at,expires_at) values($1,1,$2,$3,$4,$5,$6,1,now()-interval '2 hours',now()-interval '1 hour')",
+      "insert into peragus_pilot_invites(id,slot,target_user_id,code_hash,operator_user_id,request_id,reason,duration_hours,created_at,expires_at,environment) values($1,1,$2,$3,$4,$5,$6,1,now()-interval '2 hours',now()-interval '1 hour','test')",
       [
         id,
         target,
@@ -564,7 +567,7 @@ describe("closed PF pilot invitations", () => {
 
 describe("email invitations before Auth signup", () => {
   const emails = () =>
-    new PilotInviteService(pool, new Set([operator.id]), true, "ab".repeat(32));
+    new PilotInviteService(pool, new Set([operator.id]),"test", true, "ab".repeat(32));
   it("validates without consuming, binds atomically to the confirmed account and replays safely", async () => {
     const request = randomUUID(),
       issued = await emails().issueEmail(

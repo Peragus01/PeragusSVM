@@ -27,10 +27,10 @@ export class PostgresCustomerWithdrawalRequestRepository implements WithdrawalRe
    '${this.e.mode}','${this.e.network}'
    from peragus_customer_sandbox_pix x join peragus_customer_purchase_intents p on p.id=x.purchase_intent_id and p.customer_id=x.customer_id join peragus_customer_indicative_quotes q on q.id=p.quote_id and q.customer_id=p.customer_id
    join peragus_customers c on c.id=q.customer_id and c.customer_type='pf' and not c.suspended
-   join peragus_customer_onboarding_submissions s on s.customer_id=q.customer_id and s.environment='test'
-   join peragus_customer_terms_sessions t on t.id=s.terms_session_id and t.customer_id=q.customer_id and t.environment='test'
-   join peragus_customer_verifications v on v.customer_id=q.customer_id and v.environment='test'
-   join peragus_customer_screenings sc on sc.customer_id=q.customer_id and sc.environment='test'
+   join peragus_customer_onboarding_submissions s on s.customer_id=q.customer_id and s.environment='${this.e.mode}'
+   join peragus_customer_terms_sessions t on t.id=s.terms_session_id and t.customer_id=q.customer_id and t.environment='${this.e.mode}'
+   join peragus_customer_verifications v on v.customer_id=q.customer_id and v.environment='${this.e.mode}'
+   join peragus_customer_screenings sc on sc.customer_id=q.customer_id and sc.environment='${this.e.mode}'
    join peragus_customer_wallets w on w.customer_id=q.customer_id and w.environment='${this.e.mode}' and w.network='${this.e.network}'
    where x.id=$4 and x.customer_id=$2 and q.environment='${this.e.mode}' and q.provider_quote_id is not null
     and q.create_attempted and q.observation->>'customerId'=q.provider_customer_id

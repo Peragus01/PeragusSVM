@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Pool } from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import type { SubmissionRepository } from "./submission-types.js";
 
 export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
@@ -86,7 +88,8 @@ export function validateDocument(input: DocumentInput, bytes: Buffer) {
     invalid();
 }
 export class DocumentRepository {
-  constructor(private readonly pool: Pick<Pool, "query">) {}
+  private readonly e: RowEnvironment;
+  constructor(private readonly pool: Pick<Pool, "query">, mode: MoneyMode) { this.e = rowEnvironment(mode); }
   async find(customer: string, id: string) {
     return (
       (
@@ -110,8 +113,8 @@ export class DocumentRepository {
   ): Promise<{ row: DocumentRow; created: boolean }> {
     const inserted = await this.pool.query<DocumentRow>(
       `insert into peragus_customer_document_uploads
-      (id,customer_id,provider_customer_id,request_id,doc_type,side,mime,size_bytes,sha256,fingerprint,state)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'declaring') on conflict do nothing returning *`,
+      (id,customer_id,provider_customer_id,request_id,doc_type,side,mime,size_bytes,sha256,fingerprint,state,environment)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'declaring','${this.e.mode}') on conflict do nothing returning *`,
       [
         row.id,
         row.customer_id,

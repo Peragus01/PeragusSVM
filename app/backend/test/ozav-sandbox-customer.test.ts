@@ -14,7 +14,7 @@ const db = new PGlite();
 const pool = { query: async (sql: string, params?: unknown[]) => {
   const r = await db.query(sql, params); return { ...r, rowCount: r.rows.length };
 } } as unknown as Pool;
-const links = new PostgresSandboxCustomerLinkRepository(pool), customers = new PostgresCustomerRepository(pool);
+const links = new PostgresSandboxCustomerLinkRepository(pool,"test"), customers = new PostgresCustomerRepository(pool);
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 const apiKey = "ozav_sk_test_fixture";
 const caps = { environment: "test", scopes: ["customers:read", "customers:write"], entitlements: ["customers", "custody", "self_custody", "kyc_reliance"] };
@@ -32,6 +32,7 @@ beforeAll(async () => {
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon, authenticated;");
   const dir = new URL("../migrations/", import.meta.url);
   for (const f of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(f, dir), "utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
 }, 30000);
 afterAll(async () => { await Promise.all(apps.map(app => app.close())); await db.close(); });
 async function profile(type: "pf" | "pj" = "pf") {
