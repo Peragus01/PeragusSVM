@@ -59,7 +59,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     if(!contradictory) { session=rawSession(request.body.outcome==="approved"?"pass":"fail","completed");customerStatus=String(request.body.outcome); }
     return {statusCode:200,body:session};
   });
-  const provider = new OzavClient({apiKey:"ozav_sk_test_verification",attempts:1,transport,writeTransport});
+  const provider = new OzavClient({mode: "test", apiKey:"ozav_sk_test_verification",attempts:1,transport,writeTransport});
   const service=new CustomerVerificationService(repo,submissions,provider);
   return {owner,actor,providerId,verificationId,caps,provider,service,transport,writeTransport,
     timeout: (created=true)=>{timeout=true;noCreate=!created;}, setMode:(value:string)=>{mode=value;},

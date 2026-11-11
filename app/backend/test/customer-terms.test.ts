@@ -22,7 +22,7 @@ const rawSession = () => ({ id: secret, object: "terms_session", status: "pendin
 describe("provider terms transport and token protection", () => {
   it("sends idempotent creation and explicit acceptance without leaking a token on replay", async () => {
     const sent: any[] = [];
-    const client = new OzavClient({ apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async request => {
+    const client = new OzavClient({ mode: "test", apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async request => {
       sent.push(request);
       return request.path.endsWith("/accept") ? { statusCode: 200, body: { ...rawSession(), id: undefined, status: "accepted", accepted_at: request.body.accepted_at } }
         : { statusCode: 201, body: rawSession() };
@@ -34,11 +34,11 @@ describe("provider terms transport and token protection", () => {
     expect(sent[0]).toMatchObject({ path: "/v2/customers/terms-sessions", body: {}, idempotencyKey: id });
     expect(sent[1].body).toEqual({ terms_session_id: secret, ...evidence });
     expect(sent[1].body.ip_address).toBeUndefined();
-    const replay = new OzavClient({ apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async () => ({ statusCode: 200, body: { ...rawSession(), id: undefined } }) });
+    const replay = new OzavClient({ mode: "test", apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async () => ({ statusCode: 200, body: { ...rawSession(), id: undefined } }) });
     expect((await replay.createCustomerTerms(id)).token).toBeNull();
   });
   it.each(["https://evil.example/terms", "javascript:alert(1)", "https://ozav.io/terms?token=secret"])("rejects an untrusted terms URL %s", async terms_url => {
-    const client = new OzavClient({ apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async () => ({ statusCode: 201, body: { ...rawSession(), terms_url } }) });
+    const client = new OzavClient({ mode: "test", apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async () => ({ statusCode: 201, body: { ...rawSession(), terms_url } }) });
     await expect(client.createCustomerTerms(`peragus-terms-${randomUUID()}`)).rejects.toThrow();
   });
   it("separates token and evidence purposes and authenticates customer/session/version metadata", () => {

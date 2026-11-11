@@ -10,8 +10,8 @@ import type {CustomerReconciliationReader} from "../jobs/customer-reconciliation
 /** Returns two GET-only functions. There is no send, reserve, claim or simulation capability. */
 export function createCustomerReconciliationReader(pool:Pool,key:string,read?:OzavTransport):CustomerReconciliationReader{
  if(!/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(key))throw Error("Sandbox key required");
- const client=new OzavClient({apiKey:key,attempts:1,timeoutMs:10000,...(read?{transport:read}:{})});
- const withdrawal=new OzavSandboxWithdrawalProvider(key,read?{read}:{});
+ const client=new OzavClient({apiKey:key,mode:"test",attempts:1,timeoutMs:10000,...(read?{transport:read}:{})});
+ const withdrawal=new OzavSandboxWithdrawalProvider(key,{mode:"test",...(read?{read}:{})});
  const pixRepository=new PostgresCustomerPixRepository(pool),withdrawalRepository=new PostgresSandboxExecutionRepository(pool);
  const pixProvider=Object.freeze({findCustomerPixTransfer:client.findCustomerPixTransfer.bind(client),getTransfer:client.getTransfer.bind(client)});
  const withdrawalProvider=Object.freeze({find:withdrawal.find.bind(withdrawal),transfer:withdrawal.transfer.bind(withdrawal)});

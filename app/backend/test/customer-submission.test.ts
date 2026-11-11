@@ -64,7 +64,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     id: externalId, object: "customer", type: "individual", external_ref: `peragus-onboarding-test:${actor.id}`,
     status, verification: { mode: "full", status }, requirements: { due: ["private address"], due_codes: ["residential_address"], missing_fields: ["private"], documents_due: [] },
   } });
-  const provider = new OzavClient({ apiKey: "ozav_sk_test_registration", attempts: 1, transport, writeTransport });
+  const provider = new OzavClient({ mode: "test", apiKey: "ozav_sk_test_registration", attempts: 1, transport, writeTransport });
   const terms = new CustomerTermsService(termsRepo, termsVault, provider, drafts, () => now);
   const service = new CustomerSubmissionService(repo, submissionVault, drafts, terms, provider);
   return { actor, owner, termsId, context, caps, provider, service, terms, transport, writeTransport,

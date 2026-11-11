@@ -46,7 +46,7 @@ async function setup(type:"pf"|"pj"="pf") {
     if(timeout){timeout=false;throw new Error("lost response");}
     return {statusCode:201,body:screenings[0]};
   });
-  const provider=new OzavClient({apiKey:"ozav_sk_test_screening",attempts:1,transport,writeTransport});
+  const provider=new OzavClient({mode: "test", apiKey:"ozav_sk_test_screening",attempts:1,transport,writeTransport});
   const service=new CustomerScreeningService(repo,submissions,provider);
   return {owner,actor,providerId,screeningId,caps,service,provider,transport,writeTransport,writes,raw,
     seed:(rows:any[])=>{screenings=rows;}, loseResponse:(hide=false)=>{timeout=true;missList=hide;}};
@@ -105,12 +105,12 @@ describe("test-only screening evidence",()=>{
   });
   it("validates complete pagination before linking existing evidence",async()=>{
     const s=await setup();let pages=0;
-    const client=new OzavClient({apiKey:"ozav_sk_test_pages",attempts:1,transport:async(path)=>{
+    const client=new OzavClient({mode: "test", apiKey:"ozav_sk_test_pages",attempts:1,transport:async(path)=>{
       expect(path).toContain("/v2/screenings?");pages++;
       return {statusCode:200,body:pages===1?{data:[s.raw()],has_more:true,next_cursor:"next"}:{data:[],has_more:false,next_cursor:null}};
     }});
     expect(await client.listCustomerScreenings(s.providerId)).toHaveLength(1);expect(pages).toBe(2);
-    const duplicate=new OzavClient({apiKey:"ozav_sk_test_pages",attempts:1,transport:async()=>({statusCode:200,body:{data:[s.raw()],has_more:true,next_cursor:"same"}})});
+    const duplicate=new OzavClient({mode: "test", apiKey:"ozav_sk_test_pages",attempts:1,transport:async()=>({statusCode:200,body:{data:[s.raw()],has_more:true,next_cursor:"same"}})});
     await expect(duplicate.listCustomerScreenings(s.providerId)).rejects.toThrow();
   });
   it("requires scoped test capabilities and a submitted customer",async()=>{

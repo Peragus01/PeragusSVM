@@ -21,7 +21,7 @@ const caps = { environment: "test", scopes: ["customers:read", "customers:write"
 function clientWith(write: (input: OzavWriteRequest) => Promise<any>, capability = caps) {
   const transport = vi.fn(async () => ({ statusCode: 200, body: capability }));
   const writeTransport = vi.fn(write);
-  const client = new OzavClient({ apiKey, transport, writeTransport, attempts: 1 });
+  const client = new OzavClient({ mode: "test", apiKey, transport, writeTransport, attempts: 1 });
   return { client, transport, writeTransport };
 }
 function reply(input: OzavWriteRequest, id = "ozav_cus_testfixture") {
@@ -60,7 +60,7 @@ describe("sandbox customer fixtures and durable binding", () => {
     }
   });
   it("enforces test keys, strict generated input and test capabilities", async () => {
-    expect(() => new OzavClient({ apiKey: "ozav_sk_live_private" })).toThrow();
+    expect(() => new OzavClient({ mode: "test", apiKey: "ozav_sk_live_private" })).toThrow();
     const { client } = clientWith(async input => reply(input));
     await expect(client.createSandboxCustomer({ ...sandboxCustomerFixture(randomUUID()), email: "real@example.test" }, "bad")).rejects.toThrow();
     const actor = await profile();
@@ -184,7 +184,7 @@ describe("sandbox provider snapshot refresh", () => {
     const transport = vi.fn(async (url: string) => url === "/v2/capabilities"
       ? { statusCode: 200, body: caps } : { statusCode, body });
     const writeTransport = vi.fn(async (input: OzavWriteRequest) => reply(input, id));
-    const client = new OzavClient({ apiKey, transport, writeTransport, attempts: 1 });
+    const client = new OzavClient({ mode: "test", apiKey, transport, writeTransport, attempts: 1 });
     const service = new OzavSandboxCustomerService(links, client);
     await service.execute(actor.id);
     return { actor, id, service, transport, writeTransport, change: (change: any, status = 200) => { body = { ...body, ...change }; statusCode = status; } };

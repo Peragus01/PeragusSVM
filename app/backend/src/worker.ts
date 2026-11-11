@@ -21,6 +21,7 @@ import {
 } from "./application/resolve-solana-contingency-reserve.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
+import { moneyModeFor } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import { verifyDatabaseConnection } from "./database/readiness.js";
 import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
@@ -177,6 +178,7 @@ if (env.SOLANA_CONTINGENCY_RESERVE_ENABLED) {
 
 const ozavClient = new OzavClient({
   apiKey: env.OZAV_API_KEY,
+  mode: moneyModeFor(env),
 });
 
 const ozavImporter = new ImportOzavOnrampEventsService({

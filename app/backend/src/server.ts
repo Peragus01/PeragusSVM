@@ -96,6 +96,7 @@ import {
 } from "./application/simulate-sandbox-pix-payment.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
+import { moneyModeFor } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import {
   createJobQueue,
@@ -344,6 +345,7 @@ if (env.DATABASE_URL) {
       onramps,
       client: new OzavClient({
         apiKey: env.OZAV_API_KEY!,
+        mode: moneyModeFor(env),
         timeoutMs: 10_000,
         attempts: 1,
       }),
@@ -360,6 +362,7 @@ if (env.DATABASE_URL) {
 
     const ozavClient = new OzavClient({
       apiKey: env.OZAV_API_KEY!,
+      mode: moneyModeFor(env),
     });
 
     ozavOfframpInitiator = new InitiateOzavOfframpService({
@@ -473,6 +476,7 @@ const customerTermsService =
         ),
         new OzavClient({
           apiKey: env.OZAV_API_KEY!,
+          mode: moneyModeFor(env),
           attempts: 1,
           timeoutMs: 5000,
         }),
@@ -581,7 +585,7 @@ const app = await buildApp({
         sandboxWithdrawalExecutionService:
           new SandboxWithdrawalExecutionService(
             new PostgresSandboxExecutionRepository(pool!),
-            new OzavSandboxWithdrawalProvider(env.OZAV_API_KEY!),
+            new OzavSandboxWithdrawalProvider(env.OZAV_API_KEY!, { mode: moneyModeFor(env) }),
             new WithdrawalOperatorApprovalService(
               new PostgresWithdrawalOperatorApprovalRepository(pool!),
               new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
@@ -613,6 +617,7 @@ const app = await buildApp({
           new PostgresCustomerPixRepository(pool!),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
@@ -633,6 +638,7 @@ const app = await buildApp({
           new PostgresOnboardingSubmissionRepository(pool!),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
@@ -671,6 +677,7 @@ const app = await buildApp({
           new PostgresOnboardingSubmissionRepository(pool!),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
@@ -679,7 +686,7 @@ const app = await buildApp({
     : {}),
   ...(env.CUSTOMER_DOCUMENTS_ENABLED ? {customerDocumentService: new CustomerDocumentService(
     new DocumentRepository(pool!), new PostgresOnboardingSubmissionRepository(pool!),
-    new OzavClient({apiKey:env.OZAV_API_KEY!, attempts:1, timeoutMs:5000}), documentOrigins,
+    new OzavClient({apiKey: env.OZAV_API_KEY!,mode: moneyModeFor(env), attempts:1, timeoutMs:5000}), documentOrigins,
     (url, bytes, mime, binding) => uploadDocumentBytes(url, bytes, mime, {apiKey: env.OZAV_API_KEY!, ...binding}),
     (event) => console.warn(JSON.stringify({event:"customer_document_upload_failure", ...event})),
   )} : {}),
@@ -690,6 +697,7 @@ const app = await buildApp({
           new PostgresOnboardingSubmissionRepository(pool!),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
@@ -710,6 +718,7 @@ const app = await buildApp({
           customerTermsService!,
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
@@ -730,6 +739,7 @@ const app = await buildApp({
             pool!,
             new OzavClient({
               apiKey: env.OZAV_API_KEY!,
+              mode: moneyModeFor(env),
               attempts: 1,
               timeoutMs: 3000,
             }),
@@ -748,7 +758,7 @@ const app = await buildApp({
     ? {
         ozavSandboxCustomerService: new OzavSandboxCustomerService(
           new PostgresSandboxCustomerLinkRepository(pool!),
-          new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1 }),
+          new OzavClient({ apiKey: env.OZAV_API_KEY!, mode: moneyModeFor(env), attempts: 1 }),
         ),
       }
     : {}),

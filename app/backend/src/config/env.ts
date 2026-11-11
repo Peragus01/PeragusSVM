@@ -183,8 +183,9 @@ const envSchema = z
     JOB_CONCURRENCY: z.coerce.number().int().min(1).max(25).default(3),
     OZAV_API_KEY: z
       .string()
-      .regex(/^ozav_sk_test_[A-Za-z0-9_-]+$/)
+      .regex(/^ozav_sk_(test|live)_[A-Za-z0-9_-]+$/)
       .optional(),
+    SOLANA_USDT_MINT: z.string().min(32).max(44).optional(),
     OZAV_ONRAMP_WRITES_ENABLED: z
       .enum(["true", "false"])
       .default("false")
@@ -248,6 +249,31 @@ const envSchema = z
     SOLANA_FEE_PAYER_KEYPAIR_BASE64: z.string().min(1).optional(),
   })
   .superRefine((env, context) => {
+    if (env.OZAV_API_KEY) {
+      const expected =
+        env.PERAGUS_DEPLOYMENT_ENV === "production" ? "live" : "test";
+      if (!env.OZAV_API_KEY.startsWith(`ozav_sk_${expected}_`)) {
+        context.addIssue({
+          code: "custom",
+          path: ["OZAV_API_KEY"],
+          message: `OZAV_API_KEY must be an ozav_sk_${expected}_ key for ${env.PERAGUS_DEPLOYMENT_ENV}`,
+        });
+      }
+    }
+    if (
+      env.PERAGUS_DEPLOYMENT_ENV === "staging" &&
+      !env.SOLANA_USDT_MINT &&
+      (env.CUSTOMER_QUOTES_ENABLED ||
+        env.CUSTOMER_PURCHASE_INTENTS_ENABLED ||
+        env.CUSTOMER_SANDBOX_PIX_ENABLED ||
+        env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["SOLANA_USDT_MINT"],
+        message: "SOLANA_USDT_MINT is required when purchase flows are enabled",
+      });
+    }
     if (env.INVITE_EMAIL_OUTBOX_ENABLED) {
       const key = env.INVITE_EMAIL_ENCRYPTION_KEY ?? "";
       const decoded = Buffer.from(key, "base64");

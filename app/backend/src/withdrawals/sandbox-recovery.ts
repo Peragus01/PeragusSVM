@@ -8,7 +8,7 @@ type RecoveryReader=Pick<OzavSandboxWithdrawalProvider,"find"|"transfer">;
 
 /** Exposes GET operations only; no send operation reaches the recovery service. */
 export function createSandboxRecoveryReader(key:string):RecoveryReader {
- const provider=new OzavSandboxWithdrawalProvider(key);
+ const provider=new OzavSandboxWithdrawalProvider(key,{mode:"test"});
  return Object.freeze({find:provider.find.bind(provider),transfer:provider.transfer.bind(provider)});
 }
 

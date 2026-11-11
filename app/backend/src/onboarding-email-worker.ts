@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { getEnv } from "./config/env.js";
+import { moneyModeFor } from "./config/money-environment.js";
 import {
   assertNotificationEnvironment,
   deploymentConfigurationAudit,
@@ -75,6 +76,7 @@ async function main() {
   const submissions = new PostgresOnboardingSubmissionRepository(pool),
     provider = new OzavClient({
       apiKey: env.OZAV_API_KEY!,
+      mode: moneyModeFor(env),
       attempts: 1,
       timeoutMs: 5000,
     });

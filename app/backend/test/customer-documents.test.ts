@@ -611,14 +611,14 @@ describe("private PF document uploads", () => {
       body: { data: [], has_more: false },
     }));
     const client = new OzavClient({
-      apiKey: "ozav_sk_test_synthetic",
+      mode: "test", apiKey: "ozav_sk_test_synthetic",
       attempts: 1,
       writeTransport: write,
       transport: read,
     });
     const providerCustomer = "ozav_cus_11111111111111111111";
     const unsafeClient = new OzavClient({
-      apiKey: "ozav_sk_test_synthetic",
+      mode: "test", apiKey: "ozav_sk_test_synthetic",
       writeTransport: write,
       transport: read,
     });

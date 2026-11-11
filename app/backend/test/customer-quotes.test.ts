@@ -147,7 +147,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     };
   });
   const provider = new OzavClient({
-    apiKey: "ozav_sk_test_quote",
+    mode: "test", apiKey: "ozav_sk_test_quote",
     attempts: 1,
     transport,
     writeTransport,

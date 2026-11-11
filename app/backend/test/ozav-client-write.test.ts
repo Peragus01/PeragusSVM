@@ -73,7 +73,7 @@ function setup(responses: OzavResponse[]) {
     };
   return {
     client: new OzavClient({
-      apiKey,
+      mode: "test", apiKey,
       writeTransport,
       wait: async (milliseconds) => {
         delays.push(milliseconds);

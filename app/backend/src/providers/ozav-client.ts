@@ -1,5 +1,6 @@
 import type { IndividualDraft } from "../onboarding/individual-schema.js";
 import https from "node:https";
+import type { MoneyMode } from "../config/money-environment.js";
 
 export interface OzavResponse {
   statusCode: number;
@@ -630,6 +631,7 @@ export const httpsOzavWriteTransport: OzavWriteTransport = (
 
 export interface OzavClientOptions {
   apiKey: string;
+  mode: MoneyMode;
   transport?: OzavTransport;
   writeTransport?: OzavWriteTransport;
   timeoutMs?: number;
@@ -647,8 +649,11 @@ export class OzavClient {
   private readonly wait: (milliseconds: number) => Promise<void>;
 
   constructor(options: OzavClientOptions) {
-    if (!/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(options.apiKey)) {
-      throw new OzavClientError("A sandbox OZAV key is required", false);
+    if (
+      options.mode !== "test" && options.mode !== "live" ||
+      !new RegExp(`^ozav_sk_${options.mode}_[A-Za-z0-9_-]+$`).test(options.apiKey)
+    ) {
+      throw new OzavClientError("An OZAV key matching the money mode is required", false);
     }
     this.apiKey = options.apiKey;
     this.transport = options.transport ?? httpsOzavTransport;
