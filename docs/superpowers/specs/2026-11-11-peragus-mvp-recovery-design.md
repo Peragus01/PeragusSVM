@@ -147,6 +147,11 @@ e registrado no módulo existente de reembolsos (migration 028).
 
 ## 6. Pendências externas (OZAV)
 
+**Respostas recebidas em 2026-11-11:** facility de trava de câmbio **contratado**; `session_url` de KYC **habilitado** na conta live;
+devolução de Pix de on-ramp **somente manual** (sem caminho automatizado na OZAV — o reembolso manual pela reserva é definitivo);
+USDT entregue **com a taxa de rede descontada** (a verificação on-chain compara com o valor líquido informado pela OZAV, dentro da
+tolerância configurada, e o cliente vê o valor líquido). Em aberto: criação da ATA e redução do piso para R$50.
+
 | Pendência | Impacto se negativa |
 |---|---|
 | Facility de trava de câmbio contratado e custo | Sem trava não há Pix (D3); exige rever D3 |
