@@ -84,4 +84,13 @@ describe("live customer Pix", () => {
     expect(screen.queryByLabelText("Pix copia e cola")).toBeNull();
     expect(screen.getByText(/Operação encerrada/)).toBeInTheDocument();
   });
+  it("in live shows instructions only while the operation is awaiting_pix", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) =>
+      Response.json({
+        data: pix(JSON.parse(String(init?.body)).request_id, { status: "accepted" }),
+      }),
+    );
+    await open();
+    expect(screen.queryByLabelText("Pix copia e cola")).toBeNull();
+  });
 });

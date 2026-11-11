@@ -43,16 +43,17 @@ const WITH_OPERATION=(source:string)=>`select x.*,p.status as operation_status,p
  from ${source} x join peragus_customer_purchase_intents p on p.id=x.purchase_intent_id and p.customer_id=x.customer_id`;
 interface Row {id:string;customer_id:string;request_id:string;purchase_intent_id:string;provider_customer_id:string;provider_quote_id:string;
  source_amount_brl:string;wallet_address:string;provider_wallet_id:string;create_attempted:boolean;simulation_attempted:boolean;provider_transfer_id:string|null;observation:OzavTransfer|null;
- operation_status:OperationStatus;facility_terms_version:string|null;locked_usdt_amount:string|null;}
+ operation_status:OperationStatus;facility_terms_version:string|null;locked_usdt_amount:string|null;lock_deadline_at?:Date|string|null;}
 const map=(r:Row):CustomerPixRecord=>({id:r.id,customerId:r.customer_id,requestId:r.request_id,purchaseId:r.purchase_intent_id,
  providerCustomerId:r.provider_customer_id,providerQuoteId:r.provider_quote_id,amountBrl:r.source_amount_brl,walletAddress:r.wallet_address,
  providerWalletId:r.provider_wallet_id,attempted:r.create_attempted,simulationAttempted:r.simulation_attempted,transferId:r.provider_transfer_id,observation:r.observation,
- operationStatus:r.operation_status,facilityTermsVersion:r.facility_terms_version,...(r.locked_usdt_amount===null?{}:{lockedUsdtAmount:r.locked_usdt_amount})});
+ operationStatus:r.operation_status,facilityTermsVersion:r.facility_terms_version,
+ lockDeadlineAt:r.lock_deadline_at==null?null:new Date(r.lock_deadline_at).toISOString(),...(r.locked_usdt_amount===null?{}:{lockedUsdtAmount:r.locked_usdt_amount})});
 export class PostgresCustomerPixRepository implements CustomerPixRepository {
  private readonly e:RowEnvironment;
  constructor(private readonly pool:Pool,mode:MoneyMode){this.e=rowEnvironment(mode);}
- async context(customerId:string,purchaseId:string):Promise<PixContext|null>{
-  const r=await this.pool.query(eligible(this.e,FUNDING),[customerId,purchaseId]),x=r.rows[0];
+ async context(customerId:string,purchaseId:string,stage?:"create"):Promise<PixContext|null>{
+  const r=await this.pool.query(eligible(this.e,stage==="create"?CREATE:FUNDING),[customerId,purchaseId]),x=r.rows[0];
   return x?{purchaseId:x.purchase_id,providerCustomerId:x.provider_customer_id,providerQuoteId:x.provider_quote_id,amountBrl:x.source_amount_brl,walletAddress:x.wallet_address,
    facilityTermsVersion:x.facility_terms_version,lockedUsdtAmount:x.locked_usdt_amount}:null;
  }
@@ -81,6 +82,12 @@ export class PostgresCustomerPixRepository implements CustomerPixRepository {
     and (observation->'source'->'paymentInstructions'->>'expiresAt')::timestamptz>clock_timestamp()
     and exists(${eligible(this.e,FUNDING)}) returning id`,[row.customerId,row.purchaseId,row.id,row.transferId]);
   return Boolean(r.rows[0]);
+ }
+ async recordLockDeadline(row:CustomerPixRecord,deadlineAt:string){
+  const r=await this.pool.query(`update peragus_customer_sandbox_pix set lock_deadline_at=$3::timestamptz,updated_at=now()
+   where id=$1 and customer_id=$2 and environment='${this.e.mode}' and provider_transfer_id is not null
+    and (lock_deadline_at is null or lock_deadline_at=$3::timestamptz) returning id`,[row.id,row.customerId,deadlineAt]);
+  if(!r.rows[0])throw new CustomerPixError("PIX_LOCK_DEADLINE_CONFLICT");
  }
  async bind(row:CustomerPixRecord,transferId:string){
   const r=await this.pool.query(`update peragus_customer_sandbox_pix set provider_transfer_id=$3,updated_at=now()

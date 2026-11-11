@@ -445,9 +445,7 @@ function facilityOutcome(value: unknown): OzavFacilityOutcome | null {
     typeof row.amount !== "string" ||
     !/^\d+(?:\.\d{1,6})?$/.test(row.amount) ||
     typeof row.currency !== "string" ||
-    !/^[A-Z]{2,10}$/.test(row.currency) ||
-    typeof row.deadline_at !== "string" ||
-    Number.isNaN(Date.parse(row.deadline_at))
+    !/^[A-Z]{2,10}$/.test(row.currency)
   )
     return null;
   return {
@@ -456,7 +454,12 @@ function facilityOutcome(value: unknown): OzavFacilityOutcome | null {
     reason: null,
     amount: row.amount,
     currency: row.currency,
-    deadlineAt: row.deadline_at,
+    // Passed through as received; the Pix service parses it strictly and fails
+    // closed (LOCK_DEADLINE_INVALID) when it is missing, malformed or past.
+    deadlineAt:
+      typeof row.deadline_at === "string" && row.deadline_at.length <= 64
+        ? row.deadline_at
+        : null,
   };
 }
 

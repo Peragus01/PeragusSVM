@@ -32,13 +32,18 @@ export function normalizeQuoteBrl(
     throw new CustomerQuoteError("QUOTE_AMOUNT_OUT_OF_RANGE");
   return `${whole}.${fraction.padEnd(2, "0")}`;
 }
+/** USDT decimal string (up to 6 places) to integer micro-units; null when not a plain decimal. */
+export function usdtMicroUnits(value: unknown): bigint | null {
+  if (typeof value !== "string" || !/^\d{1,20}(\.\d{1,6})?$/.test(value)) return null;
+  const [w, f = ""] = value.split(".");
+  return BigInt(w!) * 1000000n + BigInt(f.padEnd(6, "0"));
+}
 export function normalizeQuoteUsdt(value: string): string {
   if (!/^(0|[1-9]\d{0,5})(\.\d{1,6})?$/.test(value))
     throw new CustomerQuoteError("QUOTE_AMOUNT_INVALID");
-  const [w, f = ""] = value.split(".");
-  if (BigInt(w!) * 1000000n + BigInt(f.padEnd(6, "0")) <= 0n)
-    throw new CustomerQuoteError("QUOTE_AMOUNT_INVALID");
-  return `${w}.${f.padEnd(6, "0")}`;
+  const units = usdtMicroUnits(value)!;
+  if (units <= 0n) throw new CustomerQuoteError("QUOTE_AMOUNT_INVALID");
+  return `${units / 1000000n}.${String(units % 1000000n).padStart(6, "0")}`;
 }
 export interface CustomerQuoteRecord {
   id: string;

@@ -113,6 +113,8 @@ export function CustomerPix({
   const closed = pix?.status === "failed" || pix?.status === "expired";
   const instructions =
     !closed &&
+    // Live: only a verified FX lock (operation awaiting_pix) may be paid.
+    (test || pix?.status === "awaiting_pix") &&
     pix?.state === "awaiting_payment" &&
     !pix.recovery_required &&
     !pix.payment_confirmed &&

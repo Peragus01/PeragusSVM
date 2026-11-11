@@ -5,7 +5,7 @@ import {Keypair} from "@solana/web3.js";
 import {readFile,readdir} from "node:fs/promises";
 import {PGlite} from "@electric-sql/pglite";
 import type {Pool} from "pg";
-import {beforeAll,afterAll,describe,it,expect} from "vitest";
+import {beforeAll,afterAll,afterEach,describe,it,expect,vi} from "vitest";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerPurchaseIntentRepository} from "../src/repositories/postgres-customer-purchase-intents.js";
 import {PostgresCustomerQuoteRepository} from "../src/repositories/postgres-customer-quotes.js";
@@ -27,6 +27,7 @@ beforeAll(async()=>{
  await db.exec("insert into peragus_database_environment(environment) values('live')");
 },30000);
 afterAll(async()=>{await db.close();});
+afterEach(()=>{vi.useRealTimers();});
 
 async function setup(terms:string|null="2.0"){
  const owner=randomUUID(),customer=(await customers.createOrGet({ownerUserId:owner,type:"pf",displayName:"Synthetic name"})).customer;
@@ -51,12 +52,12 @@ const eventsOf=async(purchaseId:string)=>(await db.query<{from_status:string|nul
 const LOCKED:OzavFacilityOutcome={locked:true,state:"locked",reason:null,amount:"200.000000",currency:"USDT",deadlineAt:"2099-01-01T00:00:00Z"};
 async function fixture(){
  const s=await setup(),p=(await purchases.record(s.customer.id,randomUUID(),s.quoteId)).record,pixRepo=new PostgresCustomerPixRepository(pool,"live");
- let posts=0,listed:string|null=null,mode="locked",facility:OzavFacilityOutcome|null=LOCKED;const inputs:any[]=[];
+ let posts=0,capsCalls=0,listed:string|null=null,mode="locked",facility:OzavFacilityOutcome|null=LOCKED;const inputs:any[]=[];
  const transfer:OzavTransfer={id:`ozav_tr_${randomUUID().replaceAll("-","")}`,status:"awaiting_payment",customerId:s.provider,quoteId:s.providerQuoteId,
   source:{type:"fiat_payment",currency:"BRL",rail:"pix",paymentInstructions:{intentId:randomUUID(),brCode:"000201live-br-code",qrCodeImage:null,expiresAt:new Date(Date.now()+600000).toISOString()}},
   destination:{type:"wallet",walletId:"ozav_wal_livemanaged"},sourceLegStatus:"pending",destinationLegStatus:"pending",
   amounts:{source:{currency:"BRL",amount:"1000.00"},target:{currency:"USDT",amount:"200.000000"}}};
- const provider={getCustomerCapabilities:async()=>({environment:"live",entitlements:["customers","liquidity","custody"],scopes:["customers:read","wallets:read","transfers:read","transfers:write"]}),
+ const provider={getCustomerCapabilities:async()=>{capsCalls++;return{environment:"live",entitlements:["customers","liquidity","custody"],scopes:["customers:read","wallets:read","transfers:read","transfers:write"]};},
   getSandboxCustomerSnapshot:async()=>({provider_status:"approved",verification_mode:"full",requirements_pending:false}),
   getCustomerManagedWallet:async()=>"ozav_wal_livemanaged",
   createCustomerPixTransfer:async(input:any)=>{posts++;inputs.push(input);
@@ -67,7 +68,7 @@ async function fixture(){
   findCustomerPixTransfer:async()=>listed,
   getTransfer:async()=>transfer} as any;
  const pix=new CustomerPixService(pixRepo,provider,"live",purchases),requestId=randomUUID();
- return{s,p,pix,transfer,requestId,inputs,posts:()=>posts,setMode:(v:string)=>{mode=v;},setFacility:(v:OzavFacilityOutcome|null)=>{facility=v;},setListed:(v:string|null)=>{listed=v;}};
+ return{s,p,pix,transfer,requestId,inputs,posts:()=>posts,capsCalls:()=>capsCalls,setMode:(v:string)=>{mode=v;},setFacility:(v:OzavFacilityOutcome|null)=>{facility=v;},setListed:(v:string|null)=>{listed=v;}};
 }
 
 describe("live accept-time gate (database recorded as live)",()=>{
@@ -107,7 +108,7 @@ describe("live Pix with the FX rate lock",()=>{
    payment_instructions:{br_code:"000201live-br-code",expires_at:f.transfer.source.paymentInstructions!.expiresAt},subsequent_delivery:{proof_network:"solana:mainnet",started:false}});
   expect(await statusOf(f.p.id)).toBe("awaiting_pix");
   expect((await eventsOf(f.p.id)).at(-1)).toEqual({from_status:"accepted",to_status:"awaiting_pix",actor:"system:pix",
-   reason:"rate_locked: facility.amount=200.000000 USDT deadline_at=2099-01-01T00:00:00Z",environment:"live"});
+   reason:"rate_locked: facility.amount=200.000000 USDT deadline_at=2099-01-01T00:00:00.000Z",environment:"live"});
   const again=await f.pix.create(f.s.customer.id,f.requestId,f.p.id);expect(again.replayed).toBe(true);expect(again.data.payment_instructions?.br_code).toBe("000201live-br-code");expect(f.posts()).toBe(1);
   expect((await f.pix.read(f.s.customer.id,r.data.id)).payment_instructions).not.toBeNull();
  });
@@ -132,8 +133,8 @@ describe("live Pix with the FX rate lock",()=>{
    const replay=await f.pix.create(f.s.customer.id,f.requestId,f.p.id);expect(replay.data.payment_instructions).toBeNull();expect(f.posts()).toBe(1);
   }
  });
- it("fails closed with LOCKED_AMOUNT_MISMATCH when facility.amount differs from locked_usdt_amount",async()=>{
-  for(const facility of [{...LOCKED,amount:"199.999999"},{...LOCKED,amount:"200.000001"},{...LOCKED,currency:"USDC"}]){
+ it("fails closed with LOCKED_AMOUNT_MISMATCH when facility.amount is below locked_usdt_amount or not USDT",async()=>{
+  for(const facility of [{...LOCKED,amount:"199.999999"},{...LOCKED,amount:"0"},{...LOCKED,currency:"USDC"}]){
    const f=await fixture();f.setFacility(facility);
    await expect(f.pix.create(f.s.customer.id,f.requestId,f.p.id)).rejects.toMatchObject({code:"PIX_LOCKED_AMOUNT_MISMATCH"});
    expect(await statusOf(f.p.id)).toBe("failed");
@@ -143,8 +144,11 @@ describe("live Pix with the FX rate lock",()=>{
    const list=(await db.query<any>("select id from peragus_customer_sandbox_pix where purchase_intent_id=$1",[f.p.id])).rows;
    expect((await f.pix.reconcile(f.s.customer.id,list[0].id)).payment_instructions).toBeNull();expect(f.posts()).toBe(1);
   }
-  const ok=await fixture();ok.setFacility({...LOCKED,amount:"200"});
-  expect((await ok.pix.create(ok.s.customer.id,ok.requestId,ok.p.id)).data.status).toBe("awaiting_pix");
+  // Ruling 18: equal or higher than the locked amount is accepted.
+  for(const amount of ["200","200.000000","200.000001","250.5"]){
+   const ok=await fixture();ok.setFacility({...LOCKED,amount});
+   expect((await ok.pix.create(ok.s.customer.id,ok.requestId,ok.p.id)).data.status).toBe("awaiting_pix");
+  }
  });
  it("ambiguous create keeps the claim and never re-posts; GET recovery never exposes live instructions",async()=>{
   const f=await fixture();f.setMode("timeout");
@@ -156,7 +160,7 @@ describe("live Pix with the FX rate lock",()=>{
   expect(recovered).toMatchObject({state:"awaiting_payment",status:"accepted",payment_instructions:null});
   expect(f.posts()).toBe(1);expect(await statusOf(f.p.id)).toBe("accepted");
  });
- it("refuses a live Pix for a purchase without the lock terms, before any POST",async()=>{
+ it("refuses live simulation, and a live Pix without the purchase repository to record the lock, before any POST",async()=>{
   const f=await fixture();
   const pix=new CustomerPixService(new PostgresCustomerPixRepository(pool,"live"),{} as any,"live");
   await expect(pix.simulatePayment(f.s.customer.id,randomUUID())).rejects.toMatchObject({code:"PIX_SIMULATION_NOT_AVAILABLE"});
@@ -167,5 +171,35 @@ describe("live Pix with the FX rate lock",()=>{
   await expect(new CustomerPixService(new PostgresCustomerPixRepository(pool,"live"),caps,"live").create(f.s.customer.id,randomUUID(),f.p.id))
    .rejects.toMatchObject({code:"PIX_RATE_LOCK_REQUIRED"});
   expect(f.posts()).toBe(0);
+ });
+ it("a new request_id on a purchase already awaiting the Pix fails before any provider call",async()=>{
+  const f=await fixture();await f.pix.create(f.s.customer.id,f.requestId,f.p.id);const calls=f.capsCalls();
+  await expect(f.pix.create(f.s.customer.id,randomUUID(),f.p.id)).rejects.toMatchObject({code:"PIX_PURCHASE_NOT_ELIGIBLE"});
+  expect(f.capsCalls()).toBe(calls);expect(f.posts()).toBe(1);
+ });
+ it("stores the lock deadline and hides instructions once a deadline earlier than the Pix expiry passes",async()=>{
+  const f=await fixture(),deadline=new Date(Date.now()+60000).toISOString();f.setFacility({...LOCKED,deadlineAt:deadline});
+  const r=await f.pix.create(f.s.customer.id,f.requestId,f.p.id);
+  // The validity the customer sees is the earlier of the Pix expiry and the lock deadline.
+  expect(r.data.payment_instructions).toMatchObject({br_code:"000201live-br-code",expires_at:deadline});
+  const stored=(await db.query<any>("select lock_deadline_at from peragus_customer_sandbox_pix where id=$1",[r.data.id])).rows[0];
+  expect(new Date(stored.lock_deadline_at).toISOString()).toBe(deadline);
+  vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(Date.parse(deadline)+1);
+  expect((await f.pix.read(f.s.customer.id,r.data.id)).payment_instructions).toBeNull();
+  vi.setSystemTime(Date.parse(deadline)-1000);
+  expect((await f.pix.read(f.s.customer.id,r.data.id)).payment_instructions?.expires_at).toBe(deadline);
+ });
+ it("shows the Pix expiry when it is earlier than the lock deadline",async()=>{
+  const f=await fixture(),r=await f.pix.create(f.s.customer.id,f.requestId,f.p.id);
+  expect(r.data.payment_instructions?.expires_at).toBe(f.transfer.source.paymentInstructions!.expiresAt);
+ });
+ it("fails closed with LOCK_DEADLINE_INVALID when the deadline is missing, unparseable or already past",async()=>{
+  for(const deadlineAt of [null,"not-a-date","2026-13-45T00:00:00Z","2099-01-01",new Date(Date.now()-1000).toISOString()]){
+   const f=await fixture();f.setFacility({...LOCKED,deadlineAt});
+   await expect(f.pix.create(f.s.customer.id,f.requestId,f.p.id)).rejects.toMatchObject({code:"PIX_RATE_LOCK_UNAVAILABLE"});
+   expect(await statusOf(f.p.id)).toBe("failed");
+   expect((await eventsOf(f.p.id)).at(-1)!.reason).toMatch(/^LOCK_DEADLINE_INVALID/);
+   const replay=await f.pix.create(f.s.customer.id,f.requestId,f.p.id);expect(replay.data.payment_instructions).toBeNull();expect(f.posts()).toBe(1);
+  }
  });
 });

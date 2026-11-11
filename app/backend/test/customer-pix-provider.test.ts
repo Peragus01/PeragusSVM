@@ -81,7 +81,10 @@ describe("live customer Pix with the FX rate lock",()=>{
   for(const [facility,expected] of [
    [{locked:false,state:"refused",reason:"collateral_insufficient",message:"x"},{locked:false,state:"refused",reason:"collateral_insufficient",amount:null,currency:null,deadlineAt:null}],
    [{locked:false,state:"undetermined"},{locked:false,state:"undetermined",reason:null,amount:null,currency:null,deadlineAt:null}],
-   [{locked:true,state:"locked"},null],[{locked:"true",state:"locked",amount:"1",currency:"USDT",deadline_at:"2099-01-01T00:00:00Z"},null],
+   [{locked:true,state:"locked"},null],
+   // The deadline is passed through as received; the service validates it strictly (LOCK_DEADLINE_INVALID).
+   [{locked:true,state:"locked",amount:"1",currency:"USDT"},{locked:true,state:"locked",reason:null,amount:"1",currency:"USDT",deadlineAt:null}],
+   [{locked:true,state:"locked",amount:"1",currency:"USDT",deadline_at:"tomorrow"},{locked:true,state:"locked",reason:null,amount:"1",currency:"USDT",deadlineAt:"tomorrow"}],[{locked:"true",state:"locked",amount:"1",currency:"USDT",deadline_at:"2099-01-01T00:00:00Z"},null],
    [{locked:true,state:"not_locked",amount:"1",currency:"USDT",deadline_at:"2099-01-01T00:00:00Z"},null],[undefined,null]] as const){
    const write=vi.fn(async()=>({statusCode:201,body:created(facility)}));
    const r=await liveClient(write).createCustomerPixTransfer({...input,facilityTermsVersion:"2.0"});
