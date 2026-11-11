@@ -14,6 +14,12 @@ import {
   X,
 } from "lucide-react";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
+import { useMoneyMode } from "@/lib/peragus/config";
+import {
+  environmentFooterNotice,
+  environmentNotice,
+  pilotStoryNote,
+} from "@/lib/peragus/customer-copy";
 import "@/customer.css";
 import "@/premium.css";
 import { useReveal } from "./motion";
@@ -110,6 +116,9 @@ const NAV = [
 ];
 export function CustomerLayout() {
   useReveal();
+  const mode = useMoneyMode();
+  const notice = environmentNotice(mode);
+  const footerNotice = environmentFooterNotice(mode);
   const session = useCustomerSession();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -267,7 +276,7 @@ export function CustomerLayout() {
             Minha Peragus
           </Link>
           <div className="customer-top-actions">
-            <span className="customer-environment">Ambiente de testes · sem dinheiro real</span>
+            {notice && <span className="customer-environment">{notice}</span>}
             <Link to="/app/comprar-usdt" className="customer-top-buy customer-button">
               Comprar USDT <ArrowRight size={15} />
             </Link>
@@ -293,7 +302,7 @@ export function CustomerLayout() {
         </main>
         <footer className="customer-footer">
           © Peragus · Sua conta, com clareza em cada etapa.
-          <span>Ambiente de testes · sem operações reais</span>
+          {footerNotice && <span>{footerNotice}</span>}
         </footer>
       </div>
     </div>
@@ -301,6 +310,7 @@ export function CustomerLayout() {
 }
 export function CustomerPublicLayout({ children }: { children: ReactNode }) {
   useReveal();
+  const mode = useMoneyMode();
   return (
     <div className="customer-public">
       <header className="customer-public-header">
@@ -325,7 +335,7 @@ export function CustomerPublicLayout({ children }: { children: ReactNode }) {
             <p>
               Uma nova experiência para conectar reais, stablecoins e negócios na América Latina.
             </p>
-            <span className="customer-story-note">Piloto fechado · ambiente de testes</span>
+            <span className="customer-story-note">{pilotStoryNote(mode)}</span>
           </div>
         </aside>
       </main>

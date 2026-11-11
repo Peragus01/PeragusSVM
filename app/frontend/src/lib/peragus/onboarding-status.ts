@@ -1,8 +1,9 @@
 import { read, CustomerReadError } from "./customer-reads";
+import { moneyMode, type MoneyMode } from "./config";
 export interface OnboardingStatus {
   customer: { id: string };
-  environment: "test";
-  sandbox_only: true;
+  environment: MoneyMode;
+  sandbox_only: boolean;
   source: "stored_observations";
   observation_freshness: "not_evaluated";
   operations_enabled: false;
@@ -25,8 +26,8 @@ export async function getOnboardingStatus(
     !record(d) ||
     !record(d["customer"]) ||
     d["customer"]["id"] !== customerId ||
-    d["environment"] !== "test" ||
-    d["sandbox_only"] !== true ||
+    d["environment"] !== moneyMode() ||
+    d["sandbox_only"] !== (moneyMode() === "test") ||
     d["source"] !== "stored_observations" ||
     d["observation_freshness"] !== "not_evaluated" ||
     d["operations_enabled"] !== false ||

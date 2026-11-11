@@ -38,8 +38,8 @@ type Verification = {
   status: string | null;
   identity_outcome: string | null;
   session_url: string | null;
-  environment: "test";
-  sandbox_only: true;
+  environment: "test" | "live";
+  sandbox_only: boolean;
 };
 const empty: Individual = {
   legal_name: "",

@@ -4,9 +4,11 @@ import { CustomerPublicLayout, CustomerNotice } from "@/components/peragus/custo
 import { CustomerOnboarding } from "@/components/peragus/customer-onboarding";
 import { useCustomerSession, signUpCustomer } from "@/lib/peragus/customer-session";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
+import { useMoneyMode } from "@/lib/peragus/config";
 export const Route = createFileRoute("/cadastro")({ component: RegistrationPage });
 export function RegistrationPage() {
   const session = useCustomerSession();
+  const mode = useMoneyMode();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -42,7 +44,8 @@ export function RegistrationPage() {
             email: email.trim(),
           },
         );
-        if (checked.valid !== true || checked.environment !== "test")
+        // The invitation must come from the same money environment this frontend serves.
+        if (checked.valid !== true || checked.environment !== mode)
           throw new Error("Invalid invitation response");
         await signUpCustomer(email.trim(), password);
         setPassword("");

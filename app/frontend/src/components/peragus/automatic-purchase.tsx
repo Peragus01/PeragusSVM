@@ -8,6 +8,8 @@ import { usePeragusWallet } from "./wallet-context";
 import { CustomerWalletLink } from "./customer-wallet-link";
 import { useLinkedWallet } from "./use-linked-wallet";
 import { formatAmount } from "./customer-operations";
+import { moneyNetwork, useMoneyMode } from "@/lib/peragus/config";
+import { environmentNotice } from "@/lib/peragus/customer-copy";
 import {
   normalizePurchaseAmount,
   purchaseRequest,
@@ -86,6 +88,8 @@ export function AutomaticPurchaseForm({
   token: string;
 }) {
   const wallet = usePeragusWallet();
+  const mode = useMoneyMode();
+  const testNotice = environmentNotice(mode);
   const { linked, setLinked, error: walletError } = useLinkedWallet();
   const [capabilities, setCapabilities] = useState<{
     quote: boolean;
@@ -158,11 +162,11 @@ export function AutomaticPurchaseForm({
       .then((c) => {
         if (abort.signal.aborted) return;
         if (
-          c.environment !== "test" ||
+          c.environment !== mode ||
           c.operations_enabled !== false ||
-          c.real_purchase !== false ||
+          c.real_purchase !== (mode === "live") ||
           c.required_costs_complete !== false ||
-          c.network !== "solana:devnet" ||
+          c.network !== moneyNetwork(mode) ||
           !(["quote", "record", "pix"] as const).every((k) => typeof c[k] === "boolean")
         )
           throw Error();
@@ -173,7 +177,7 @@ export function AutomaticPurchaseForm({
           setError("Não foi possível confirmar a disponibilidade da compra.");
       });
     return () => abort.abort();
-  }, [token]);
+  }, [token, mode]);
   useEffect(() => {
     setReview(false);
   }, [linked?.wallet_address]);
@@ -372,10 +376,12 @@ export function AutomaticPurchaseForm({
           Solana
         </span>
       </div>
-      <p className="premium-test-notice">
-        <ShieldCheck size={15} />
-        Ambiente de testes · sem dinheiro real
-      </p>
+      {testNotice && (
+        <p className="premium-test-notice">
+          <ShieldCheck size={15} />
+          {testNotice}
+        </p>
+      )}
       <div className="premium-amount-panel">
         <label htmlFor="automatic-brl">Você paga</label>
         <div className="premium-amount-line">

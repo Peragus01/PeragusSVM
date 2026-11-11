@@ -91,7 +91,7 @@ export function operationLabel(operation: CustomerOperation) {
     if (operation.pix?.state === "cancelled") return "Pagamento cancelado";
     return "Aguardando confirmação";
   }
-  return "Registro de teste";
+  return operation.environment === "test" ? "Registro de teste" : "Compra registrada";
 }
 export function statusStyle(operation: CustomerOperation) {
   return operation.withdrawal?.recovery_required

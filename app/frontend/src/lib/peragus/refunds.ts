@@ -1,3 +1,4 @@
+import { moneyMode, type MoneyMode } from "./config";
 export type RefundState = "pending_review" | "approved" | "rejected" | "refund_recorded";
 export interface RefundRequest {
   id: string;
@@ -12,7 +13,7 @@ export interface RefundRequest {
   returned_amount: { currency: "BRL"; amount: string } | null;
   partial_refund: boolean | null;
   refund_recorded_at: string | null;
-  environment: "test";
+  environment: MoneyMode;
   record_only: true;
   refund_execution_automated: false;
   provider_verified: false;
@@ -90,7 +91,7 @@ function parseRefund(
     typeof value["reason"] !== "string" ||
     !money(value["requested_amount"]) ||
     !(value["returned_amount"] === null || money(value["returned_amount"])) ||
-    value["environment"] !== "test" ||
+    value["environment"] !== moneyMode() ||
     value["record_only"] !== true ||
     value["refund_execution_automated"] !== false ||
     value["provider_verified"] !== false ||

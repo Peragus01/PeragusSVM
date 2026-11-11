@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { CustomerNotice } from "./customer-ui";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
+import { moneyMode, type MoneyMode } from "@/lib/peragus/config";
 type Pix = {
   id: string;
   purchase_intent_id: string;
   request_id: string;
-  environment: "test";
-  real_money: false;
+  environment: MoneyMode;
+  real_money: boolean;
   operations_enabled: false;
   payment_confirmed: boolean;
   state: string;
@@ -73,8 +74,8 @@ export function CustomerPix({
       if (epoch.current !== turn) return;
       if (
         !data ||
-        data.environment !== "test" ||
-        data.real_money !== false ||
+        data.environment !== moneyMode() ||
+        data.real_money !== (moneyMode() === "live") ||
         data.operations_enabled !== false ||
         data.purchase_intent_id !== purchaseId ||
         data.request_id !== saved.requestId ||

@@ -105,7 +105,7 @@ function CustomerDashboard() {
                 <div>
                   <b>{formatAmount(op.source.amount, "BRL")}</b>
                   <div className="customer-muted">
-                    {displayDate(op.created_at)} · {op.environment === "test" ? "Teste" : "—"}
+                    {displayDate(op.created_at)} · {op.environment === "test" ? "Teste" : "Real"}
                   </div>
                 </div>
                 <div style={{ textAlign: "right" }}>

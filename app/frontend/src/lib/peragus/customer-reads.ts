@@ -1,15 +1,16 @@
 /** Customer session tokens come from the login layer; this module stores no session. */
+import { moneyMode, type MoneyMode, type MoneyNetwork } from "./config";
 export interface CustomerOperation {
   id: string;
   quote_id: string;
   created_at: string;
-  environment: "test";
-  real_money: false;
+  environment: MoneyMode;
+  real_money: boolean;
   stage: "purchase_recorded" | "pix" | "withdrawal";
   source: { currency: "BRL"; amount: string };
   estimated_target: { currency: "USDT"; amount: string; indicative: true };
   converted_target: { currency: "USDT"; amount: string } | null;
-  destination: { wallet_address: string; network: "solana"; proof_network: "solana:devnet" };
+  destination: { wallet_address: string; network: "solana"; proof_network: MoneyNetwork };
   pix: { id: string; state: string; conversion_completed: boolean } | null;
   withdrawal: {
     id: string;
@@ -37,8 +38,8 @@ export interface CustomerOperationsPage {
 
 export interface CustomerWithdrawalResult {
   withdrawal_request_id: string;
-  environment: "test";
-  real_money: false;
+  environment: MoneyMode;
+  real_money: boolean;
   state: string;
   approved: boolean;
   withdrawal_started: boolean;
@@ -70,9 +71,10 @@ export class CustomerReadError extends Error {
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
+// Responses must belong to this deployment's money mode; real money only in live.
 const sandbox = (value: Record<string, unknown>) =>
-  value["environment"] === "test" &&
-  value["real_money"] === false &&
+  value["environment"] === moneyMode() &&
+  value["real_money"] === (moneyMode() === "live") &&
   value["onchain_delivery_verified"] === false &&
   value["mainnet_execution"] === false;
 

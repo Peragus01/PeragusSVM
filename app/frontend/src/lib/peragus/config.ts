@@ -9,6 +9,30 @@ export const config = {
   demoPayoutDestinationId: env["VITE_DEMO_PAYOUT_DESTINATION_ID"] || "",
 };
 
+export type MoneyMode = "test" | "live";
+export type MoneyNetwork = "solana:devnet" | "solana:mainnet";
+
+/**
+ * Money mode of this deployment, from the public build variable VITE_PERAGUS_MONEY_MODE.
+ * Only the exact value "live" selects live; anything else stays in test mode, which keeps
+ * the test notices visible and refuses live backend responses (fail closed).
+ */
+export function moneyMode(): MoneyMode {
+  return (import.meta.env as Record<string, string | undefined>)["VITE_PERAGUS_MONEY_MODE"] ===
+    "live"
+    ? "live"
+    : "test";
+}
+/** React-facing accessor for the configured money mode. */
+export function useMoneyMode(): MoneyMode {
+  return moneyMode();
+}
+export const moneyNetwork = (mode: MoneyMode): MoneyNetwork =>
+  mode === "live" ? "solana:mainnet" : "solana:devnet";
+/** Domain the backend binds into the wallet ownership proof for this mode. */
+export const walletProofDomain = (mode: MoneyMode) =>
+  mode === "live" ? "www.peragus.com.br" : "peragussvm-staging.up.railway.app";
+
 export const PROGRAM_ID = "6Auy8BXWNaWQCAEbDkusoDkAjWvyzhkKw2LbfiVvvb1w";
 
 export const short = (value: string, size = 7) =>
