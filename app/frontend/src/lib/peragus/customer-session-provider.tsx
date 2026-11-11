@@ -15,6 +15,9 @@ import {
 } from "./customer-session-auth";
 
 const operatorMfaFriendlyName = "Peragus Operador";
+// Keep the authenticator label independent from local/preview URLs.
+// Supabase Auth accepts an issuer URI and uses its domain in the TOTP identity.
+const operatorMfaIssuer = "https://www.peragus.com.br";
 // GoTrue renders each QR module as SVG markup; keep a bounded limit that fits
 // production TOTP payloads without accepting arbitrarily large responses.
 const maxTotpQrResponseLength = 1_000_000;
@@ -131,7 +134,11 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
 
     const result = await supabaseAuth(
       "factors",
-      { factor_type: "totp", friendly_name: operatorMfaFriendlyName },
+      {
+        factor_type: "totp",
+        friendly_name: operatorMfaFriendlyName,
+        issuer: operatorMfaIssuer,
+      },
       "POST",
       current.access_token,
     );
