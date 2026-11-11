@@ -10,6 +10,7 @@ import { PostgresOnboardingSubmissionRepository } from "../src/repositories/post
 import { PostgresCustomerQuoteRepository } from "../src/repositories/postgres-customer-quotes.js";
 import {
   CustomerQuoteService,
+  CustomerQuoteProviderError,
   normalizeQuoteBrl,
 } from "../src/quotes/customer-quotes.js";
 import { DEFAULT_PURCHASE_LIMITS } from "../src/purchases/operation-status.js";
@@ -51,7 +52,7 @@ afterAll(async () => {
   await Promise.all(apps.map((a) => a.close()));
   await db.close();
 });
-async function setup(type: "pf" | "pj" = "pf") {
+async function setup(type: "pf" | "pj" = "pf", mode: "test" | "live" = "test") {
   const owner = randomUUID(),
     customer = (
       await customers.createOrGet({
@@ -79,7 +80,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     ],
   );
   const caps = {
-    environment: "test",
+    environment: mode,
     entitlements: ["customers", "liquidity"],
     scopes: ["customers:read", "quotes:write"],
   };
@@ -87,6 +88,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     pending = false,
     timeout = false,
     errorStatus = 0,
+    errorCode = "",
     mutate = (r: any) => r;
   const transport = vi.fn(async (path: string) => {
     if (path === "/v2/capabilities") return { statusCode: 200, body: caps };
@@ -144,7 +146,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     if (errorStatus)
       return {
         statusCode: errorStatus,
-        body: { error: { message: "private server details" } },
+        body: { error: { ...(errorCode ? { code: errorCode } : {}), message: "private server details" } },
       };
     return {
       statusCode: 201,
@@ -152,12 +154,12 @@ async function setup(type: "pf" | "pj" = "pf") {
     };
   });
   const provider = new OzavClient({
-    mode: "test", apiKey: "ozav_sk_test_quote",
+    mode, apiKey: `ozav_sk_${mode}_quote`,
     attempts: 1,
     transport,
     writeTransport,
   });
-  const service = new CustomerQuoteService(repo, submissions, provider, "test", WIDE),
+  const service = new CustomerQuoteService(repo, submissions, provider, mode, WIDE),
     strictService = new CustomerQuoteService(repo, submissions, provider);
   return {
     owner,
@@ -179,8 +181,9 @@ async function setup(type: "pf" | "pj" = "pf") {
     loseResponse: () => {
       timeout = true;
     },
-    fail: (n: number) => {
+    fail: (n: number, code = "") => {
       errorStatus = n;
+      errorCode = code;
     },
     mutate: (fn: (r: any) => any) => {
       mutate = fn;
@@ -628,5 +631,92 @@ describe("configured purchase range", () => {
     });
     expect(ok.statusCode).toBe(201);
     expect(ok.json().data.source.amount).toBe("1000.00");
+  });
+});
+
+describe("FX rate lock on quotes (trava de câmbio)", () => {
+  const facility = { terms_version: "2.0", capacity_guaranteed: false };
+  const stored = async (id: string) =>
+    (
+      await db.query(
+        "select facility_terms_version,locked_usdt_amount,provider_quote_id,observation from peragus_customer_indicative_quotes where id=$1",
+        [id],
+      )
+    ).rows[0] as any;
+  it("live quote requests facility_preview and stores terms_version", async () => {
+    const s = await setup("pf", "live");
+    s.mutate((row) => ({ ...row, facility }));
+    const r = await s.service.create(s.customer.id, s.requestId, "500");
+    expect(r.replayed).toBe(false);
+    expect(s.writeTransport.mock.calls[0]![0].body).toMatchObject({
+      facility_preview: true,
+    });
+    const row = await stored(r.data.id);
+    expect(row.facility_terms_version).toBe("2.0");
+    expect(row.locked_usdt_amount).toBe("100.000000");
+    expect(JSON.stringify(r.data)).not.toContain("capacity_guaranteed");
+    expect(await repo.findOwned(s.customer.id, r.data.id)).toMatchObject({
+      facilityTermsVersion: "2.0",
+      lockedUsdtAmount: "100.000000",
+    });
+  });
+  it("live quote without facility block is refused with QUOTE_RATE_LOCK_UNAVAILABLE and nothing is stored", async () => {
+    const s = await setup("pf", "live");
+    await expect(
+      s.service.create(s.customer.id, s.requestId, "500"),
+    ).rejects.toMatchObject({ code: "QUOTE_RATE_LOCK_UNAVAILABLE" });
+    const rows = (
+      await db.query(
+        "select provider_quote_id,observation,facility_terms_version,locked_usdt_amount from peragus_customer_indicative_quotes where customer_id=$1",
+        [s.customer.id],
+      )
+    ).rows as any[];
+    for (const row of rows) {
+      expect(row.provider_quote_id).toBeNull();
+      expect(row.observation).toBeNull();
+      expect(row.facility_terms_version).toBeNull();
+      expect(row.locked_usdt_amount).toBeNull();
+    }
+  });
+  it("live quote refuses a facility block without a usable terms_version", async () => {
+    for (const bad of [{}, { terms_version: "" }, { terms_version: 2 }]) {
+      const s = await setup("pf", "live");
+      s.mutate((row) => ({ ...row, facility: bad }));
+      await expect(
+        s.service.create(s.customer.id, s.requestId, "500"),
+      ).rejects.toThrow();
+    }
+  });
+  it("test quote never sends facility_preview and keeps the target as the locked amount", async () => {
+    const s = await setup();
+    s.mutate((row) => ({ ...row, facility }));
+    const r = await s.service.create(s.customer.id, s.requestId, "500");
+    expect(s.writeTransport.mock.calls[0]![0].body).not.toHaveProperty(
+      "facility_preview",
+    );
+    const row = await stored(r.data.id);
+    expect(row.facility_terms_version).toBeNull();
+    expect(row.locked_usdt_amount).toBe("100.000000");
+  });
+  it("AMOUNT_BELOW_MINIMUM from OZAV maps to QUOTE_AMOUNT_OUT_OF_RANGE", async () => {
+    const s = await setup("pf", "live");
+    s.fail(400, "AMOUNT_BELOW_MINIMUM");
+    await expect(
+      s.service.create(s.customer.id, s.requestId, "500"),
+    ).rejects.toMatchObject({ code: "QUOTE_AMOUNT_OUT_OF_RANGE" });
+    const other = await setup();
+    other.fail(400, "SOMETHING_ELSE");
+    await expect(
+      other.service.create(other.customer.id, other.requestId, "500"),
+    ).rejects.toBeInstanceOf(CustomerQuoteProviderError);
+  });
+  it("the client refuses facility_preview outside live mode", async () => {
+    const s = await setup();
+    await expect(
+      s.provider.createCustomerIndicativeQuote(s.providerId, "500.00", undefined, {
+        facilityPreview: true,
+      }),
+    ).rejects.toThrow();
+    expect(s.writeTransport).not.toHaveBeenCalled();
   });
 });

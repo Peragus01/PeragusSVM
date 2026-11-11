@@ -46,6 +46,7 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
     and q.observation->>'spreadBps'='0' and q.observation->'source'->>'currency'='BRL'
     and (q.observation->'source'->>'amount')::numeric=q.source_amount_brl
     and q.observation->'target'->>'currency'='USDT' and (q.observation->'target'->>'amount')::numeric>0
+    ${this.e.mode==="live"?"and q.facility_terms_version is not null and q.locked_usdt_amount is not null":""}
     and s.state='linked' and s.provider_customer_id=q.provider_customer_id and s.provider_status='approved'
     and s.verification_mode='full' and s.provider_snapshot->>'requirements_pending'='false'
     and t.state='accepted' and t.accepted_at is not null
@@ -65,13 +66,15 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
    // Derivation, prerequisite reads, range check and insert use ONE SQL statement.
    const r=await client.query<Row>(`insert into peragus_customer_purchase_intents(
     id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,
-    quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network)
+    quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network,facility_terms_version,locked_usdt_amount)
    select $1::uuid,q.customer_id,$3::uuid,q.id,q.provider_customer_id,q.source_amount_brl,(q.observation->'target'->>'amount')::numeric,
     jsonb_build_object('rate',q.observation->>'rate','rate_type',q.observation->>'rateType','quoted_at',q.observation->>'createdAt',
      'exchange_conditions',jsonb_build_object('spread_bps',q.observation->'spreadBps','rate_without_spread',q.observation->'rateWithoutSpread','amount_deducted',q.observation->'amountDeducted')),
     w.wallet_address,w.verified_at,jsonb_build_object('registration_snapshot_version',s.snapshot_version,
      'verification_revision',v.revision,'screening_revision',sc.revision,'terms_session_id',t.id,'wallet_proof_id',w.proof_challenge_id),
-    '${this.e.mode}','${this.e.network}'
+    '${this.e.mode}','${this.e.network}',q.facility_terms_version,
+    -- test quotes predating the lock columns lock their quoted target
+    coalesce(q.locked_usdt_amount,(q.observation->'target'->>'amount')::numeric)
    ${this.prerequisites()}
     and q.source_amount_brl*100 between $5::bigint and $6::bigint
    on conflict do nothing returning *`,params);

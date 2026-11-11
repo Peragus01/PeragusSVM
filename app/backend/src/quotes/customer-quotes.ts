@@ -48,6 +48,10 @@ export interface CustomerQuoteRecord {
   amountBrl: string;
   targetAmountUsdt?: string | null;
   attempted: boolean;
+  /** OZAV facility terms version; null in test mode (no rate lock there). */
+  facilityTermsVersion: string | null;
+  /** USDT amount the purchase locks: the quote target; "0.000000" until a quote is saved. */
+  lockedUsdtAmount: string;
   quote: OzavIndicativeQuote | null;
   createdAt: string;
 }
@@ -89,6 +93,7 @@ export class CustomerQuoteError extends Error {
       | "QUOTE_IDEMPOTENCY_CONFLICT"
       | "QUOTE_RECOVERY_REQUIRED"
       | "QUOTE_NOT_FOUND"
+      | "QUOTE_RATE_LOCK_UNAVAILABLE"
       | "QUOTE_CONFLICT",
     public readonly quoteId?: string,
   ) {
@@ -232,12 +237,20 @@ export class CustomerQuoteService {
         binding.providerId,
         amountBrl,
         targetAmount,
+        // Live quotes ask OZAV for the FX rate lock terms; test keys never do.
+        this.mode === "live" ? { facilityPreview: true } : undefined,
       );
     } catch (error) {
-      if (error instanceof OzavClientError)
+      if (error instanceof OzavClientError) {
+        if (error.ozavErrorCode === "AMOUNT_BELOW_MINIMUM")
+          throw new CustomerQuoteError("QUOTE_AMOUNT_OUT_OF_RANGE", row.id);
         throw new CustomerQuoteProviderError(row.id, error.statusCode ?? null);
+      }
       throw error;
     }
+    // Without the facility block there is no rate lock to accept: store nothing.
+    if (this.mode === "live" && !quote.facility)
+      throw new CustomerQuoteError("QUOTE_RATE_LOCK_UNAVAILABLE");
     return {
       data: this.view(await this.repository.save(row, quote)),
       replayed: false,

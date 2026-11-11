@@ -154,6 +154,22 @@ describe("operation status, limits and concurrency",()=>{
   await expect(repo.transitionOperation(one.data.id,"failed","","synthetic")).rejects.toThrow();
   await expect(new PostgresCustomerPurchaseIntentRepository(pool,"live",wide).transitionOperation(one.data.id,"failed","system","x")).rejects.toThrow("PURCHASE_INTENT_NOT_FOUND");
  });
+ it("copies the locked USDT amount and terms version from the quote at accept time and never lets them change",async()=>{
+  const s=await setup();
+  await db.query("update peragus_customer_indicative_quotes set facility_terms_version='2.0',locked_usdt_amount='99.500000' where id=$1",[s.quoteId]);
+  const one=await service.record(s.customer.id,s.requestId,s.quoteId);
+  const row=(await db.query<{facility_terms_version:string|null;locked_usdt_amount:string}>("select facility_terms_version,locked_usdt_amount from peragus_customer_purchase_intents where id=$1",[one.data.id])).rows[0]!;
+  expect(row).toEqual({facility_terms_version:"2.0",locked_usdt_amount:"99.500000"});
+  // Later changes to the quote never reach the accepted purchase.
+  await db.query("update peragus_customer_indicative_quotes set locked_usdt_amount='1.000000' where id=$1",[s.quoteId]);
+  expect((await db.query("select locked_usdt_amount from peragus_customer_purchase_intents where id=$1",[one.data.id])).rows).toEqual([{locked_usdt_amount:"99.500000"}]);
+  for(const assignment of ["facility_terms_version='9.9'","facility_terms_version=null","locked_usdt_amount=1","locked_usdt_amount=null",`evidence_snapshot='{"x":1}'`])
+   await expect(db.query(`update peragus_customer_purchase_intents set ${assignment} where id=$1`,[one.data.id]),assignment).rejects.toThrow("PURCHASE_FINANCIAL_FIELDS_IMMUTABLE");
+ });
+ it("in test mode the locked amount is the quote target and the terms version stays null",async()=>{
+  const s=await setup(),one=await service.record(s.customer.id,s.requestId,s.quoteId);
+  expect((await db.query("select facility_terms_version,locked_usdt_amount from peragus_customer_purchase_intents where id=$1",[one.data.id])).rows).toEqual([{facility_terms_version:null,locked_usdt_amount:"100.000000"}]);
+ });
  it("rejects updating the locked USDT amount and the other accepted financial fields",async()=>{
   const s=await setup(),one=await service.record(s.customer.id,s.requestId,s.quoteId),other=await s.makeQuote();
   for(const assignment of ["estimated_target_amount_usdt=99","source_amount_brl=1","quote_snapshot='{}'",`quote_id='${other}'`,

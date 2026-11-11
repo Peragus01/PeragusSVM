@@ -29,12 +29,20 @@ export type OzavWriteTransport = (
 export class OzavClientError extends Error {
   readonly statusCode: number | undefined;
   readonly retryable: boolean;
+  /** OZAV error.code slug (e.g. AMOUNT_BELOW_MINIMUM) when the response carried a well-formed one. */
+  readonly ozavErrorCode: string | undefined;
 
-  constructor(message: string, retryable: boolean, statusCode?: number) {
+  constructor(
+    message: string,
+    retryable: boolean,
+    statusCode?: number,
+    ozavErrorCode?: string,
+  ) {
     super(message);
     this.name = "OzavClientError";
     this.retryable = retryable;
     this.statusCode = statusCode;
+    this.ozavErrorCode = ozavErrorCode;
   }
 }
 
@@ -282,6 +290,8 @@ export interface OzavQuote {
 export interface OzavIndicativeQuote extends OzavQuote {
   rateWithoutSpread: string | null;
   amountDeducted: string | null;
+  /** FX rate lock terms, present only when facility_preview was requested and OZAV offered it. */
+  facility?: { termsVersion: string };
 }
 export interface CreateOzavQuoteInput {
   customerId: string;
@@ -388,6 +398,17 @@ function paymentInstructions(value: unknown): OzavPaymentInstructions | null {
     qrCodeImage: optionalText(row.qr_code_image),
     expiresAt: timestamp(row.expires_at),
   };
+}
+
+/** Only a well-formed upper-snake slug is surfaced; messages and details never are. */
+function providerErrorCode(body: unknown): string | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const error = (body as { error?: unknown }).error;
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
+    ? code
+    : undefined;
 }
 
 function quote(value: unknown): OzavQuote {
@@ -720,6 +741,7 @@ export class OzavClient {
             `OZAV HTTP ${result.statusCode}`,
             [408, 429].includes(result.statusCode) || result.statusCode >= 500,
             result.statusCode,
+            providerErrorCode(result.body),
           );
         }
         return result;
@@ -1181,8 +1203,13 @@ export class OzavClient {
     customerId: string,
     amountBrl: string,
     targetAmountUsdt?: string,
+    options: { facilityPreview?: boolean } = {},
   ): Promise<OzavIndicativeQuote> {
     identifier(customerId, "ozav_cus_");
+    const facilityPreview = options.facilityPreview === true;
+    // The facility is contracted for the live key only; test keys never ask for it.
+    if (facilityPreview && this.mode !== "live")
+      throw new OzavClientError("Rate lock preview requires live mode", false);
     if (targetAmountUsdt !== undefined) {
       if (
         !/^(0|[1-9]\d{0,5})\.\d{6}$/.test(targetAmountUsdt) ||
@@ -1212,6 +1239,7 @@ export class OzavClient {
             },
             source_rail: "pix",
             spread_bps: 0,
+            ...(facilityPreview ? { facility_preview: true } : {}),
           },
         })
       ).body,
@@ -1281,11 +1309,23 @@ export class OzavClient {
     const normalizedSource = targetAmountUsdt
       ? `${sourceCents / 100n}.${String(sourceCents % 100n).padStart(2, "0")}`
       : amountBrl;
+    let facility: { termsVersion: string } | undefined;
+    // Absence of the block means "not available for this account", never an error here.
+    if (facilityPreview && row.facility != null) {
+      const termsVersion = object(row.facility).terms_version;
+      if (
+        typeof termsVersion !== "string" ||
+        !/^[A-Za-z0-9._-]{1,64}$/.test(termsVersion)
+      )
+        return invalidResponse();
+      facility = { termsVersion };
+    }
     return {
       ...result,
       source: { currency: "BRL", amount: normalizedSource },
       rateWithoutSpread: without,
       amountDeducted: deducted,
+      ...(facility ? { facility } : {}),
     };
   }
 

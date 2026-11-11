@@ -17,6 +17,8 @@ interface Row {
   source_amount_brl: string;
   target_amount_usdt?: string | null;
   create_attempted: boolean;
+  facility_terms_version?: string | null;
+  locked_usdt_amount?: string | null;
   observation: OzavIndicativeQuote | null;
   created_at: Date | string;
 }
@@ -28,6 +30,8 @@ const map = (r: Row): CustomerQuoteRecord => ({
   amountBrl: r.source_amount_brl,
   targetAmountUsdt: r.target_amount_usdt ?? null,
   attempted: r.create_attempted,
+  facilityTermsVersion: r.facility_terms_version ?? null,
+  lockedUsdtAmount: r.locked_usdt_amount ?? "0.000000",
   quote: r.observation,
   createdAt: new Date(r.created_at).toISOString(),
 });
@@ -113,7 +117,7 @@ export class PostgresCustomerQuoteRepository implements CustomerQuoteRepository 
       throw new CustomerQuoteError("QUOTE_CONFLICT", row.id);
     try {
       const r = await this.pool.query<Row>(
-        `update peragus_customer_indicative_quotes set provider_quote_id=$3,observation=$4::jsonb,source_amount_brl=$6::numeric,updated_at=now()
+        `update peragus_customer_indicative_quotes set provider_quote_id=$3,observation=$4::jsonb,source_amount_brl=$6::numeric,facility_terms_version=$7,locked_usdt_amount=$8::numeric,updated_at=now()
         where id=$1 and customer_id=$2 and provider_customer_id=$5 and environment='${this.e.mode}' and create_attempted and provider_quote_id is null returning *`,
         [
           row.id,
@@ -122,6 +126,9 @@ export class PostgresCustomerQuoteRepository implements CustomerQuoteRepository 
           JSON.stringify(quote),
           row.providerCustomerId,
           quote.source.amount,
+          quote.facility?.termsVersion ?? null,
+          // The locked amount is the quote's target USDT; the terms version marks a live rate lock.
+          quote.target.amount,
         ],
       );
       if (!r.rows[0]) throw new CustomerQuoteError("QUOTE_CONFLICT", row.id);
