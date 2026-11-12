@@ -181,6 +181,28 @@ describe("transactional webhook deduplication and safe refresh", () => {
     expect(await s.processor.process(test, digest(test))).toBe("duplicate");
     await expect(s.processor.process({ ...event(), livemode: true }, "a".repeat(64))).rejects.toThrow();
   });
+  it("verification.updated re-reads the named customer by GET; transfer events without a progression are ignored", async () => {
+    const s = await setup();
+    const v = { ...event(), type: "verification.updated", data: { verification: { id: "ozav_vrf_x", customer_id: s.providerId, status: "approved" } } };
+    expect(await s.processor.process(v, digest(v))).toBe("processed");
+    expect(s.getSnapshot).toHaveBeenCalledTimes(1);
+    const tr = { ...event(), type: "transfer.completed", data: { transfer: { id: "ozav_tr_abc", status: "completed" } } };
+    expect(await s.processor.process(tr, digest(tr))).toBe("ignored");
+    expect(await s.processor.process(tr, digest(tr))).toBe("duplicate");
+    const bad = { ...event(), type: "transfer.updated", data: { transfer: { id: "not-a-transfer" } } };
+    await expect(s.processor.process(bad, digest(bad))).rejects.toBeInstanceOf(CustomerWebhookConflict);
+  });
+  it("a test-mode receiver ignores livemode:true and a live-mode receiver ignores livemode:false", async () => {
+    const process = vi.fn(async () => "processed");
+    const live = await buildApp({ customerWebhooks: { secret, processor: { process }, now: () => now, mode: "live" } }); apps.push(live);
+    const test = await appFor({ process });
+    const off = event(), on = { ...event(), livemode: true };
+    const rawOff = JSON.stringify(off), rawOn = JSON.stringify(on);
+    expect((await live.inject({ method: "POST", url: path, headers: headers(rawOff, off.id), payload: rawOff })).json().result).toBe("ignored_environment");
+    expect((await test.inject({ method: "POST", url: path, headers: headers(rawOn, on.id), payload: rawOn })).json().result).toBe("ignored_environment");
+    expect(process).not.toHaveBeenCalled();
+    expect((await live.inject({ method: "POST", url: path, headers: headers(rawOn, on.id), payload: rawOn })).json().result).toBe("processed");
+  });
   it("retains browser-role restrictions on receipt storage", async () => {
     const r = await db.query(`select relrowsecurity, has_table_privilege('anon','peragus_customer_webhook_events','SELECT') as anon_select,
       has_table_privilege('authenticated','peragus_customer_webhook_events','INSERT') as auth_insert

@@ -52,6 +52,11 @@ describe("canTransition",()=>{
   expect(canTransition("needs_review","delivered_verified")).toBe(false);
   expect(canTransition("pix_confirmed","failed")).toBe(false);
  });
+ it("sends an ambiguous accepted operation to review (lock outcome unknown), never to refund",()=>{
+  expect(canTransition("accepted","needs_review")).toBe(true);
+  expect(canTransition("accepted","refund_pending")).toBe(false);
+  expect(canTransition("needs_review","awaiting_pix")).toBe(false);
+ });
  it("treats everything but delivered_verified, expired, failed and refunded as open",()=>{
   expect([...OPEN_STATUSES].sort()).toEqual(OPERATION_STATUSES.filter(s=>!["delivered_verified","expired","failed","refunded"].includes(s)).sort());
  });

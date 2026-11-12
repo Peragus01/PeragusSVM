@@ -1,5 +1,5 @@
 // Purchase operation lifecycle. Mirrored in SQL by
-// peragus_operation_can_transition() (migration 045); a test compares both.
+// peragus_operation_can_transition() (migrations 045, 048); a test compares both.
 export type OperationStatus =
   | "quoted"
   | "accepted"
@@ -51,7 +51,8 @@ export const OPEN_STATUSES: ReadonlySet<OperationStatus> = new Set(
 // needs_review/refund_pending, never straight to failed/expired.
 const TRANSITIONS: Readonly<Record<OperationStatus, readonly OperationStatus[]>> = {
   quoted: ["accepted", "expired"],
-  accepted: ["awaiting_pix", "expired", "failed"],
+  // needs_review: an ambiguous live Pix create whose FX lock outcome is unknown (048).
+  accepted: ["awaiting_pix", "expired", "failed", "needs_review"],
   awaiting_pix: ["pix_confirmed", "converted", "expired", "failed", "needs_review", "refund_pending"],
   pix_confirmed: ["converted", "needs_review", "refund_pending"],
   converted: ["awaiting_approval", "needs_review", "refund_pending"],

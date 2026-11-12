@@ -1,5 +1,6 @@
 import {CustomerReconciliationService,registerCustomerReconciliationWorker,assertCustomerReconciliationSafety,CUSTOMER_RECONCILIATION_QUEUE} from "./jobs/customer-reconciliation.js";
 import {createCustomerReconciliationReader} from "./purchases/customer-reconciliation-reader.js";
+import {createPurchaseProgression} from "./purchases/purchase-progression-factory.js";
 import { assertSmokeTestSafety, registerWorkerSmokeTest } from "./jobs/worker-smoke-test.js";
 import {
   Connection,
@@ -315,7 +316,9 @@ try {
   await startJobQueue(boss);
   await ensureSettlementQueues(boss);
   if(env.CUSTOMER_RECONCILIATION_ENABLED){
-    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!,moneyModeFor(env)),moneyModeFor(env)));
+    // GET-only reads; each observation progresses the purchase (system:reconciliation).
+    const progression=createPurchaseProgression(pool,moneyModeFor(env),env,new OzavClient({apiKey:env.OZAV_API_KEY!,mode:moneyModeFor(env),attempts:1,timeoutMs:10000}));
+    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!,moneyModeFor(env),undefined,progression),moneyModeFor(env)));
     console.info(JSON.stringify({event:"customer_reconciliation_configured",enabled:true,providerReadsOnly:true}));
   }else{
     await boss.unschedule(CUSTOMER_RECONCILIATION_QUEUE);

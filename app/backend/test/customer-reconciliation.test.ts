@@ -165,6 +165,23 @@ describe("durable GET-only customer reconciliation",()=>{
   expect(()=>createCustomerReconciliationReader(pool,"ozav_sk_test_example","live")).toThrow();
   expect(()=>createCustomerReconciliationReader(pool,"ozav_sk_live_example","live")).not.toThrow();
  });
+ it("accepts the configured mode's key prefix: live key in production, never a test key there",()=>{
+  const live={DATABASE_URL:"postgresql://postgres:synthetic@db.production.example:5432/postgres",DATABASE_SSL:true,OZAV_API_KEY:"ozav_sk_live_example",
+   PERAGUS_DEPLOYMENT_ENV:"production" as const,OZAV_ONRAMP_WRITES_ENABLED:false,OZAV_OFFRAMP_WRITES_ENABLED:false,SOLANA_COSIGNING_ENABLED:false,SOLANA_CONTINGENCY_RESERVE_ENABLED:false,PERAGUS_SANDBOX_DEMO_ENABLED:false};
+  expect(()=>assertCustomerReconciliationSafety(live)).not.toThrow();
+  expect(()=>assertCustomerReconciliationSafety({...live,OZAV_API_KEY:"ozav_sk_test_example"})).toThrow();
+  expect(()=>assertCustomerReconciliationSafety({...live,DATABASE_SSL:false})).toThrow();
+  expect(()=>assertCustomerReconciliationSafety({...live,OZAV_OFFRAMP_WRITES_ENABLED:true})).toThrow();
+  expect(()=>assertCustomerReconciliationSafety({...live,PERAGUS_DEPLOYMENT_ENV:"staging" as const})).toThrow();
+ });
+ it("hands each GET observation to the purchase progression, never a provider write",async()=>{
+  const f=await fixture();const transport=vi.fn(async()=>({statusCode:200,body:rawPix(f)}));
+  const apply=vi.fn(async()=>"awaiting_approval" as const);
+  const service=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",transport,{applyTransferObservation:apply}),"test");
+  expect(await service.run()).toMatchObject({kind:"pix",state:"provider_terminal"});
+  expect(apply).toHaveBeenCalledWith(f.purchase,{status:"completed",amountUsdt:"200.000000",sourceLegStatus:"completed"},"system:reconciliation");
+  expect(transport).toHaveBeenCalledTimes(1);
+ });
  it("recovers a withdrawal with GET only, preserving unknown target and the original pilot claim",async()=>{
   const f=await withdrawalFixture();const paths:string[]=[];
   const transport=async(path:string)=>{paths.push(path);return {statusCode:200,body:path.includes("?")?{data:[{id:f.send,customer_id:f.provider,metadata:{peragus_execution_id:f.execution}}],has_more:false}:f.body};};

@@ -7,9 +7,11 @@ import {PostgresSandboxExecutionRepository} from "../repositories/postgres-sandb
 import {recoverSandboxWithdrawal} from "../withdrawals/sandbox-recovery.js";
 import {reconcileCustomerPix} from "./customer-sandbox-pix.js";
 import type {CustomerReconciliationReader} from "../jobs/customer-reconciliation.js";
+import {refreshPixAndProgress,type PurchaseProgression} from "./purchase-progression.js";
 
 /** Returns two GET-only functions. There is no send, reserve, claim or simulation capability. */
-export function createCustomerReconciliationReader(pool:Pool,key:string,mode:MoneyMode,read?:OzavTransport):CustomerReconciliationReader{
+export function createCustomerReconciliationReader(pool:Pool,key:string,mode:MoneyMode,read?:OzavTransport,
+ progression?:Pick<PurchaseProgression,"applyTransferObservation">):CustomerReconciliationReader{
  // The key, provider clients and repositories all belong to the configured money mode.
  if(!providerKeyMatchesMode(key,mode))throw Error("Provider key for the money mode required");
  const client=new OzavClient({apiKey:key,mode,attempts:1,timeoutMs:10000,...(read?{transport:read}:{})});
@@ -19,7 +21,9 @@ export function createCustomerReconciliationReader(pool:Pool,key:string,mode:Mon
  const withdrawalProvider=Object.freeze({find:withdrawal.find.bind(withdrawal),transfer:withdrawal.transfer.bind(withdrawal)});
  return Object.freeze({
   pix:async(customerId:string,id:string)=>{
-   const view=await reconcileCustomerPix(pixRepository,pixProvider,customerId,id,mode);
+   // The GET observation (never a webhook body) drives the purchase operation forward.
+   const view=progression?await refreshPixAndProgress(pixRepository,pixProvider,progression,customerId,id,mode,"system:reconciliation")
+    :await reconcileCustomerPix(pixRepository,pixProvider,customerId,id,mode);
    const failed=["failed","cancelled","expired"].includes(view.state);
    return {status:view.state,complete:view.custody_conversion_completed || failed,
     review:view.state==="needs_review" || (view.state==="completed" && !view.custody_conversion_completed) || (failed && view.source_leg_status==="completed")};

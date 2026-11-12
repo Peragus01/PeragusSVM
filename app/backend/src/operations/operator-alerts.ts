@@ -5,7 +5,10 @@ import {z} from 'zod';
 import type {AuthenticatedUser} from '../auth/customer-access.js';
 import {authorizeWithdrawalOperator} from '../withdrawals/operator-approvals.js';
 
-const kind=z.enum(['reconciliation_review','reconciliation_stalled','withdrawal_uncertain','withdrawal_review','refund_pending_review','refund_approved']);
+// operation_review: a purchase operation in needs_review (e.g. live Pix with unknown lock outcome).
+// pix_open_after_close: the operation failed/expired but its OZAV transfer is still payable or was
+// paid (OZAV offers no transfer cancel endpoint, so an operator must follow it).
+const kind=z.enum(['reconciliation_review','reconciliation_stalled','withdrawal_uncertain','withdrawal_review','refund_pending_review','refund_approved','operation_review','pix_open_after_close']);
 const cursorSchema=z.object({priority:z.union([z.literal(0),z.literal(1)]),at:z.iso.datetime({precision:6}),id:z.string().uuid(),kind}).strict();
 export class OperatorAlertInputError extends Error {}
 export function parseAlertQuery(query:unknown){
@@ -63,6 +66,19 @@ export class OperatorAlertService {
    left join peragus_manual_refund_decisions d on d.refund_request_id=r.id and d.customer_id=r.customer_id
    left join peragus_manual_refund_completions f on f.refund_request_id=r.id and f.customer_id=r.customer_id
    where r.environment='${this.e.mode}' and f.id is null and (d.id is null or d.decision='approved')
+   union all
+   select p.id,'operation_review',0,p.status_changed_at,p.id,x.id,null::uuid,null::uuid
+   from peragus_customer_purchase_intents p
+   left join peragus_customer_sandbox_pix x on x.purchase_intent_id=p.id and x.customer_id=p.customer_id
+   where p.environment='${this.e.mode}' and p.status='needs_review'
+   union all
+   select x.id,'pix_open_after_close',0,p.status_changed_at,p.id,x.id,null::uuid,null::uuid
+   from peragus_customer_sandbox_pix x
+   join peragus_customer_purchase_intents p on p.id=x.purchase_intent_id and p.customer_id=x.customer_id
+   where x.environment='${this.e.mode}' and p.status in ('failed','expired') and x.observation is not null
+    and (x.observation->>'status' in ('awaiting_payment','payment_confirmed','converting','payout_initiated','needs_review')
+     or (x.observation->>'status' in ('failed','cancelled','expired') and x.observation->>'sourceLegStatus'='completed'))
+    and not exists(select 1 from peragus_operation_status_events m where m.purchase_id=p.id and m.actor='system:migration_045')
   ) select id,kind,priority,
    to_char(recorded_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as recorded_at,
    purchase_intent_id,pix_id,withdrawal_request_id,refund_request_id
@@ -77,7 +93,7 @@ export class OperatorAlertService {
    first_recorded_at:row.recorded_at,purchase_intent_id:row.purchase_intent_id,pix_id:row.pix_id,
    withdrawal_request_id:row.withdrawal_request_id,refund_request_id:row.refund_request_id,
    detail_path:row.refund_request_id?`/v1/admin/refund-requests/${row.refund_request_id}`:
-    row.kind.startsWith('reconciliation_')?'/v1/admin/customer-reconciliation':`/v1/admin/withdrawal-requests/${row.withdrawal_request_id}/audit`,
+    row.kind.startsWith('reconciliation_') || row.kind==='operation_review' || row.kind==='pix_open_after_close'?'/v1/admin/customer-reconciliation':`/v1/admin/withdrawal-requests/${row.withdrawal_request_id}/audit`,
    environment:this.e.mode,stored_evidence_only:true,execution_authorized:false
   })),meta:{has_more:hasMore,next_cursor:hasMore && last?Buffer.from(JSON.stringify({priority:last.priority,at:last.recorded_at,id:last.id,kind:last.kind})).toString('base64url'):null,
    environment:this.e.mode,provider_refreshed:false,notifications_sent:false}};

@@ -2,7 +2,7 @@ import {randomUUID} from "node:crypto";
 import type {Pool} from "pg";
 import type {PgBoss} from "pg-boss";
 import type {AuthenticatedUser} from "../auth/customer-access.js";
-import type {MoneyMode} from "../config/money-environment.js";
+import {moneyModeFor,providerKeyMatchesMode,type MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {authorizeWithdrawalOperator} from "../withdrawals/operator-approvals.js";
 import {assertSmokeTestSafety} from "./worker-smoke-test.js";
@@ -19,10 +19,20 @@ export interface CustomerReconciliationReader {
  pix(customerId:string,id:string):Promise<PollResult>;
  withdrawal(customerId:string,id:string):Promise<PollResult>;
 }
-export function assertCustomerReconciliationSafety(env:Parameters<typeof assertSmokeTestSafety>[0]&{DATABASE_SSL:boolean;OZAV_API_KEY?:string|undefined}){
- assertSmokeTestSafety(env);
- if(!env.DATABASE_SSL || !/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(env.OZAV_API_KEY??""))
-  throw new Error("Customer reconciliation requires SSL and a sandbox key");
+/**
+ * Reads only (GET) plus local progression. Test mode stays pinned to the staging
+ * database; live (PERAGUS_DEPLOYMENT_ENV=production) runs against its own database.
+ * Either way the key must belong to the configured money mode and every
+ * financial/demo write flag must be off.
+ */
+export function assertCustomerReconciliationSafety(env:Parameters<typeof assertSmokeTestSafety>[0]&{DATABASE_SSL:boolean;OZAV_API_KEY?:string|undefined;PERAGUS_DEPLOYMENT_ENV?:string|undefined}){
+ const mode=moneyModeFor({PERAGUS_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV} as Parameters<typeof moneyModeFor>[0]);
+ if(mode==="test")assertSmokeTestSafety(env);
+ else if(env.OZAV_ONRAMP_WRITES_ENABLED || env.OZAV_OFFRAMP_WRITES_ENABLED || env.SOLANA_COSIGNING_ENABLED
+  || env.SOLANA_CONTINGENCY_RESERVE_ENABLED || env.PERAGUS_SANDBOX_DEMO_ENABLED)
+  throw new Error("Customer reconciliation requires all financial and demo flags disabled");
+ if(!env.DATABASE_SSL || !providerKeyMatchesMode(env.OZAV_API_KEY,mode))
+  throw new Error("Customer reconciliation requires SSL and a provider key for the money mode");
 }
 const statuses=new Set(["awaiting_payment","payment_confirmed","converting","payout_initiated","completed","failed","cancelled","expired","needs_review","awaiting_approval","uncertain","reserved"]);
 function classifyError(error:unknown){

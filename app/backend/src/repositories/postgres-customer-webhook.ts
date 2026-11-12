@@ -6,14 +6,18 @@ import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
 import { OzavSandboxCustomerService } from "../application/ozav-sandbox-customer.js";
 import type { OzavClient } from "../providers/ozav-client.js";
 import { PostgresSandboxCustomerLinkRepository } from "./postgres-sandbox-customer-link.js";
+import type { PurchaseProgression } from "../purchases/purchase-progression.js";
 import { CustomerWebhookConflict, type CustomerWebhookEvent, type CustomerWebhookProcessor, type CustomerWebhookResult } from "../webhooks/customer-event.js";
 
 export class PostgresCustomerWebhookProcessor implements CustomerWebhookProcessor {
   private readonly e: RowEnvironment;
   constructor(private readonly pool: Pool, private readonly provider: Pick<OzavClient,
-    "getCustomerCapabilities" | "createSandboxCustomer" | "getSandboxCustomerSnapshot">, mode: MoneyMode) { this.e = rowEnvironment(mode); }
+    "getCustomerCapabilities" | "createSandboxCustomer" | "getSandboxCustomerSnapshot">, mode: MoneyMode,
+    private readonly transfers?: Pick<PurchaseProgression, "refreshTransfer">) { this.e = rowEnvironment(mode); }
   async process(event: CustomerWebhookEvent, digest: string): Promise<CustomerWebhookResult> {
-    if (event.livemode !== false) throw new CustomerWebhookConflict();
+    // An event from the other environment never changes state here.
+    if (event.livemode !== (this.e.mode === "live")) throw new CustomerWebhookConflict();
+    if (TRANSFER_EVENTS.has(event.type)) return this.processTransfer(event, digest);
     const connection = await this.pool.connect();
     try {
       await connection.query("begin");
@@ -30,8 +34,12 @@ export class PostgresCustomerWebhookProcessor implements CustomerWebhookProcesso
         return "duplicate";
       }
       let result: CustomerWebhookResult = "ignored";
-      const data = event.data.customer;
-      if (event.type === "customer.updated" && data && typeof data === "object" && !Array.isArray(data)) {
+      // verification.updated names the customer whose registration snapshot (which carries the
+      // verification status) is re-read by GET, exactly like customer.updated.
+      const verification = event.type === "verification.updated" ? event.data.verification : undefined;
+      const data = verification && typeof verification === "object" && !Array.isArray(verification)
+        ? { id: (verification as Record<string, unknown>).customer_id } : event.data.customer;
+      if ((event.type === "customer.updated" || event.type === "verification.updated") && data && typeof data === "object" && !Array.isArray(data)) {
         const providerId = (data as Record<string, unknown>).id;
         if (typeof providerId !== "string" || !/^ozav_cus_[A-Za-z0-9_]{1,160}$/.test(providerId)) throw new CustomerWebhookConflict();
         // No linking by email or external_ref. Only an existing test fixture or form-based test binding can be refreshed.
@@ -54,7 +62,7 @@ export class PostgresCustomerWebhookProcessor implements CustomerWebhookProcesso
           await service.refresh(binding.rows[0].customer_id);
           result = "processed";
         }
-      } else if (event.type === "customer.updated") {
+      } else if (event.type === "customer.updated" || event.type === "verification.updated") {
         throw new CustomerWebhookConflict();
       }
       await connection.query(`update peragus_customer_webhook_events set disposition=$2, completed_at=now() where event_id=$1`, [event.id, result]);
@@ -65,4 +73,36 @@ export class PostgresCustomerWebhookProcessor implements CustomerWebhookProcesso
       throw error;
     } finally { connection.release(); }
   }
+  /**
+   * transfer.updated|completed|failed: the body only names the transfer; its state is
+   * re-read by GET. The provider call runs outside a database transaction, and the
+   * refresh is idempotent, so the receipt is recorded after it (a failure leaves no
+   * receipt and the sender retries).
+   */
+  private async processTransfer(event: CustomerWebhookEvent, digest: string): Promise<CustomerWebhookResult> {
+    const prior = await this.pool.query<{ payload_hash: string }>(
+      "select payload_hash from peragus_customer_webhook_events where event_id=$1", [event.id]);
+    if (prior.rows[0]) {
+      if (prior.rows[0].payload_hash !== digest) throw new CustomerWebhookConflict();
+      return "duplicate";
+    }
+    const transfer = event.data.transfer;
+    if (!transfer || typeof transfer !== "object" || Array.isArray(transfer)) throw new CustomerWebhookConflict();
+    const { id, metadata } = transfer as Record<string, unknown>;
+    if (typeof id !== "string" || !/^ozav_tr_[A-Za-z0-9_]{1,160}$/.test(id)) throw new CustomerWebhookConflict();
+    const hint = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>).peragus_pix_id : null;
+    const result: CustomerWebhookResult = this.transfers
+      ? await this.transfers.refreshTransfer(id, typeof hint === "string" ? hint : null, "system:webhook") : "ignored";
+    const inserted = await this.pool.query(`insert into peragus_customer_webhook_events(event_id, payload_hash, event_type, environment, disposition, completed_at)
+      values($1,$2,$3,$4,$5,now()) on conflict(event_id) do nothing returning event_id`, [event.id, digest, event.type, this.e.mode, result]);
+    if (!inserted.rows[0]) {
+      const existing = await this.pool.query<{ payload_hash: string }>(
+        "select payload_hash from peragus_customer_webhook_events where event_id=$1", [event.id]);
+      if (existing.rows[0]?.payload_hash !== digest) throw new CustomerWebhookConflict();
+      return "duplicate";
+    }
+    return result;
+  }
 }
+const TRANSFER_EVENTS = new Set(["transfer.updated", "transfer.completed", "transfer.failed"]);

@@ -6,6 +6,7 @@ import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {authorizeWithdrawalOperator} from "../withdrawals/operator-approvals.js";
 import {OperationHistoryInputError,parseHistoryQuery} from "../purchases/customer-operation-history.js";
+import type {PurchaseIntentRepository} from "../purchases/customer-purchase-intents.js";
 
 export class ManualRefundError extends Error {constructor(public readonly code:string){super(code);}}
 function fail(code:string):never{throw new ManualRefundError(code);}
@@ -47,7 +48,14 @@ function view(r:Row,e:RowEnvironment,operator=false){return {
 /** All writes are local append-only evidence; this class has no provider/queue/signer. */
 export class ManualRefundService {
  private readonly e:RowEnvironment;
- constructor(private readonly pool:Pick<Pool,"query">,private readonly operators:ReadonlySet<string>,private readonly enabled:boolean,mode:MoneyMode){this.e=rowEnvironment(mode);}
+ constructor(private readonly pool:Pick<Pool,"query">,private readonly operators:ReadonlySet<string>,private readonly enabled:boolean,mode:MoneyMode,
+  private readonly operations?:Pick<PurchaseIntentRepository,"transitionOperation">){this.e=rowEnvironment(mode);}
+ /** A recorded manual refund closes a refund_pending operation as refunded. */
+ private async settle(purchaseId:string,operatorId:string){
+  if(!this.operations)return;
+  const r=await this.pool.query<{status:string}>(`select status from peragus_customer_purchase_intents where id=$1 and environment='${this.e.mode}'`,[purchaseId]);
+  if(r.rows[0]?.status==="refund_pending")await this.operations.transitionOperation(purchaseId,"refunded",`operator:${operatorId}`,"manual_refund_recorded");
+ }
  authorize(user:AuthenticatedUser){authorizeWithdrawalOperator(user,this.operators);}
  private writable(){if(!this.enabled)fail("MANUAL_REFUNDS_DISABLED");}
  private async one(where:string,args:unknown[]){const r=await this.pool.query<Row>(`${select} where r.environment='${this.e.mode}' and ${where}`,args);return r.rows[0]??null;}
@@ -118,7 +126,8 @@ export class ManualRefundService {
    join peragus_manual_refund_decisions d on d.refund_request_id=r.id and d.customer_id=r.customer_id and d.decision='approved'
    where r.id=$2 and not exists(select 1 from peragus_customers where owner_user_id=$3) on conflict do nothing returning id`,[randomUUID(),id,user.id,requestId,amount,reference]);
   const row=(await this.one("r.id=$1",[id]))!;
-  if(row.completion_operator===user.id && row.completion_request_id===requestId){if(row.returned_amount!==amount || row.reference!==reference)fail("REFUND_IDEMPOTENCY_CONFLICT");return {data:view(row,this.e,true),replayed:inserted.rows.length===0};}
+  if(row.completion_operator===user.id && row.completion_request_id===requestId){if(row.returned_amount!==amount || row.reference!==reference)fail("REFUND_IDEMPOTENCY_CONFLICT");
+   await this.settle(row.purchase_intent_id,user.id);return {data:view(row,this.e,true),replayed:inserted.rows.length===0};}
   fail(row.completion_id?"REFUND_ALREADY_RECORDED":row.decision!=="approved"?"REFUND_APPROVAL_REQUIRED":"REFUND_IDEMPOTENCY_CONFLICT");
  }
 }

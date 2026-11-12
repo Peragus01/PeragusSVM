@@ -30,6 +30,7 @@ import { PostgresCustomerPixRepository } from "./repositories/postgres-customer-
 import { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
 import { PostgresCustomerPurchaseIntentRepository } from "./repositories/postgres-customer-purchase-intents.js";
 import { purchaseLimits } from "./purchases/operation-status.js";
+import { createPurchaseProgression } from "./purchases/purchase-progression-factory.js";
 import { CustomerQuoteService } from "./quotes/customer-quotes.js";
 import { PostgresCustomerQuoteRepository } from "./repositories/postgres-customer-quotes.js";
 import { CustomerWalletService } from "./wallets/customer-wallet.js";
@@ -546,6 +547,11 @@ const app = await buildApp({
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
           env.MANUAL_REFUNDS_ENABLED,
           moneyModeFor(env),
+          // Recording a refund closes a refund_pending operation as refunded.
+          new PostgresCustomerPurchaseIntentRepository(pool, moneyModeFor(env), {
+            maxOpenGlobal: env.PURCHASE_MAX_OPEN_GLOBAL,
+            limits: purchaseLimits(env),
+          }),
         ),
       }
     : {}),
@@ -766,15 +772,18 @@ const app = await buildApp({
     ? {
         customerWebhooks: {
           secret: env.CUSTOMER_WEBHOOK_SECRET!,
-          processor: new PostgresCustomerWebhookProcessor(
-            pool!,
-            new OzavClient({
+          mode: moneyModeFor(env),
+          processor: (() => {
+            const client = new OzavClient({
               apiKey: env.OZAV_API_KEY!,
               mode: moneyModeFor(env),
               attempts: 1,
               timeoutMs: 3000,
-            }), moneyModeFor(env),
-          ),
+            });
+            // transfer.* events re-read the transfer by GET and progress the purchase.
+            return new PostgresCustomerWebhookProcessor(pool!, client, moneyModeFor(env),
+              createPurchaseProgression(pool!, moneyModeFor(env), env, client));
+          })(),
         },
       }
     : {}),
