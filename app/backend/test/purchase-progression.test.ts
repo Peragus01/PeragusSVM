@@ -28,7 +28,7 @@ const pool={query,connect:async()=>{
 const wide={maxOpenGlobal:1000,limits:{minCents:1n,maxCents:1000000n}};
 const customers=new PostgresCustomerRepository(pool),purchases=new PostgresCustomerPurchaseIntentRepository(pool,"live",wide);
 const operator={id:randomUUID(),assuranceLevel:"aal2" as const},operators=new Set([operator.id]);
-const refunds=new ManualRefundService(pool,operators,true,"live",purchases);
+const refunds=new ManualRefundService(pool,operators,true,"live",true);
 const alerts=new OperatorAlertService(pool,operators,"live");
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
@@ -113,13 +113,63 @@ describe("PurchaseProgression.applyTransferObservation (GET is the only source o
   expect(systemRequestId(`system-${id}`)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect(systemRequestId(`system-${id}`)).not.toBe(systemRequestId(`system-refund-${id}`));
  });
- it("needs_review after payment moves to refund_pending and raises an alert record",async()=>{
+ it("OZAV needs_review after payment (non-terminal) moves to needs_review with an alert, never refund_pending",async()=>{
   const f=await fixture();f.paid("payment_confirmed");await f.refresh();
-  f.paid("needs_review");await f.refresh();
-  expect(await statusOf(f.p.id)).toBe("refund_pending");
-  expect((await eventsOf(f.p.id)).at(-1)).toMatchObject({from_status:"pix_confirmed",to_status:"refund_pending",actor:"system:reconciliation",reason:"PAYMENT_RECEIVED_TRANSFER_NEEDS_REVIEW"});
-  const listed=await alerts.list(operator,{kind:"all",limit:"50"});
-  expect(listed.data.filter(a=>a.purchase_intent_id===f.p.id).map(a=>a.kind)).toContain("refund_pending_review");
+  f.paid("needs_review");await f.refresh();await f.refresh();
+  expect(await statusOf(f.p.id)).toBe("needs_review");
+  expect((await eventsOf(f.p.id)).at(-1)).toMatchObject({from_status:"pix_confirmed",to_status:"needs_review",actor:"system:reconciliation",reason:"OZAV_TRANSFER_NEEDS_REVIEW"});
+  expect(await count("peragus_customer_refund_requests",f.p.id)).toBe(0);
+  const listed=await alerts.list(operator,{kind:"operation_review",limit:"50"});
+  expect(listed.data.some(a=>a.purchase_intent_id===f.p.id)).toBe(true);
+ });
+ it("resumes from OZAV needs_review when OZAV completes: awaiting_approval with exactly one withdrawal request",async()=>{
+  const f=await fixture();f.paid("payment_confirmed");await f.refresh();
+  f.paid("needs_review");await f.refresh();expect(await statusOf(f.p.id)).toBe("needs_review");
+  f.paid("completed",{destinationLegStatus:"completed"});await f.refresh();await f.refresh();
+  expect(await statusOf(f.p.id)).toBe("awaiting_approval");
+  expect(await count("peragus_customer_withdrawal_requests",f.p.id)).toBe(1);
+  expect((await eventsOf(f.p.id)).slice(-3).map(e=>[e.from_status,e.to_status])).toEqual([
+   ["pix_confirmed","needs_review"],["needs_review","converted"],["converted","awaiting_approval"]]);
+ });
+ it("OZAV needs_review then failed after payment goes to refund_pending",async()=>{
+  const f=await fixture();f.paid("needs_review");await f.refresh();expect(await statusOf(f.p.id)).toBe("needs_review");
+  f.paid("failed");await f.refresh();
+  expect(await statusOf(f.p.id)).toBe("refund_pending");expect(await count("peragus_customer_refund_requests",f.p.id)).toBe(1);
+  const listed=await alerts.list(operator,{kind:"refund_pending_review",limit:"50"});
+  expect(listed.data.some(a=>a.purchase_intent_id===f.p.id)).toBe(true);
+ });
+ it("never resumes a review that progression did not get from OZAV (lock outcome unknown, amount below lock)",async()=>{
+  const f=await fixture({create:"timeout"});f.setListed(f.awaiting.id);
+  await db.query("update peragus_customer_sandbox_pix set created_at=now()-interval '10 minutes' where id=$1",[f.pixId]);
+  await f.refresh();expect((await eventsOf(f.p.id)).at(-1)!.reason).toMatch(/^PIX_LOCK_OUTCOME_UNKNOWN/);
+  f.paid("completed",{destinationLegStatus:"completed"});await f.refresh();
+  expect(await statusOf(f.p.id)).toBe("needs_review");expect(await count("peragus_customer_withdrawal_requests",f.p.id)).toBe(0);
+  f.paid("failed");
+  expect(await f.progression.applyTransferObservation(f.p.id,{status:"failed",amountUsdt:null,sourceLegStatus:"completed"})).toBe("needs_review");
+  const g=await fixture();g.paid("completed",{destinationLegStatus:"completed",amounts:{source:{currency:"BRL",amount:"1000.00"},target:{currency:"USDT",amount:"1.000000"}}});
+  await g.refresh();expect((await eventsOf(g.p.id)).at(-1)!.reason).toMatch(/^CONVERTED_AMOUNT_BELOW_LOCK/);
+  expect(await g.progression.applyTransferObservation(g.p.id,{status:"completed",amountUsdt:"200.000000",sourceLegStatus:"completed"})).toBe("needs_review");
+  expect(await count("peragus_customer_withdrawal_requests",g.p.id)).toBe(0);
+ });
+ it("an expired operation whose transfer later completes raises pix_open_after_close (money in custody)",async()=>{
+  const deadline=new Date(Date.now()+60000).toISOString(),f=await fixture({facility:{...LOCKED,deadlineAt:deadline}});
+  vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(Date.parse(deadline)+1);
+  await f.refresh();expect(await statusOf(f.p.id)).toBe("expired");
+  vi.useRealTimers();
+  f.paid("completed",{destinationLegStatus:"completed"});await f.refresh();
+  expect(await statusOf(f.p.id)).toBe("expired");
+  const listed=await alerts.list(operator,{kind:"pix_open_after_close",limit:"50"});
+  expect(listed.data.find(a=>a.purchase_intent_id===f.p.id)).toMatchObject({severity:"high",pix_id:f.pixId});
+ });
+ it("refund completion fails explicitly when the operation is not refund_pending, and records nothing",async()=>{
+  const f=await fixture();f.paid("failed");await f.refresh();
+  const r=(await db.query<any>("select id from peragus_customer_refund_requests where purchase_intent_id=$1",[f.p.id])).rows[0];
+  await refunds.decide(operator,r.id,randomUUID(),"approved","Pix received, transfer failed at OZAV.");
+  // Operator moves the case back to review before the money was returned.
+  await purchases.transitionOperation(f.p.id,"needs_review","operator:test","refund on hold");
+  await expect(refunds.complete(operator,r.id,randomUUID(),"1000.00","manual-pix-return-0002")).rejects.toMatchObject({code:"REFUND_OPERATION_NOT_REFUND_PENDING"});
+  expect((await db.query("select count(*)::int n from peragus_manual_refund_completions where refund_request_id=$1",[r.id])).rows[0]).toEqual({n:0});
+  expect(await statusOf(f.p.id)).toBe("needs_review");
  });
  it("refund_pending creates exactly one manual refund request and completing it moves the operation to refunded",async()=>{
   const f=await fixture();f.paid("failed");

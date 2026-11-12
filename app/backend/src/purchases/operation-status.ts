@@ -60,7 +60,8 @@ const TRANSITIONS: Readonly<Record<OperationStatus, readonly OperationStatus[]>>
   approved: ["sending", "needs_review"],
   sending: ["sent", "needs_review"],
   sent: ["delivered_verified", "needs_review"],
-  needs_review: ["awaiting_approval", "refund_pending", "failed"],
+  // pix_confirmed/converted: resuming after OZAV's own (non-terminal) needs_review (048).
+  needs_review: ["pix_confirmed", "converted", "awaiting_approval", "refund_pending", "failed"],
   refund_pending: ["refunded", "needs_review"],
   delivered_verified: [],
   expired: [],

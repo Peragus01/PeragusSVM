@@ -44,7 +44,10 @@ export function systemRequestId(name: string): string {
   return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
 }
 const REFUND_REASON = "Automatic request: the Pix payment was received but the OZAV transfer did not complete.";
-const CLOSED = new Set(["failed", "cancelled", "expired", "needs_review"]);
+// OZAV terminal endings. Its needs_review is deliberately absent: it is not terminal.
+const CLOSED = new Set(["failed", "cancelled", "expired"]);
+/** The only needs_review reason progression may resume from (OZAV may still finish the transfer). */
+export const OZAV_REVIEW = "OZAV_TRANSFER_NEEDS_REVIEW";
 const PAID_PROGRESS = new Set(["payment_confirmed", "converting", "payout_initiated"]);
 // Funding stages this module moves forward; anything later belongs to the operator/send path.
 const RANK: Partial<Record<OperationStatus, number>> = {accepted: 0, awaiting_pix: 1, pix_confirmed: 2, converted: 3, awaiting_approval: 4};
@@ -77,48 +80,72 @@ export class PurchaseProgression {
    * awaiting_payment -> awaiting_pix (expired after min(Pix expiry, lock deadline)),
    * payment_confirmed|converting|payout_initiated -> pix_confirmed,
    * completed -> converted -> awaiting_approval (+ one system withdrawal request),
-   * failed|cancelled|expired|needs_review -> refund_pending when paid (+ one manual refund
-   * request), otherwise failed|expired|needs_review. Returns the resulting status.
+   * failed|cancelled|expired -> refund_pending when paid (+ one manual refund request),
+   * otherwise failed|expired; needs_review (non-terminal at OZAV) -> needs_review with
+   * reason OZAV_TRANSFER_NEEDS_REVIEW, the only review progression resumes from.
+   * Returns the resulting status.
    */
   async applyTransferObservation(purchaseId: string, observed: TransferObservation,
     actor: ProgressionActor = "system:reconciliation"): Promise<OperationStatus> {
     const ctx = await this.context(purchaseId);
     if (!ctx) throw new Error("PURCHASE_INTENT_NOT_FOUND");
     let status = ctx.status;
+    let rank = RANK[status];
     const move = async (to: OperationStatus, reason: string) => {
       await this.deps.operations.transitionOperation(purchaseId, to, actor, reason);
       status = to;
+      rank = RANK[to] ?? rank;
     };
     if (status === "refund_pending") return this.ensureRefund(purchaseId, ctx, actor);
-    const rank = RANK[status];
-    if (rank === undefined || TERMINAL_STATUSES.has(status)) return status;
     const s = observed.status;
-    const paid = observed.sourceLegStatus === "completed" || rank >= 2;
+    let paid: boolean;
+    if (status === "needs_review") {
+      // Resume ONLY a review that OZAV itself caused (its needs_review is non-terminal);
+      // every other review reason (lock unknown, amount below lock, ...) is the operator's.
+      const last = await this.deps.pool.query<{from_status: OperationStatus | null; reason: string}>(
+        "select from_status,reason from peragus_operation_status_events where purchase_id=$1 order by id desc limit 1", [purchaseId]);
+      const event = last.rows[0];
+      if (event?.reason !== OZAV_REVIEW || s === "needs_review") return status;
+      const prior = (event.from_status && RANK[event.from_status]) ?? 1;
+      paid = observed.sourceLegStatus === "completed" || prior >= 2;
+      rank = 1;
+    } else {
+      if (rank === undefined || TERMINAL_STATUSES.has(status)) return status;
+      paid = observed.sourceLegStatus === "completed" || rank >= 2;
+    }
     const closed = CLOSED.has(s);
 
     if (status === "accepted") {
       if (closed && !paid) {
-        await move(s === "expired" ? "expired" : s === "needs_review" ? "needs_review" : "failed", `PIX_TRANSFER_${s.toUpperCase()}_UNPAID`);
+        await move(s === "expired" ? "expired" : "failed", `PIX_TRANSFER_${s.toUpperCase()}_UNPAID`);
         return status;
       }
       if (this.e.mode === "live") {
         // The FX lock outcome exists only on the create response: GET cannot confirm it,
         // so instructions are never shown and an operator decides.
-        const age = ctx.pix_created_at ? Date.now() - new Date(ctx.pix_created_at).getTime() : 0;
+        if (!ctx.pix_created_at) throw new Error("PIX_CREATED_AT_MISSING");
+        const age = Date.now() - new Date(ctx.pix_created_at).getTime();
         if (age < (this.deps.ambiguousGraceMs ?? 120_000)) return status;
         await move("needs_review", `PIX_LOCK_OUTCOME_UNKNOWN: transfer_status=${s.slice(0, 40)}`);
         return status;
       }
+      if (s === "needs_review") { await move("needs_review", OZAV_REVIEW); return status; }
       if (s !== "awaiting_payment" && !paid) return status;
       await move("awaiting_pix", "pix_recovered_by_get");
     }
 
+    // OZAV needs_review is non-terminal (it may still complete): review, never refund.
+    if (s === "needs_review") {
+      await move("needs_review", OZAV_REVIEW);
+      return status;
+    }
     if (closed) {
       if (paid) {
         await move("refund_pending", `PAYMENT_RECEIVED_TRANSFER_${s.toUpperCase()}`);
         return this.ensureRefund(purchaseId, ctx, actor);
       }
-      await move(s === "expired" ? "expired" : s === "needs_review" ? "needs_review" : "failed", `PIX_TRANSFER_${s.toUpperCase()}_UNPAID`);
+      // needs_review has no edge to expired: an unpaid end of a resumed review is failed.
+      await move(s === "expired" && status !== "needs_review" ? "expired" : "failed", `PIX_TRANSFER_${s.toUpperCase()}_UNPAID`);
       return status;
     }
     if (s === "awaiting_payment") {
@@ -131,11 +158,11 @@ export class PurchaseProgression {
       return status;
     }
     if (PAID_PROGRESS.has(s)) {
-      if (RANK[status]! < 2) await move("pix_confirmed", `transfer_${s}`);
+      if (rank! < 2) await move("pix_confirmed", `transfer_${s}`);
       return status;
     }
     if (s === "completed") {
-      if (RANK[status]! < 3) {
+      if (rank! < 3) {
         const locked = ctx.locked_usdt_amount === null ? null : usdtMicroUnits(ctx.locked_usdt_amount);
         const amount = usdtMicroUnits(observed.amountUsdt);
         if (amount === null || (locked !== null && amount < locked) || (locked === null && this.e.mode === "live")) {
@@ -144,7 +171,7 @@ export class PurchaseProgression {
         }
         await move("converted", `transfer_completed: amount=${observed.amountUsdt} USDT`);
       }
-      if (RANK[status]! < 4) {
+      if (rank! < 4) {
         try {
           await this.deps.withdrawals.record(ctx.customer_id, systemRequestId(`system-${purchaseId}`), ctx.pix_id!);
         } catch (error) {
@@ -190,7 +217,7 @@ export class PurchaseProgression {
     const r = await this.deps.pool.query<{id: string; customer_id: string}>(`select id,customer_id from peragus_customer_sandbox_pix
       where environment='${this.e.mode}' and create_attempted and (provider_transfer_id=$1
        or ($2::uuid is not null and id=$2::uuid and provider_transfer_id is null)) order by provider_transfer_id nulls last limit 1`,
-      [transferId, pixHint && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pixHint) ? pixHint : null]);
+      [transferId, pixHint && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pixHint) ? pixHint : null]);
     const row = r.rows[0];
     if (!row) return "ignored";
     await this.refreshPix(row.customer_id, row.id, actor);

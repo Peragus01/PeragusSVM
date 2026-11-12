@@ -22,7 +22,7 @@ import {
 } from "./application/resolve-solana-contingency-reserve.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
-import { runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
+import { assertDatabaseEnvironment, runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
 import { moneyModeFor } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import { verifyDatabaseConnection } from "./database/readiness.js";
@@ -316,6 +316,8 @@ try {
   await startJobQueue(boss);
   await ensureSettlementQueues(boss);
   if(env.CUSTOMER_RECONCILIATION_ENABLED){
+    // Refuse to reconcile against a database recorded for the other money environment.
+    await assertDatabaseEnvironment(pool,moneyModeFor(env));
     // GET-only reads; each observation progresses the purchase (system:reconciliation).
     const progression=createPurchaseProgression(pool,moneyModeFor(env),env,new OzavClient({apiKey:env.OZAV_API_KEY!,mode:moneyModeFor(env),attempts:1,timeoutMs:10000}));
     await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!,moneyModeFor(env),undefined,progression),moneyModeFor(env)));

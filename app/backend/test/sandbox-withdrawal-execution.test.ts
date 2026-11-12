@@ -492,7 +492,9 @@ describe("owned operation detail",()=>{
 import {OperatorAlertService} from "../src/operations/operator-alerts.js";
 import {ManualRefundService} from "../src/refunds/manual-refunds.js";
 describe("stored operational alerts",()=>{
- beforeEach(async()=>{await db.exec("truncate peragus_customer_reconciliation,peragus_customer_refund_requests cascade");});
+ // Operations are cleared too: earlier tests leave operations expired with a completed Pix (and
+ // operations in review), which correctly raise pix_open_after_close/operation_review alerts.
+ beforeEach(async()=>{await db.exec("truncate peragus_customer_reconciliation,peragus_customer_refund_requests,peragus_customer_purchase_intents cascade");});
  async function alertApp(f:Awaited<ReturnType<typeof approvalFixture>>,identity:any=f.user,reader=new OperatorAlertService(pool,new Set([f.user.id]),"test")){
   const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},operatorAlertService:reader});apps.push(app);return app;
  }

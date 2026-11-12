@@ -1,6 +1,9 @@
 -- Adds accepted -> needs_review: a live Pix whose create was ambiguous (timeout,
 -- reduced response or refresh conflict) is recovered by GET, but the FX lock
 -- outcome exists only on the create response, so an operator must decide.
+-- Adds needs_review -> pix_confirmed and needs_review -> converted: OZAV's own
+-- needs_review is non-terminal, so the operation resumes when OZAV moves on
+-- (progression resumes only from reason OZAV_TRANSFER_NEEDS_REVIEW).
 -- Mirrors canTransition in src/purchases/operation-status.ts (a test compares
 -- every pair). CREATE OR REPLACE keeps the privileges revoked by 045.
 create or replace function peragus_operation_can_transition(from_status text, to_status text) returns boolean
@@ -16,7 +19,7 @@ create or replace function peragus_operation_can_transition(from_status text, to
   ('approved','sending'),('approved','needs_review'),
   ('sending','sent'),('sending','needs_review'),
   ('sent','delivered_verified'),('sent','needs_review'),
-  ('needs_review','awaiting_approval'),('needs_review','refund_pending'),('needs_review','failed'),
+  ('needs_review','pix_confirmed'),('needs_review','converted'),('needs_review','awaiting_approval'),('needs_review','refund_pending'),('needs_review','failed'),
   ('refund_pending','refunded'),('refund_pending','needs_review')
  ) t(f,t) where t.f=from_status and t.t=to_status)
 $$;

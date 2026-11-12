@@ -6,8 +6,6 @@ import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {authorizeWithdrawalOperator} from "../withdrawals/operator-approvals.js";
 import {OperationHistoryInputError,parseHistoryQuery} from "../purchases/customer-operation-history.js";
-import type {PurchaseIntentRepository} from "../purchases/customer-purchase-intents.js";
-
 export class ManualRefundError extends Error {constructor(public readonly code:string){super(code);}}
 function fail(code:string):never{throw new ManualRefundError(code);}
 const iso=(date:Date|string|null)=>date?new Date(date).toISOString():null;
@@ -49,13 +47,8 @@ function view(r:Row,e:RowEnvironment,operator=false){return {
 export class ManualRefundService {
  private readonly e:RowEnvironment;
  constructor(private readonly pool:Pick<Pool,"query">,private readonly operators:ReadonlySet<string>,private readonly enabled:boolean,mode:MoneyMode,
-  private readonly operations?:Pick<PurchaseIntentRepository,"transitionOperation">){this.e=rowEnvironment(mode);}
- /** A recorded manual refund closes a refund_pending operation as refunded. */
- private async settle(purchaseId:string,operatorId:string){
-  if(!this.operations)return;
-  const r=await this.pool.query<{status:string}>(`select status from peragus_customer_purchase_intents where id=$1 and environment='${this.e.mode}'`,[purchaseId]);
-  if(r.rows[0]?.status==="refund_pending")await this.operations.transitionOperation(purchaseId,"refunded",`operator:${operatorId}`,"manual_refund_recorded");
- }
+  /** true: a completion requires a refund_pending operation and moves it to refunded atomically. */
+  private readonly settleOperations=false){this.e=rowEnvironment(mode);}
  authorize(user:AuthenticatedUser){authorizeWithdrawalOperator(user,this.operators);}
  private writable(){if(!this.enabled)fail("MANUAL_REFUNDS_DISABLED");}
  private async one(where:string,args:unknown[]){const r=await this.pool.query<Row>(`${select} where r.environment='${this.e.mode}' and ${where}`,args);return r.rows[0]??null;}
@@ -121,13 +114,34 @@ export class ManualRefundService {
   if(prior.rows[0] && prior.rows[0].refund_request_id!==id)fail("REFUND_IDEMPOTENCY_CONFLICT");
   const before=await this.one("r.id=$1",[id]);if(!before)fail("REFUND_REQUEST_NOT_FOUND");
   if(cents(amount)>cents(before.amount_brl))fail("REFUND_AMOUNT_EXCEEDS_PAYMENT");
-  const inserted=await this.pool.query(`insert into peragus_manual_refund_completions(id,refund_request_id,customer_id,decision_id,operator_user_id,request_id,maximum_amount_brl,amount_brl,reference)
-   select $1,r.id,r.customer_id,d.id,$3,$4,r.amount_brl,$5,$6 from peragus_customer_refund_requests r
-   join peragus_manual_refund_decisions d on d.refund_request_id=r.id and d.customer_id=r.customer_id and d.decision='approved'
-   where r.id=$2 and not exists(select 1 from peragus_customers where owner_user_id=$3) on conflict do nothing returning id`,[randomUUID(),id,user.id,requestId,amount,reference]);
+  // With settleOperations the completion, the refund_pending -> refunded move and its status
+  // event are ONE statement (atomic); a completion is only recorded for a refund_pending operation.
+  const settle=this.settleOperations;
+  const inserted=await this.pool.query(`with p as (
+    select pi.id,pi.customer_id,pi.status from peragus_customer_purchase_intents pi
+    join peragus_customer_refund_requests rr on rr.purchase_intent_id=pi.id and rr.customer_id=pi.customer_id
+    where rr.id=$2 and pi.environment='${this.e.mode}' for update of pi
+   ), c as (
+    insert into peragus_manual_refund_completions(id,refund_request_id,customer_id,decision_id,operator_user_id,request_id,maximum_amount_brl,amount_brl,reference)
+    select $1,r.id,r.customer_id,d.id,$3,$4,r.amount_brl,$5,$6 from peragus_customer_refund_requests r
+    join peragus_manual_refund_decisions d on d.refund_request_id=r.id and d.customer_id=r.customer_id and d.decision='approved'
+    where r.id=$2 and not exists(select 1 from peragus_customers where owner_user_id=$3)
+     ${settle?"and exists(select 1 from p where p.status='refund_pending')":""}
+    on conflict do nothing returning id
+   ), u as (
+    update peragus_customer_purchase_intents set status='refunded'
+    where ${settle?"id in (select id from p) and exists(select 1 from c)":"false"} returning id,customer_id
+   ), ev as (
+    insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
+    select id,customer_id,'refund_pending','refunded',$7,'manual_refund_recorded','${this.e.mode}' from u
+   ) select id from c`,[randomUUID(),id,user.id,requestId,amount,reference,`operator:${user.id}`]);
   const row=(await this.one("r.id=$1",[id]))!;
   if(row.completion_operator===user.id && row.completion_request_id===requestId){if(row.returned_amount!==amount || row.reference!==reference)fail("REFUND_IDEMPOTENCY_CONFLICT");
-   await this.settle(row.purchase_intent_id,user.id);return {data:view(row,this.e,true),replayed:inserted.rows.length===0};}
+   return {data:view(row,this.e,true),replayed:inserted.rows.length===0};}
+  if(settle && !row.completion_id && row.decision==="approved"){
+   const op=await this.pool.query<{status:string}>(`select status from peragus_customer_purchase_intents where id=$1 and environment='${this.e.mode}'`,[row.purchase_intent_id]);
+   if(op.rows[0]?.status!=="refund_pending")fail("REFUND_OPERATION_NOT_REFUND_PENDING");
+  }
   fail(row.completion_id?"REFUND_ALREADY_RECORDED":row.decision!=="approved"?"REFUND_APPROVAL_REQUIRED":"REFUND_IDEMPOTENCY_CONFLICT");
  }
 }

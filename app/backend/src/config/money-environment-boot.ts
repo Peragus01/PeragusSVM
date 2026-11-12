@@ -5,7 +5,7 @@ export interface MoneyEnvironmentProbes {
   solanaGenesisHash(): Promise<string>;
 }
 
-type MismatchField = "ozav" | "solana_rpc" | "deployment";
+type MismatchField = "ozav" | "solana_rpc" | "deployment" | "database";
 
 const mismatch = (field: MismatchField): Error =>
   Object.assign(new Error("MONEY_ENVIRONMENT_MISMATCH"), {
@@ -39,6 +39,21 @@ export async function assertMoneyEnvironmentAtBoot(
 ): Promise<void> {
   await probe("ozav", probes.ozavEnvironment, money.mode);
   await probe("solana_rpc", probes.solanaGenesisHash, money.genesisHash);
+}
+
+/**
+ * Refuses to start when the database is recorded for another money environment
+ * (peragus_database_environment, migration 043). Missing or unreadable fails closed.
+ */
+export async function assertDatabaseEnvironment(
+  pool: { query(sql: string): Promise<{ rows: unknown[] }> },
+  mode: MoneyMode,
+): Promise<void> {
+  await probe("database", async () => {
+    const r = await pool.query("select environment from peragus_database_environment");
+    if (r.rows.length !== 1) throw new Error("DATABASE_ENVIRONMENT_UNRECORDED");
+    return String((r.rows[0] as { environment: unknown }).environment);
+  }, mode);
 }
 
 export interface MoneyEnvironmentBootDeps {

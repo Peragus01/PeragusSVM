@@ -6,8 +6,8 @@ import type {AuthenticatedUser} from '../auth/customer-access.js';
 import {authorizeWithdrawalOperator} from '../withdrawals/operator-approvals.js';
 
 // operation_review: a purchase operation in needs_review (e.g. live Pix with unknown lock outcome).
-// pix_open_after_close: the operation failed/expired but its OZAV transfer is still payable or was
-// paid (OZAV offers no transfer cancel endpoint, so an operator must follow it).
+// pix_open_after_close: the operation failed/expired but its OZAV transfer is still payable, was
+// paid or even completed (money in custody; OZAV offers no transfer cancel endpoint).
 const kind=z.enum(['reconciliation_review','reconciliation_stalled','withdrawal_uncertain','withdrawal_review','refund_pending_review','refund_approved','operation_review','pix_open_after_close']);
 const cursorSchema=z.object({priority:z.union([z.literal(0),z.literal(1)]),at:z.iso.datetime({precision:6}),id:z.string().uuid(),kind}).strict();
 export class OperatorAlertInputError extends Error {}
@@ -76,8 +76,8 @@ export class OperatorAlertService {
    from peragus_customer_sandbox_pix x
    join peragus_customer_purchase_intents p on p.id=x.purchase_intent_id and p.customer_id=x.customer_id
    where x.environment='${this.e.mode}' and p.status in ('failed','expired') and x.observation is not null
-    and (x.observation->>'status' in ('awaiting_payment','payment_confirmed','converting','payout_initiated','needs_review')
-     or (x.observation->>'status' in ('failed','cancelled','expired') and x.observation->>'sourceLegStatus'='completed'))
+    and (x.observation->>'status' in ('awaiting_payment','payment_confirmed','converting','payout_initiated','needs_review','completed')
+     or x.observation->>'sourceLegStatus'='completed')
     and not exists(select 1 from peragus_operation_status_events m where m.purchase_id=p.id and m.actor='system:migration_045')
   ) select id,kind,priority,
    to_char(recorded_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as recorded_at,

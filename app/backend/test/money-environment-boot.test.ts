@@ -4,7 +4,19 @@ import {
   MAINNET_GENESIS_HASH,
   resolveMoneyEnvironment,
 } from "../src/config/money-environment.js";
-import { assertMoneyEnvironmentAtBoot, runMoneyEnvironmentBootChecks } from "../src/config/money-environment-boot.js";
+import { assertDatabaseEnvironment, assertMoneyEnvironmentAtBoot, runMoneyEnvironmentBootChecks } from "../src/config/money-environment-boot.js";
+
+describe("assertDatabaseEnvironment", () => {
+  const db = (rows: unknown[] | Error) => ({ query: async () => { if (rows instanceof Error) throw rows; return { rows }; } });
+  it("passes when the recorded database environment equals the money mode", async () => {
+    await expect(assertDatabaseEnvironment(db([{ environment: "live" }]), "live")).resolves.toBeUndefined();
+    await expect(assertDatabaseEnvironment(db([{ environment: "test" }]), "test")).resolves.toBeUndefined();
+  });
+  it.each([[[{ environment: "test" }], "live"], [[{ environment: "live" }], "test"], [[], "live"], [new Error("private"), "test"]] as const)(
+    "refuses to start with MONEY_ENVIRONMENT_MISMATCH field database (%j, %s)", async (rows, mode) => {
+      await expect(assertDatabaseEnvironment(db(rows as unknown[] | Error), mode)).rejects.toMatchObject({ code: "MONEY_ENVIRONMENT_MISMATCH", field: "database" });
+    });
+});
 
 const live = resolveMoneyEnvironment({ PERAGUS_DEPLOYMENT_ENV: "production" });
 const test = resolveMoneyEnvironment({

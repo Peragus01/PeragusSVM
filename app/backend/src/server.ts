@@ -98,7 +98,7 @@ import {
 } from "./application/simulate-sandbox-pix-payment.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
-import { runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
+import { assertDatabaseEnvironment, runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
 import { moneyModeFor, providerKeyMatchesMode, resolveMoneyEnvironment } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import {
@@ -283,6 +283,10 @@ if (env.DATABASE_URL) {
 
   try {
     if (process.env.RAILWAY_ENVIRONMENT_NAME) await verifyDatabaseConnection(databasePool);
+    // The database must be recorded for this process's money mode.
+    if (process.env.RAILWAY_ENVIRONMENT_NAME || env.PERAGUS_DEPLOYMENT_ENV === "production") {
+      await assertDatabaseEnvironment(databasePool, moneyModeFor(env));
+    }
     await startJobQueue(jobQueue);
     await ensureSettlementQueues(jobQueue);
   } catch (error) {
@@ -547,11 +551,8 @@ const app = await buildApp({
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
           env.MANUAL_REFUNDS_ENABLED,
           moneyModeFor(env),
-          // Recording a refund closes a refund_pending operation as refunded.
-          new PostgresCustomerPurchaseIntentRepository(pool, moneyModeFor(env), {
-            maxOpenGlobal: env.PURCHASE_MAX_OPEN_GLOBAL,
-            limits: purchaseLimits(env),
-          }),
+          // Recording a refund requires and closes a refund_pending operation (atomically).
+          true,
         ),
       }
     : {}),
