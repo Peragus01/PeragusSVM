@@ -190,6 +190,8 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
     tokensRef.current = next;
     setTokens(next);
   }, []);
+  // A new challenge/verify also on an AAL2 session: GoTrue upserts the session's totp
+  // AMR claim (updated_at = now) and issues a token whose amr totp timestamp is fresh.
   const verifyOperatorMfa = useCallback(async (code: string) => {
     const current = tokensRef.current;
     const turn = generation.current;
@@ -237,6 +239,7 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
       throw new CustomerSessionError("SESSION_CHANGED", "A sessão mudou. Entre novamente.");
     tokensRef.current = next;
     setTokens(next);
+    return next.access_token;
   }, []);
   // Refresh in memory only. Reloading the page requires login again; no bearer or
   // refresh tokens are written to browser storage.

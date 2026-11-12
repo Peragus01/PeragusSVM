@@ -6,7 +6,9 @@ import {SandboxExecutionError,validateWithdrawal,type ExecutionContext,type Sand
 import type {WithdrawalObservation} from "../providers/ozav-sandbox-withdrawal.js";
 const eligible=(env:RowEnvironment)=>`select r.id as withdrawal_request_id,r.customer_id,a.id as approval_id,a.operator_user_id as approver_id,x.id as pix_id,
  x.provider_customer_id,x.provider_wallet_id,x.provider_quote_id,x.provider_transfer_id as funding_transfer_id,
- x.source_amount_brl as amount_brl,r.amount_usdt,r.wallet_address,r.wallet_verified_at as verified_at,a.created_at as approved_at
+ x.source_amount_brl as amount_brl,r.amount_usdt,r.wallet_address,r.wallet_verified_at as verified_at,a.created_at as approved_at,
+ -- Measured against the database clock (the same clock that wrote created_at).
+ extract(epoch from (now()-a.created_at))::float8 as approval_age_seconds
    from peragus_customer_withdrawal_requests r join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.amount_usdt=r.amount_usdt and a.wallet_address=r.wallet_address and a.environment='${env.mode}' and a.assurance_level='aal2' join peragus_customer_sandbox_pix x on x.id=r.pix_id and x.customer_id=r.customer_id and x.purchase_intent_id=r.purchase_intent_id join peragus_customer_purchase_intents p on p.id=x.purchase_intent_id and p.customer_id=x.customer_id join peragus_customer_indicative_quotes q on q.id=p.quote_id and q.customer_id=p.customer_id
    join peragus_customers c on c.id=q.customer_id and c.customer_type='pf' and not c.suspended
    join peragus_customer_onboarding_submissions s on s.customer_id=q.customer_id and s.environment='${env.mode}'
@@ -56,12 +58,13 @@ const eligible=(env:RowEnvironment)=>`select r.id as withdrawal_request_id,r.cus
 
 `;
 interface ContextRow {withdrawal_request_id:string;customer_id:string;approval_id:string;approver_id:string;pix_id:string;
- provider_customer_id:string;provider_wallet_id:string;provider_quote_id:string;funding_transfer_id:string;amount_brl:string;amount_usdt:string;wallet_address:string;verified_at:Date|string;approved_at?:Date|string|null;}
+ provider_customer_id:string;provider_wallet_id:string;provider_quote_id:string;funding_transfer_id:string;amount_brl:string;amount_usdt:string;wallet_address:string;verified_at:Date|string;approved_at?:Date|string|null;approval_age_seconds?:number|string|null;}
 interface Row extends ContextRow {id:string;operator_id:string;request_id:string;create_attempted:boolean;provider_send_id:string|null;observation:WithdrawalObservation|null;closed_at:Date|string|null;}
 const contextMap=(r:ContextRow):ExecutionContext=>({withdrawalId:r.withdrawal_request_id,customerId:r.customer_id,approvalId:r.approval_id,approverId:r.approver_id,pixId:r.pix_id,
  providerCustomerId:r.provider_customer_id,providerWalletId:r.provider_wallet_id,providerQuoteId:r.provider_quote_id,transferId:r.funding_transfer_id,
  amountBrl:r.amount_brl,amountUsdt:r.amount_usdt,walletAddress:r.wallet_address,verifiedAt:new Date(r.verified_at).toISOString(),
- ...(r.approved_at?{approvedAt:new Date(r.approved_at).toISOString()}:{})});
+ ...(r.approved_at?{approvedAt:new Date(r.approved_at).toISOString()}:{}),
+ ...(r.approval_age_seconds!=null?{approvalAgeSeconds:Number(r.approval_age_seconds)}:{})});
 const map=(r:Row):SandboxExecution=>({...contextMap(r),id:r.id,operatorId:r.operator_id,requestId:r.request_id,attempted:r.create_attempted,sendTransferId:r.provider_send_id,observation:r.observation,closedAt:r.closed_at?new Date(r.closed_at).toISOString():null});
 export class PostgresSandboxExecutionRepository implements SandboxExecutionRepository {
  private readonly e:RowEnvironment;

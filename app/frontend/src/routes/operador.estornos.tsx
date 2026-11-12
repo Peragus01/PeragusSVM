@@ -109,7 +109,7 @@ function OperatorQueue({
   verifyMfa,
 }: {
   token: string;
-  verifyMfa: (code: string) => Promise<void>;
+  verifyMfa: (code: string) => Promise<string>;
 }) {
   const [rows, setRows] = useState<OperatorRefund[]>([]);
   const [cursor, setCursor] = useState<string | undefined>();
@@ -230,6 +230,7 @@ function OperatorQueue({
           key={selected.id}
           token={token}
           record={selected}
+          verifyMfa={verifyMfa}
           onSaved={(value) => {
             setSelected(value);
             setRows((current) => current.map((row) => (row.id === value.id ? value : row)));
@@ -242,10 +243,12 @@ function OperatorQueue({
 function RefundDecision({
   token,
   record,
+  verifyMfa,
   onSaved,
 }: {
   token: string;
   record: OperatorRefund;
+  verifyMfa: (code: string) => Promise<string>;
   onSaved: (value: OperatorRefund) => void;
 }) {
   const [decision, setDecision] = useState<"approved" | "rejected">("rejected");
@@ -263,18 +266,21 @@ function RefundDecision({
     },
     [],
   );
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!confirmed || controller.current) return;
+  // OPERATOR_MFA_STALE: ask for a current TOTP, re-verify, then repeat the SAME request
+  // (same request_id) once with the new token. Never more than one automatic retry.
+  const [freshMfaNeeded, setFreshMfaNeeded] = useState(false);
+  const [freshCode, setFreshCode] = useState("");
+  const retried = useRef(false);
+  async function attempt(accessToken: string) {
+    const body = pending.current;
+    if (!body || controller.current) return;
     const abort = new AbortController();
     controller.current = abort;
     setBusy(true);
     setError("");
-    const body = pending.current ?? { id: crypto.randomUUID(), decision, reason: reason.trim() };
-    pending.current = body;
     try {
       const saved = await decideRefund(
-        token,
+        accessToken,
         record.id,
         body.id,
         body.decision,
@@ -283,16 +289,46 @@ function RefundDecision({
       );
       if (!abort.signal.aborted) onSaved(saved);
     } catch (err) {
-      if (!abort.signal.aborted)
+      if (!abort.signal.aborted) {
+        setFreshMfaNeeded(
+          err instanceof RefundError && err.code === "OPERATOR_MFA_STALE" && !retried.current,
+        );
         setError(
           err instanceof RefundError ? err.message : "Atualize a fila para consultar o resultado.",
         );
+      }
     } finally {
       if (!abort.signal.aborted) {
         controller.current = null;
         setBusy(false);
       }
     }
+  }
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!confirmed || controller.current) return;
+    pending.current ??= { id: crypto.randomUUID(), decision, reason: reason.trim() };
+    await attempt(token);
+  }
+  async function reverify(event: FormEvent) {
+    event.preventDefault();
+    if (controller.current || retried.current) return;
+    setBusy(true);
+    setError("");
+    let fresh: string;
+    try {
+      fresh = await verifyMfa(freshCode);
+    } catch {
+      setError("Não foi possível confirmar o autenticador. Use um código atual e tente novamente.");
+      setBusy(false);
+      return;
+    } finally {
+      setFreshCode("");
+    }
+    retried.current = true;
+    setFreshMfaNeeded(false);
+    setBusy(false);
+    await attempt(fresh);
   }
   return (
     <CustomerPanel title="Revisão do pedido">
@@ -311,6 +347,25 @@ function RefundDecision({
         <p>Devolução registrada: {formatAmount(record.returned_amount.amount, "BRL")}</p>
       )}
       {error && <CustomerNotice kind="warning">{error}</CustomerNotice>}
+      {freshMfaNeeded && (
+        <form onSubmit={(event) => void reverify(event)}>
+          <label className="customer-field">
+            Código atual do autenticador
+            <input
+              required
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              value={freshCode}
+              onChange={(event) => setFreshCode(event.target.value)}
+            />
+          </label>
+          <button className="customer-button" disabled={busy}>
+            Confirmar e repetir
+          </button>
+        </form>
+      )}
       {record.state === "pending_review" && (
         <form onSubmit={(event) => void submit(event)}>
           <label className="customer-field">

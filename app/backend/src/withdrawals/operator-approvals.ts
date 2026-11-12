@@ -11,7 +11,7 @@ export function authorizeWithdrawalOperator(user:AuthenticatedUser,operators:Rea
 /** Binding default: a money-moving operator action needs a TOTP verified at most 300 s ago. */
 export const OPERATOR_MFA_MAX_AGE_SECONDS=300;
 // Tolerated clock skew between the Auth server and this process.
-const MFA_FUTURE_SKEW_SECONDS=60;
+const MFA_FUTURE_SKEW_SECONDS=10;
 /**
  * Refuses (OPERATOR_MFA_STALE) unless the verified token carries a TOTP verification
  * (amr totp, epoch seconds) at most `maxAgeSeconds` old. Used for withdrawal approval

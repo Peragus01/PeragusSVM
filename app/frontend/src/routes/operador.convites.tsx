@@ -156,7 +156,7 @@ export function OperatorInviteArea({
   verifyMfaEnrollment,
 }: {
   token: string;
-  verifyMfa: (code: string) => Promise<void>;
+  verifyMfa: (code: string) => Promise<unknown>;
   enrollMfa?: () => Promise<OperatorMfaEnrollment>;
   verifyMfaEnrollment?: (factorId: string, code: string) => Promise<void>;
 }) {
@@ -178,7 +178,7 @@ export function InviteConsole({
   verifyMfaEnrollment,
 }: {
   token: string;
-  verifyMfa: (code: string) => Promise<void>;
+  verifyMfa: (code: string) => Promise<unknown>;
   enrollMfa?: () => Promise<OperatorMfaEnrollment>;
   verifyMfaEnrollment?: (factorId: string, code: string) => Promise<void>;
 }) {

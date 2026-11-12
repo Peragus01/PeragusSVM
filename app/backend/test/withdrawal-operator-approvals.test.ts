@@ -174,8 +174,9 @@ describe("fresh operator MFA",()=>{
   expect(()=>requireFreshMfa({...operator,mfaVerifiedAt:now-300},300,now)).not.toThrow();
   expect(()=>requireFreshMfa({...operator,mfaVerifiedAt:now},300,now)).not.toThrow();
  });
- it("a totp timestamp from the future is not fresh",()=>{
-  expect(()=>requireFreshMfa({...operator,mfaVerifiedAt:now+120},300,now)).toThrow("OPERATOR_MFA_STALE");
+ it("a totp timestamp more than 10 s in the future is not fresh",()=>{
+  expect(()=>requireFreshMfa({...operator,mfaVerifiedAt:now+11},300,now)).toThrow("OPERATOR_MFA_STALE");
+  expect(()=>requireFreshMfa({...operator,mfaVerifiedAt:now+10},300,now)).not.toThrow();
  });
  it("approval requires fresh MFA (403) and records nothing with a stale one",async()=>{
   const f=await approvalFixture(),stale={...f.user,mfaVerifiedAt:nowSeconds()-301};

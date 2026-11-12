@@ -130,14 +130,27 @@ async function executionFixture(policy:Partial<ExecutionPolicy>={minDelaySeconds
  return{...f,provider,repo,execution,policy,observed,sendId,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;}};
 }
 describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
- const approvedAtMs=async(withdrawalId:string)=>Date.parse((await approvalRepo.read(withdrawalId))!.createdAt);
+ // The delay is measured by the database clock: move the persisted approval back in time
+ // (the append-only guard is disabled only for this synthetic backdating).
+ const approvedSecondsAgo=async(withdrawalId:string,seconds:number)=>{
+  await db.exec("alter table peragus_withdrawal_operator_approvals disable trigger user");
+  try{await db.query("update peragus_withdrawal_operator_approvals set created_at=now()-make_interval(secs=>$2) where withdrawal_request_id=$1",[withdrawalId,seconds]);}
+  finally{await db.exec("alter table peragus_withdrawal_operator_approvals enable trigger user");}
+ };
  it("execution 899s after approval is refused; 900s passes",async()=>{
-  let clock=0;const f=await executionFixture({minDelaySeconds:900,now:()=>clock});
-  const approved=await approvedAtMs(f.wr.data.id),at=(ms:number)=>{clock=ms;return{...f.user,mfaVerifiedAt:Math.floor(ms/1000)};};
-  await expect(f.execution.execute(at(approved+899_000),f.wr.data.id,f.executionRequestId)).rejects.toThrow("EXECUTION_TOO_EARLY");
+  const f=await executionFixture({minDelaySeconds:900});
+  await approvedSecondsAgo(f.wr.data.id,899);
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("EXECUTION_TOO_EARLY");
   expect(f.sends()).toBe(0);expect(await f.repo.read(f.wr.data.id)).toBeNull();
-  const r=await f.execution.execute(at(approved+900_000),f.wr.data.id,f.executionRequestId);
+  await approvedSecondsAgo(f.wr.data.id,900);
+  const r=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
   expect(r.replayed).toBe(false);expect(f.sends()).toBe(1);
+ });
+ it("ignores the application clock for the delay (database clock only)",async()=>{
+  const f=await executionFixture({minDelaySeconds:900,now:()=>Date.now()+3_600_000});
+  const user={...f.user,mfaVerifiedAt:Math.floor(Date.now()/1000)+3600};
+  await expect(f.execution.execute(user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("EXECUTION_TOO_EARLY");
+  expect(f.sends()).toBe(0);
  });
  it("measures the delay from the persisted approval, not from the request",async()=>{
   const f=await executionFixture({minDelaySeconds:900});

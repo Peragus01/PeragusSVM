@@ -109,6 +109,10 @@ export class ManualRefundService {
  }
  private async decideOperation(q:Pick<Pool,"query">,user:AuthenticatedUser,purchaseId:string,requestId:string,reason:string){
   type Result={inserted:number;prior_purchase:string|null;prior_reason:string|null;status:string|null;customer_id:string|null;paid:boolean|null;withdrawal:boolean|null};
+  // Take the purchase row lock FIRST, in its own statement (same lock the withdrawal approval
+  // takes). The decision statement below then starts with a fresh READ COMMITTED snapshot,
+  // so every check in it sees an approval or execution that committed while we waited.
+  await q.query(`select id from peragus_customer_purchase_intents where id=$1 and environment='${this.e.mode}' for update`,[purchaseId]);
   const r=(await q.query<Result>(`with prior as (
      select purchase_id,reason from peragus_operator_refund_decisions where operator_user_id=$2 and request_id=$3
     ), p as (
@@ -144,7 +148,7 @@ export class ManualRefundService {
   }
   if(r.inserted!==1){
    if(!r.status)fail("REFUND_OPERATION_NOT_FOUND");
-   // `status` is the locked (latest) row: an approval committed while waiting shows as approved.
+   // Lock taken first, fresh snapshot: both the withdrawal check and the status are current.
    if(r.withdrawal || ["approved","sending","sent","delivered_verified"].includes(r.status))fail("REFUND_WITHDRAWAL_IN_PROGRESS");
    if(r.status==="refund_pending")fail("REFUND_ALREADY_PENDING");
    if(!r.paid)fail("REFUND_PAYMENT_NOT_CONFIRMED");

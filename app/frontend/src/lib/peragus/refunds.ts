@@ -54,6 +54,10 @@ export function refundErrorMessage(code: string) {
     REFUND_IDEMPOTENCY_CONFLICT:
       "Os dados diferem de um registro anterior. Consulte o pedido antes de continuar.",
     WITHDRAWAL_OPERATOR_MFA_REQUIRED: "Confirme o código do autenticador para acessar a análise.",
+    OPERATOR_MFA_STALE:
+      "Por segurança, confirme um código atual do autenticador para concluir esta ação.",
+    REFUND_WITHDRAWAL_IN_PROGRESS:
+      "A retirada desta operação já foi aprovada ou iniciada; o estorno não pode ser decidido.",
     AUTH_REQUIRED: "Entre novamente para continuar.",
     VALIDATION_ERROR:
       "Confira o motivo informado; use uma única linha com pelo menos 10 caracteres.",

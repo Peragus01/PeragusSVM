@@ -9,8 +9,10 @@ export interface ExecutionContext {
  withdrawalId:string;customerId:string;approvalId:string;approverId:string;pixId:string;
  providerCustomerId:string;providerWalletId:string;providerQuoteId:string;transferId:string;amountBrl:string;
  amountUsdt:string;walletAddress:string;verifiedAt:string;
- /** The approval's persisted created_at (database time); the execution delay counts from it. */
+ /** The approval's persisted created_at (database time). */
  approvedAt?:string;
+ /** Seconds since the persisted approval, computed by the database (now() - created_at). */
+ approvalAgeSeconds?:number;
 }
 /** Binding defaults: fresh TOTP <= 300 s, 900 s between approval and execution, four eyes off. */
 export const OPERATOR_EXECUTION_MIN_DELAY_SECONDS=900;
@@ -20,7 +22,7 @@ export interface ExecutionPolicy {
  minDelaySeconds:number;
  /** When true the executor must be a different operator from the approver. */
  fourEyes:boolean;
- /** Epoch milliseconds. */
+ /** Epoch milliseconds; used for MFA freshness only (the delay uses the database clock). */
  now:()=>number;
 }
 export const defaultExecutionPolicy=(policy:Partial<ExecutionPolicy>={}):ExecutionPolicy=>({mfaMaxAgeSeconds:OPERATOR_MFA_MAX_AGE_SECONDS,
@@ -65,10 +67,10 @@ export class SandboxWithdrawalExecutionService {
   const c=await this.repository.context(withdrawalId);if(!c)throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_PREREQUISITES_REQUIRED");
   if(!this.guard.isAllowed(c.approverId))throw new SandboxExecutionError("WITHDRAWAL_APPROVER_NO_LONGER_ALLOWED");
   if(this.policy.fourEyes && c.approverId.toLowerCase()===user.id.toLowerCase())throw new SandboxExecutionError("EXECUTION_REQUIRES_SECOND_OPERATOR");
-  // Counted from the approval timestamp persisted by the database, never from client input.
-  const approvedAt=c.approvedAt?Date.parse(c.approvedAt):Number.NaN;
-  if(!Number.isFinite(approvedAt))throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_PREREQUISITES_REQUIRED");
-  if(now-approvedAt<this.policy.minDelaySeconds*1000)throw new SandboxExecutionError("EXECUTION_TOO_EARLY");
+  // Elapsed time since the persisted approval, measured by the database clock; never client input.
+  const age=c.approvalAgeSeconds;
+  if(typeof age!=="number" || !Number.isFinite(age))throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_PREREQUISITES_REQUIRED");
+  if(age<this.policy.minDelaySeconds)throw new SandboxExecutionError("EXECUTION_TOO_EARLY");
   if(!PublicKey.isOnCurve(new PublicKey(c.walletAddress).toBytes()) || !Number.isFinite(Date.parse(c.verifiedAt)) || Date.parse(c.verifiedAt)>Date.now())throw new SandboxExecutionError("WITHDRAWAL_DESTINATION_INVALID");
   await this.provider.capabilities();
   const funding=await this.provider.funding.getTransfer(c.transferId);validatePixTransfer(c,funding);
