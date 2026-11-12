@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -194,7 +195,7 @@ const path = "/v1/me/quotes",
   headers = { authorization: "Bearer valid" };
 async function appFor(s: Awaited<ReturnType<typeof setup>>, enabled = true) {
   const app = await buildApp({
-    customerAccess: {
+    customerAccess: { legal: allAcceptedLegal,
       customers,
       authenticate: async (token) => {
         if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN");
@@ -603,7 +604,7 @@ describe("configured purchase range", () => {
   it("quote 999.99 and 1000.01 are rejected and 1000.00 accepted with default limits", async () => {
     const s = await setup(),
       app = await buildApp({
-        customerAccess: {
+        customerAccess: { legal: allAcceptedLegal,
           customers,
           authenticate: async () => ({ id: s.owner, email: "private@example.test" }),
         },

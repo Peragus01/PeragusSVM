@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { buildApp } from "../src/app.js";
@@ -30,7 +31,7 @@ async function setup() {
     return { id: token === "alice" ? alice : bob, email: `${token}@example.test` };
   });
   const provider = vi.fn(async () => { throw new Error("Provider must not run"); });
-  const app = await buildApp({ customerAccess: { customers, authenticate }, settlementRepository: repository,
+  const app = await buildApp({ customerAccess: { legal: allAcceptedLegal, customers, authenticate }, settlementRepository: repository,
     sandboxPixPaymentSimulator: { execute: provider },
   });
   apps.push(app);

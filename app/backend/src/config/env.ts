@@ -227,6 +227,8 @@ const envSchema = z
     SOLANA_USDT_MINT: z.string().min(32).max(44).optional(),
     // JSON {"terms":{"version","sha256"},"privacy":{...},"refund":{...}}; shape is
     // validated below, and the server refuses to start customer access without it.
+    // Reverse-proxy hops in front of the API (Railway: 1). request.ip honors exactly this many.
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(2).default(0),
     LEGAL_REQUIRED_DOCUMENTS: z.string().min(1).optional(),
     OZAV_ONRAMP_WRITES_ENABLED: z
       .enum(["true", "false"])

@@ -823,6 +823,7 @@ const app = await buildApp({
   ...(env.INVITE_EMAIL_OUTBOX_ENABLED && env.INVITE_EMAIL_WEBHOOK_SECRET
     ? { inviteDelivery: { secret: env.INVITE_EMAIL_WEBHOOK_SECRET, service: new InviteEmailDelivery(pool!, moneyModeFor(env)) } }
     : {}),
+  trustProxyHops: env.TRUST_PROXY_HOPS,
   customerAccess: {
     authenticate,
     customers: new PostgresCustomerRepository(pool!),

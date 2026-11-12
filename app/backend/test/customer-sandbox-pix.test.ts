@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from "node:crypto";
 import {Keypair} from "@solana/web3.js";
 import {readFile,readdir} from "node:fs/promises";
@@ -46,7 +47,7 @@ async function setup(type:"pf"|"pj"="pf"){
  return{owner,customer,provider,terms,wallet,quoteId:actualQuoteId,makeQuote,requestId:randomUUID()};
 }
 async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
 }
 const path="/v1/me/purchase-intents",headers={authorization:"Bearer valid"};
 
@@ -174,7 +175,7 @@ describe("customer-owned sandbox Pix",()=>{
  });
  it("requires simulation flag, auth and an empty body on the owned simulation route",async()=>{
   const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id),url=`/v1/me/sandbox-pix/${charge.data.id}/simulate`;
-  const access={customers,authenticate:async()=>({id:f.s.owner})};
+  const access={legal:allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner})};
   const disabled=await buildApp({customerAccess:access,customerSandboxPixService:f.pix});apps.push(disabled);
   expect((await disabled.inject({method:"POST",url,headers})).statusCode).toBe(503);
   const app=await buildApp({customerAccess:access,customerSandboxPixService:f.pix,customerSandboxPixSimulationEnabled:true});apps.push(app);
@@ -201,7 +202,7 @@ describe("customer-owned sandbox Pix",()=>{
  });
  it("serves the same routes under the v1/me/pix alias",async()=>{
   const f=await fixture();
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner})},customerSandboxPixService:f.pix});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner})},customerSandboxPixService:f.pix});apps.push(app);
   const r=await app.inject({method:"POST",url:"/v1/me/pix",headers,payload:{request_id:f.requestId,purchase_intent_id:f.p.data.id}});
   expect(r.statusCode).toBe(201);expect(r.headers.location).toBe(`/v1/me/pix/${r.json().data.id}`);
   expect((await app.inject({method:"GET",url:`/v1/me/pix/${r.json().data.id}`,headers})).json().data.id).toBe(r.json().data.id);
@@ -210,7 +211,7 @@ describe("customer-owned sandbox Pix",()=>{
  });
  it("hides expired instructions, and route requires auth, enabled flag and strict input",async()=>{
   const f=await fixture();f.transfer.source.paymentInstructions!.expiresAt=new Date(Date.now()-1000).toISOString();
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner})},customerSandboxPixService:f.pix});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner})},customerSandboxPixService:f.pix});apps.push(app);
   const url="/v1/me/sandbox-pix";
   expect((await app.inject({method:"POST",url,payload:{}})).statusCode).toBe(401);
   expect((await app.inject({method:"POST",url,headers,payload:{request_id:f.requestId,purchase_intent_id:f.p.data.id,amount:"1.00"}})).statusCode).toBe(400);

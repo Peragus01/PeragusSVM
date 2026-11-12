@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Writable } from "node:stream";
@@ -86,7 +87,7 @@ async function setup(type: "pf" | "pj" = "pf") {
 }
 const path = "/v1/me/onboarding/terms", headers = { authorization: "Bearer valid" };
 async function appFor(s: Awaited<ReturnType<typeof setup>>, enabled = true, output?: Writable) {
-  const app = await buildApp({ customerAccess: { customers, authenticate: async token => {
+  const app = await buildApp({ customerAccess: { legal: allAcceptedLegal, customers, authenticate: async token => {
     if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN"); return { id: s.owner, email: "private@example.test" };
   } }, ...(enabled ? { customerTermsService: s.service } : {}), ...(output ? { logger: { level: "debug", stream: output } } : {}) });
   apps.push(app); return app;

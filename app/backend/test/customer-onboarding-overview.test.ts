@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {Keypair} from "@solana/web3.js";
 import {randomUUID} from "node:crypto";
 import {readdir,readFile} from "node:fs/promises";
@@ -40,7 +41,7 @@ async function seed(s:Awaited<ReturnType<typeof setup>>){
 }
 const path="/v1/me/onboarding/status",headers={authorization:"Bearer valid"};
 async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerOnboardingOverview:service}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerOnboardingOverview:service}:{})});apps.push(app);return app;
 }
 describe("stored onboarding overview",()=>{
  it("returns missing stages without provider calls, keys, decryption or writes",async()=>{
@@ -111,7 +112,7 @@ describe("stored onboarding overview",()=>{
   const s=await setup();await seed(s);await db.query("update peragus_customer_verifications set provider_customer_id='ozav_cus_wrong' where customer_id=$1",[s.customer.id]);
   const r=await (await appFor(s)).inject({method:"GET",url:path,headers});expect(r.statusCode).toBe(503);expect(r.body).not.toContain("ozav_cus_wrong");
   const broken=new CustomerOnboardingOverview({read:async()=>{throw new Error("postgres password=secret");}},actions);
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:s.owner,email:"private@example.test"})},customerOnboardingOverview:broken});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:s.owner,email:"private@example.test"})},customerOnboardingOverview:broken});apps.push(app);
   const err=await app.inject({method:"GET",url:path,headers});expect(err.statusCode).toBe(503);expect(err.body).not.toContain("password");
  });
 });

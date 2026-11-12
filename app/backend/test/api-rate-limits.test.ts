@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
@@ -34,7 +35,7 @@ async function setup(rate=limiter()){
   if(token==='bad')throw new AuthenticationError('INVALID_TOKEN');
   return {id:token==='bob'?bob:alice,email:'synthetic@example.test'};
  });
- const app=await buildApp({customerAccess:{customers,authenticate},apiRateLimiter:rate});
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate},apiRateLimiter:rate});
  const handler=customers.createOrGet;
  apps.push(app);return {app,customers,authenticate,handler};
 }
@@ -115,7 +116,7 @@ it('does not replace customer ownership and role separation with a quota',async(
 });
 it('keeps existing behavior when the limiter is not configured',async()=>{
  const customers={findByOwner:async()=>null} as unknown as CustomerRepository;
- const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:alice,email:'synthetic@example.test'})}});
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:alice,email:'synthetic@example.test'})}});
  apps.push(app);
  await seed(alice);
  const response=await app.inject({url:'/v1/me',headers:headers()});

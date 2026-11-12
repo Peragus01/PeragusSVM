@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {SandboxWithdrawalRecoveryService,createSandboxRecoveryReader} from "../src/withdrawals/sandbox-recovery.js";
 import {OperatorWithdrawalAuditService} from "../src/withdrawals/operator-withdrawal-audit.js";
 import {OperatorWithdrawalQueueService} from "../src/withdrawals/operator-withdrawal-queue.js";
@@ -51,7 +52,7 @@ async function setup(type:"pf"|"pj"="pf"){
  return{owner,customer,provider,terms,wallet,quoteId:actualQuoteId,makeQuote,requestId:randomUUID()};
 }
 async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
 }
 const path="/v1/me/purchase-intents",headers={authorization:"Bearer valid"};
 
@@ -95,7 +96,7 @@ async function completedFixture(quoteTarget?:string){
  return{...f,pixId:charge.data.id,withdrawalRequestId:randomUUID()};
 }
 async function withdrawalApp(f:Awaited<ReturnType<typeof completedFixture>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:f.s.owner};}},...(enabled?{customerWithdrawalRequestService:withdrawals}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:f.s.owner};}},...(enabled?{customerWithdrawalRequestService:withdrawals}:{})});apps.push(app);return app;
 }
 const withdrawalPath="/v1/me/withdrawal-requests";
 
@@ -111,7 +112,7 @@ async function approvalFixture(quoteTarget?:string){
  return{...f,wr,user,approvals,approvalRequestId:randomUUID(),reason:"Reviewed the completed sandbox conversion and verified destination."};
 }
 async function approvalApp(f:Awaited<ReturnType<typeof approvalFixture>>,identity=f.user,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},...(enabled?{withdrawalOperatorApprovalService:f.approvals}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},...(enabled?{withdrawalOperatorApprovalService:f.approvals}:{})});apps.push(app);return app;
 }
 
 import {PostgresSandboxExecutionRepository} from "../src/repositories/postgres-sandbox-withdrawal-execution.js";
@@ -169,7 +170,7 @@ describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
  it("measures the delay from the persisted approval, not from the request",async()=>{
   const f=await executionFixture({minDelaySeconds:900});
   await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("EXECUTION_TOO_EARLY");
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
   const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"},payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
   expect(r.statusCode).toBe(409);expect(r.json().error.code).toBe("EXECUTION_TOO_EARLY");expect(f.sends()).toBe(0);
  });
@@ -190,7 +191,7 @@ describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
  it("execution requires a fresh TOTP (403) and sends nothing with a stale one",async()=>{
   const f=await executionFixture(),stale={...f.user,mfaVerifiedAt:Math.floor(Date.now()/1000)-301};
   await expect(f.execution.execute(stale,f.wr.data.id,f.executionRequestId)).rejects.toThrow("OPERATOR_MFA_STALE");
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>stale},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>stale},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
   const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"},payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
   expect(r.statusCode).toBe(403);expect(r.json().error.code).toBe("OPERATOR_MFA_STALE");expect(f.sends()).toBe(0);
   // Reads stay available at AAL2 without a fresh TOTP.
@@ -204,7 +205,7 @@ describe("approved sandbox withdrawal execution",()=>{
   f.setFound(f.sendId);f.provider.transfer=async()=>({...f.observed,targetAmount:null});
   const recovery=new SandboxWithdrawalRecoveryService(f.repo,{find:f.provider.find,transfer:f.provider.transfer},new Set([f.user.id]));
   expect(recovery).not.toHaveProperty("execute");
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalRecoveryService:recovery});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalRecoveryService:recovery});apps.push(app);
   const path=`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers={authorization:"Bearer valid"};
   const before=await app.inject({method:"GET",url:path,headers});
   expect(before.statusCode).toBe(200);expect(before.json().data.recovery_required).toBe(true);
@@ -232,7 +233,7 @@ describe("approved sandbox withdrawal execution",()=>{
   expect(await recovery.read(f.user,f.wr.data.id)).toMatchObject({state:"uncertain",recovery_required:true});
   await expect(recovery.read({id:f.user.id},f.wr.data.id)).rejects.toThrow("WITHDRAWAL_OPERATOR_MFA_REQUIRED");
   await expect(recovery.read({id:randomUUID(),assuranceLevel:"aal2"},f.wr.data.id)).rejects.toThrow("WITHDRAWAL_OPERATOR_REQUIRED");
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner,assuranceLevel:"aal2"})},sandboxWithdrawalRecoveryService:recovery});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner,assuranceLevel:"aal2"})},sandboxWithdrawalRecoveryService:recovery});apps.push(app);
   const denied=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution/reconcile`,headers:{authorization:"Bearer valid"}});
   expect(denied.statusCode).toBe(403);expect(denied.json().error.code).toBe("OPERATOR_ACCOUNT_SEPARATION_REQUIRED");
   expect(f.sends()).toBe(1);
@@ -249,7 +250,7 @@ describe("approved sandbox withdrawal execution",()=>{
   await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
   const approved=await audit.read(f.user,f.wr.data.id);
   expect(approved.approval).toMatchObject({operator_user_id:f.user.id,reason:f.reason,assurance_level:"aal2"});
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:audit});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:audit});apps.push(app);
   const response=await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`,headers:{authorization:"Bearer valid"}});
   expect(response.statusCode).toBe(200);expect(response.headers["cache-control"]).toBe("no-store");
   expect(response.json().data.execution_authorized).toBe(false);
@@ -271,11 +272,11 @@ describe("approved sandbox withdrawal execution",()=>{
  it("blocks audit without MFA or role and rejects customer-role overlap",async()=>{
   const f=await approvalFixture(),audit=new OperatorWithdrawalAuditService(pool,new Set([f.user.id,f.s.owner]),"test");
   for(const [identity,code] of [[{id:f.user.id},"WITHDRAWAL_OPERATOR_MFA_REQUIRED"],[{id:randomUUID(),assuranceLevel:"aal2"},"WITHDRAWAL_OPERATOR_REQUIRED"],[{id:f.s.owner,assuranceLevel:"aal2"},"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"]] as const){
-   const app=await buildApp({customerAccess:{customers,authenticate:async()=>identity},operatorWithdrawalAuditService:audit});apps.push(app);
+   const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>identity},operatorWithdrawalAuditService:audit});apps.push(app);
    const response=await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`,headers:{authorization:"Bearer valid"}});
    expect(response.statusCode).toBe(403);expect(response.json().error.code).toBe(code);
   }
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>{throw new AuthenticationError("INVALID_TOKEN");}},operatorWithdrawalAuditService:audit});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>{throw new AuthenticationError("INVALID_TOKEN");}},operatorWithdrawalAuditService:audit});apps.push(app);
   expect((await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`})).statusCode).toBe(401);
  });
  it("reports historical binding mismatch and rejects unknown IDs, selectors and private DB errors",async()=>{
@@ -290,19 +291,19 @@ describe("approved sandbox withdrawal execution",()=>{
   await db.query("update peragus_customer_withdrawal_requests set amount_usdt='99999999999999.000001' where id=$1",[f.wr.data.id]);
   await db.query("update peragus_customer_sandbox_pix set observation=jsonb_set(observation,'{amounts,target,amount}','\"99999999999999.000002\"') where id=$1",[f.pixId]);
   expect((await audit.read(f.user,f.wr.data.id)).integrity.converted_amount_matches).toBe(false);
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:audit});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:audit});apps.push(app);
   for(const [url,code] of [[`/v1/admin/withdrawal-requests/${randomUUID()}/audit`,404],["/v1/admin/withdrawal-requests/invalid/audit",400],[`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit?refresh=true`,400]] as const){
    const response=await app.inject({method:"GET",url,headers:{authorization:"Bearer valid"}});
    expect(response.statusCode).toBe(code);expect(response.headers["cache-control"]).toBe("no-store");
   }
   const broken=new OperatorWithdrawalAuditService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,new Set([f.user.id]),"test");
-  const brokenApp=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:broken});apps.push(brokenApp);
+  const brokenApp=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},operatorWithdrawalAuditService:broken});apps.push(brokenApp);
   const response=await brokenApp.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/audit`,headers:{authorization:"Bearer valid"}});
   expect(response.statusCode).toBe(503);expect(response.body).not.toContain("PRIVATE_DATABASE_PASSWORD");
  });
  it("lists pending operator withdrawals with MFA while approval and sends stay disabled",async()=>{
   const f=await approvalFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id]),"test");
-  const stats=f.stats(),app=await buildApp({customerAccess:{customers,authenticate:async token=>{
+  const stats=f.stats(),app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{
    if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return f.user;
   }},operatorWithdrawalQueueService:queue});apps.push(app);
   const response=await app.inject({method:"GET",url:"/v1/admin/withdrawal-requests",headers:{authorization:"Bearer valid"}});
@@ -318,7 +319,7 @@ describe("approved sandbox withdrawal execution",()=>{
  it("blocks operator queue without MFA, revoked roles and customer-role overlap",async()=>{
   const f=await approvalFixture(),queue=new OperatorWithdrawalQueueService(pool,new Set([f.user.id,f.s.owner]),"test");
   for(const [identity,code] of [[{id:f.user.id},"WITHDRAWAL_OPERATOR_MFA_REQUIRED"],[{id:randomUUID(),assuranceLevel:"aal2"},"WITHDRAWAL_OPERATOR_REQUIRED"],[{id:f.s.owner,assuranceLevel:"aal2"},"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"]] as const){
-   const app=await buildApp({customerAccess:{customers,authenticate:async()=>identity},operatorWithdrawalQueueService:queue});apps.push(app);
+   const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>identity},operatorWithdrawalQueueService:queue});apps.push(app);
    const response=await app.inject({method:"GET",url:"/v1/admin/withdrawal-requests",headers:{authorization:"Bearer valid"}});
    expect(response.statusCode).toBe(403);expect(response.json().error.code).toBe(code);
   }
@@ -343,20 +344,20 @@ describe("approved sandbox withdrawal execution",()=>{
   const second=await queue.list(f.user,{state:"all",limit:"1",cursor:first.meta.next_cursor!});
   expect([first.data[0]!.id,second.data[0]!.id]).toEqual(expected);
   expect(first.data[0]!.created_at).toBe("2200-01-01T00:00:00.123456Z");
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalQueueService:queue});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},operatorWithdrawalQueueService:queue});apps.push(app);
   for(const query of ["state=unknown","limit=51","cursor=invalid","customer_id="+f.s.customer.id]){
    const response=await app.inject({method:"GET",url:"/v1/admin/withdrawal-requests?"+query,headers:{authorization:"Bearer valid"}});
    expect(response.statusCode).toBe(400);expect(response.headers["cache-control"]).toBe("no-store");
   }
   const broken=new OperatorWithdrawalQueueService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,new Set([f.user.id]),"test");
-  const brokenApp=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},operatorWithdrawalQueueService:broken});apps.push(brokenApp);
+  const brokenApp=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},operatorWithdrawalQueueService:broken});apps.push(brokenApp);
   const failure=await brokenApp.inject({method:"GET",url:"/v1/admin/withdrawal-requests",headers:{authorization:"Bearer valid"}});
   expect(failure.statusCode).toBe(503);expect(failure.body).not.toContain("PRIVATE_DATABASE_PASSWORD");
  });
  it("lists only owned operations with write gates off and no provider refresh",async()=>{
   const f=await executionFixture(),other=await executionFixture();
   const history=new CustomerOperationHistoryService(pool,"test"),stats=f.stats(),reads=f.identityReads();
-  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{
    if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");
    return{id:f.s.owner,email:"synthetic@example.test"};
   }},customerOperationHistoryService:history});apps.push(app);
@@ -411,7 +412,7 @@ describe("approved sandbox withdrawal execution",()=>{
   await db.query("update peragus_customer_sandbox_pix set observation=jsonb_set(observation,'{destinationLegStatus}','\"pending\"') where id=$1",[f.pixId]);
   expect((await history.list(f.s.customer.id,parseHistoryQuery({}))).data[0]).toMatchObject({stage:"pix",converted_target:null,pix:{conversion_completed:false}});
   const broken=new CustomerOperationHistoryService({query:async()=>{throw Error("PRIVATE_DATABASE_PASSWORD");}} as any,"test");
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner})},customerOperationHistoryService:broken});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner})},customerOperationHistoryService:broken});apps.push(app);
   const response=await app.inject({method:"GET",url:"/v1/me/operations",headers:{authorization:"Bearer valid"}});
   expect(response.statusCode).toBe(503);expect(response.headers["cache-control"]).toBe("no-store");
   expect(response.body).not.toContain("PRIVATE_DATABASE_PASSWORD");
@@ -419,7 +420,7 @@ describe("approved sandbox withdrawal execution",()=>{
  it("serves owned stored results while all write services are disabled",async()=>{
   const f=await executionFixture();await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
   const reads=new CustomerWithdrawalResultService(pool,"test");
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner,email:"synthetic@example.test"})},customerWithdrawalResultService:reads});
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner,email:"synthetic@example.test"})},customerWithdrawalResultService:reads});
   apps.push(app);
   const path=`/v1/me/withdrawal-requests/${f.wr.data.id}/result`;
   const response=await app.inject({method:"GET",url:path,headers:{authorization:"Bearer valid"}});
@@ -502,7 +503,7 @@ describe("approved sandbox withdrawal execution",()=>{
   const replay=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);expect(replay.data.recovery_required).toBe(true);expect(f.sends()).toBe(1);
  });
  it("gates execution route, rejects selectors and never echoes provider or identity errors",async()=>{
-  const f=await executionFixture(),url=`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,access={customers,authenticate:async()=>f.user};
+  const f=await executionFixture(),url=`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,access={legal:allAcceptedLegal,customers,authenticate:async()=>f.user};
   const app=await buildApp({customerAccess:access,sandboxWithdrawalExecutionService:f.execution});apps.push(app);
   expect((await app.inject({method:"POST",url,payload:{}})).statusCode).toBe(401);
   for(const payload of [{request_id:f.executionRequestId},{request_id:f.executionRequestId,confirmation:"LIVE"},{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY",amount:"1"}])expect((await app.inject({method:"POST",url,headers,payload})).statusCode).toBe(400);
@@ -569,13 +570,13 @@ describe("live USDT send with destination identification (Task 10)",()=>{
   expect(reads).toBe(1);expect(f.sends()).toBe(1);
   const alerts=await new OperatorAlertService(pool,new Set([f.user.id]),"test").list(f.user,{limit:"50"});
   expect(alerts.data.filter(a=>a.purchase_intent_id===f.p.data.id).map(a=>a.kind).sort()).toEqual(["operation_review","withdrawal_review"]);
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
   const read=await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers});
   expect(read.json().data).toMatchObject({state:"provider_refused",provider_refusal_code:"TRAVEL_RULE_REQUIRED"});
  });
  it("asks for the confirmation literal of the configured money mode before executing",async()=>{
   const f=await executionFixture();f.provider.mode="live";
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
   const url=`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`;
   const wrong=await app.inject({method:"POST",url,headers,payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
   expect(wrong.statusCode).toBe(400);expect(f.calls).toEqual([]);expect(await operationStatus(f.p.data.id)).toBe("approved");
@@ -584,7 +585,7 @@ describe("live USDT send with destination identification (Task 10)",()=>{
  });
  it("answers a definitive refusal on the route with 409 and the provider code",async()=>{
   const f=await executionFixture();f.setMode("travel_rule");
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
   const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers,payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
   expect(r.statusCode).toBe(409);expect(r.json().error).toMatchObject({code:"WITHDRAWAL_SEND_REFUSED",provider_code:"TRAVEL_RULE_REQUIRED",automatic_retry:false});
   expect(f.sends()).toBe(1);
@@ -619,7 +620,7 @@ describe("live USDT send with destination identification (Task 10)",()=>{
   expect(await operationStatus(f.p.data.id)).toBe("approved");
   const history=new CustomerOperationHistoryService(pool,"test");
   expect((await history.get(f.s.customer.id,f.p.data.id))!.withdrawal).toMatchObject({state:"approved",destination_blocker:"DESTINATION_TOKEN_ACCOUNT_MISSING"});
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
   const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers,payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
   expect(r.statusCode).toBe(409);expect(r.json().error.code).toBe("DESTINATION_TOKEN_ACCOUNT_MISSING");
   f.setTokenAccount(new Error("private rpc failure"));
@@ -863,7 +864,7 @@ describe("send hardening (Task 11, ruling 28)",()=>{
   f.provider.identifyDestination=async()=>{throw new OzavClientError("private identification failure",false,422);};
   const error=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId).catch(e=>e);
   expect(error).toMatchObject({code:"DESTINATION_IDENTIFICATION_FAILED",providerStatus:422});
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
   const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers,payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
   expect(r.statusCode).toBe(409);expect(r.json().error).toMatchObject({code:"DESTINATION_IDENTIFICATION_FAILED",provider_http_status:422,automatic_retry:false});
   expect(r.body).not.toContain("private identification failure");expect(f.sends()).toBe(0);
@@ -885,7 +886,7 @@ describe("owned operation detail",()=>{
   const recent=await history.list(f.s.customer.id,parseHistoryQuery({limit:"1"}));
   expect(recent.data.map(row=>row.id)).not.toContain(f.p.data.id);
   const stats=f.stats();
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner})},customerOperationHistoryService:history});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner})},customerOperationHistoryService:history});apps.push(app);
   const response=await app.inject({method:"GET",url:`/v1/me/operations/${f.p.data.id}`,headers});
   expect(response.statusCode).toBe(200);expect(response.headers["cache-control"]).toBe("no-store");
   const listed=(await history.list(f.s.customer.id,parseHistoryQuery({}))).data.find(row=>row.id===f.p.data.id);
@@ -897,7 +898,7 @@ describe("owned operation detail",()=>{
  });
  it("uses identical 404s for foreign and missing records and rejects selectors and invalid IDs",async()=>{
   const f=await completedFixture(),other=await setup(),history=new CustomerOperationHistoryService(pool,"test");
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:other.owner})},customerOperationHistoryService:history});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:other.owner})},customerOperationHistoryService:history});apps.push(app);
   const foreign=await app.inject({method:"GET",url:`/v1/me/operations/${f.p.data.id}`,headers});
   const missing=await app.inject({method:"GET",url:`/v1/me/operations/${randomUUID()}`,headers});
   expect(foreign.statusCode).toBe(404);expect(foreign.json()).toEqual({error:{code:"OPERATION_NOT_FOUND"}});
@@ -913,7 +914,7 @@ describe("owned operation detail",()=>{
  it("rejects PJ and suspended profiles and hides private repository errors",async()=>{
   const pj=await setup("pj"),f=await completedFixture(),history=new CustomerOperationHistoryService(pool,"test");
   const appFor=async(owner:string,reader=history)=>{
-   const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:owner})},customerOperationHistoryService:reader});apps.push(app);return app;
+   const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:owner})},customerOperationHistoryService:reader});apps.push(app);return app;
   };
   const url=`/v1/me/operations/${f.p.data.id}`;
   expect((await (await appFor(pj.owner)).inject({method:"GET",url,headers})).statusCode).toBe(403);
@@ -932,7 +933,7 @@ describe("stored operational alerts",()=>{
  // operations in review), which correctly raise pix_open_after_close/operation_review alerts.
  beforeEach(async()=>{await db.exec("truncate peragus_customer_reconciliation,peragus_customer_refund_requests,peragus_customer_purchase_intents cascade");});
  async function alertApp(f:Awaited<ReturnType<typeof approvalFixture>>,identity:any=f.user,reader=new OperatorAlertService(pool,new Set([f.user.id]),"test")){
-  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},operatorAlertService:reader});apps.push(app);return app;
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},operatorAlertService:reader});apps.push(app);return app;
  }
  it("keeps pending and approved refunds actionable without recording a return",async()=>{
   const f=await approvalFixture(),refunds=new ManualRefundService(pool,new Set([f.user.id]),true,"test");
@@ -1032,7 +1033,7 @@ describe('audited sandbox withdrawal closure',()=>{
   return {...f,closure,reads:()=>reads,closureKey:randomUUID()};
  }
  async function closureApp(f:Awaited<ReturnType<typeof ready>>,identity:any=f.user,service=f.closure){
-  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=='valid')throw new AuthenticationError('INVALID_TOKEN');return identity;}},sandboxClosureService:service});apps.push(app);return app;
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=='valid')throw new AuthenticationError('INVALID_TOKEN');return identity;}},sandboxClosureService:service});apps.push(app);return app;
  }
  const closurePath=(id:string)=>`/v1/admin/withdrawal-requests/${id}/execution/closure`;
  const payload=(f:Awaited<ReturnType<typeof ready>>)=>({request_id:f.closureKey,reason,confirmation:'CLOSE_COMPLETED_SANDBOX_PILOT'});

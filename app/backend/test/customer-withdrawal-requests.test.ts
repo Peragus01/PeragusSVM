@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from "node:crypto";
 import {Keypair} from "@solana/web3.js";
 import {readFile,readdir} from "node:fs/promises";
@@ -46,7 +47,7 @@ async function setup(type:"pf"|"pj"="pf"){
  return{owner,customer,provider,terms,wallet,quoteId:actualQuoteId,makeQuote,requestId:randomUUID()};
 }
 async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
 }
 const path="/v1/me/purchase-intents",headers={authorization:"Bearer valid"};
 
@@ -89,7 +90,7 @@ async function completedFixture(){
  return{...f,pixId:charge.data.id,withdrawalRequestId:randomUUID()};
 }
 async function withdrawalApp(f:Awaited<ReturnType<typeof completedFixture>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:f.s.owner};}},...(enabled?{customerWithdrawalRequestService:withdrawals}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:f.s.owner};}},...(enabled?{customerWithdrawalRequestService:withdrawals}:{})});apps.push(app);return app;
 }
 const withdrawalPath="/v1/me/withdrawal-requests";
 describe("record-only customer withdrawal requests",()=>{

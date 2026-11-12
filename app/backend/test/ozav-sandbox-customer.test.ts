@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -41,7 +42,7 @@ async function profile(type: "pf" | "pj" = "pf") {
   return { ...p, userId };
 }
 async function appFor(actor: Awaited<ReturnType<typeof profile>>, service?: OzavSandboxCustomerService) {
-  const app = await buildApp({ customerAccess: { customers, authenticate: async token => {
+  const app = await buildApp({ customerAccess: { legal: allAcceptedLegal, customers, authenticate: async token => {
     if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN");
     return { id: actor.userId, email: "actual-user@example.test" };
   } }, ...(service ? { ozavSandboxCustomerService: service } : {}) });

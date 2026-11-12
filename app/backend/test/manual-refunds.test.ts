@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from "node:crypto";
 import {readFile,readdir} from "node:fs/promises";
 import {Keypair} from "@solana/web3.js";
@@ -38,7 +39,7 @@ async function fixture(){
  values($1,$2,$3,$4,$5,'ozav_q_example',1000,$6,'ozav_wal_example',$7,true,$8,$9,'test')`,[pix,customer.id,randomUUID(),purchase,provider,wallet,randomUUID(),transfer,{id:transfer,customerId:provider,quoteId:"ozav_q_example",source:{type:"fiat_payment",currency:"BRL",rail:"pix"},status:"completed",sourceLegStatus:"completed",destinationLegStatus:"completed",amounts:{source:{currency:"BRL",amount:"1000.00"},target:{currency:"USDT",amount:"200.000000"}},private_data:"PRIVATE_PROVIDER_DETAILS"}]);
  const service=new ManualRefundService(pool,new Set([operator.id]),true,"test");
  const appFor=async(identity:{id:string;assuranceLevel?:"aal2"}={id:owner},manual=service)=>{
-  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},manualRefundService:manual});apps.push(app);return app;
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},manualRefundService:manual});apps.push(app);return app;
  };
  return {owner,operator,customer,purchase,pix,wallet,provider,service,appFor,requestId:randomUUID()};
 }

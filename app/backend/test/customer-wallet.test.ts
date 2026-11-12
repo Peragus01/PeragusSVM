@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {generateKeyPairSync,randomUUID,sign} from "node:crypto";
 import {readFile,readdir} from "node:fs/promises";
 import {PublicKey} from "@solana/web3.js";
@@ -38,7 +39,7 @@ async function setup(type:"pf"|"pj"="pf"){
 }
 const signature=(message:string,keys:ReturnType<typeof generateKeyPairSync>)=>sign(null,Buffer.from(message,"utf8"),keys.privateKey).toString("base64");
 async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerWalletService:service}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerWalletService:service}:{})});apps.push(app);return app;
 }
 const path="/v1/me/wallet",headers={authorization:"Bearer valid"};
 describe("authenticated Solana wallet ownership",()=>{

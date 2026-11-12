@@ -1,5 +1,6 @@
 // Live purchases progressing from OZAV transfer state (GET only) on a PGlite
 // database recorded as 'live'. No real OZAV: the provider is a fake.
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {createHash,createHmac,randomUUID} from "node:crypto";
 import {Keypair} from "@solana/web3.js";
 import {readFile,readdir} from "node:fs/promises";
@@ -299,7 +300,7 @@ describe("operator refund decision (POST /v1/admin/operations/:purchaseId/refund
  const appWith=async(owner:string)=>{
   // Production wiring: the same service the server builds (settleOperations=true).
   const service=new ManualRefundService(pool,operators,true,"live",true);
-  const app=await buildApp({customerAccess:{customers,authenticate:async(token:string)=>{
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async(token:string)=>{
    if(token==="operator")return operator;if(token==="customer")return{id:owner};
    if(token==="stale")return{id:operator.id,assuranceLevel:"aal2",mfaVerifiedAt:Math.floor(Date.now()/1000)-301};if(token==="aal1")return{id:operator.id};throw new AuthenticationError("INVALID_TOKEN");}},manualRefundService:service});
   apps.push(app);return app;

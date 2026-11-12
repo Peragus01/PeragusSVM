@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { Writable } from "node:stream";
@@ -70,7 +71,7 @@ async function profile(type: "pf" | "pj" = "pf") {
   return { owner, customer };
 }
 async function appFor(actor: Awaited<ReturnType<typeof profile>>, enabled = true, logging?: Writable) {
-  const app = await buildApp({ customerAccess: { customers, authenticate: async token => {
+  const app = await buildApp({ customerAccess: { legal: allAcceptedLegal, customers, authenticate: async token => {
     if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN");
     return { id: actor.owner, email: "confirmed@example.test" };
   } }, ...(enabled ? { individualDraftService: service } : {}), ...(logging ? { logger: { level: "debug", stream: logging } } : {}) });

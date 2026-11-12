@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -58,7 +59,7 @@ describe("raw-body customer webhook receiver", () => {
     const process = vi.fn(async () => "ignored");
     const authenticate = vi.fn(async () => { throw new Error("bearer should not be used"); });
     const app = await buildApp({ customerWebhooks: { secret, processor: { process }, now: () => now },
-      customerAccess: { authenticate, customers: {} as any } });
+      customerAccess: { legal: allAcceptedLegal, authenticate, customers: {} as any } });
     apps.push(app);
     const e = event(), raw = JSON.stringify(e);
     expect((await app.inject({ method: "POST", url: path, headers: headers(raw, e.id), payload: raw })).statusCode).toBe(200);

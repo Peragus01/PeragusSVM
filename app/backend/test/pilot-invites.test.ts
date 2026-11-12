@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -70,7 +71,7 @@ async function appFor(
   enabled = true,
 ) {
   const app = await buildApp({
-    customerAccess: {
+    customerAccess: { legal: allAcceptedLegal,
       customers,
       authenticate: async (token) => {
         if (token !== "synthetic")

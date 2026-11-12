@@ -59,10 +59,11 @@ export interface CustomerAccess {
   authenticate(token: string): Promise<AuthenticatedUser>;
   customers: CustomerRepository;
   /**
-   * When set, every customer route (except the exempt list below) answers 403
+   * Required: every customer route (except the exempt list below) answers 403
    * LEGAL_ACCEPTANCE_REQUIRED until the current required documents are accepted.
+   * There is no way to wire customer access without it.
    */
-  legal?: LegalAcceptanceService;
+  legal: LegalAcceptanceService;
 }
 
 declare module "fastify" {
@@ -117,6 +118,9 @@ export function registerCustomerAccess(
   requirePilotInvite = false,
   rateLimiter?: ApiRateLimiter,
 ): void {
+  if (!access.legal)
+    throw new Error("LEGAL_ACCEPTANCE_SERVICE_REQUIRED");
+  const legal = access.legal;
   app.decorateRequest("authenticatedUser", null);
   app.decorateRequest("authenticatedCustomer", null);
   app.addHook("preHandler", async (request, reply) => {
@@ -232,10 +236,10 @@ export function registerCustomerAccess(
         },
       });
 
-    if (access.legal && !LEGAL_EXEMPT_PATHS.has(path)) {
+    if (!LEGAL_EXEMPT_PATHS.has(path)) {
       let missing: unknown[];
       try {
-        missing = await access.legal.missing(customer.id);
+        missing = await legal.missing(customer.id);
       } catch {
         request.log.warn({ event: "legal_acceptance_check_unavailable" });
         return reply
@@ -293,8 +297,7 @@ export function registerCustomerAccess(
   app.get("/v1/me/customer", async (request) => ({
     data: await profileFor(request, access),
   }));
-  const legal = access.legal;
-  if (legal) {
+  {
     app.get("/v1/me/legal-acceptances", async (request, reply) => {
       reply.header("Cache-Control", "no-store");
       if (Object.keys(request.query as object).length)

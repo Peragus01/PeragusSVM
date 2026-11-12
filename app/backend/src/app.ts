@@ -117,6 +117,8 @@ export interface BuildAppOptions {
   individualDraftService?: IndividualDraftService;
   customerWebhooks?: CustomerWebhookOptions;
   customerAccess?: CustomerAccess;
+  /** Reverse-proxy hops to trust for request.ip (TRUST_PROXY_HOPS); 0 trusts none. */
+  trustProxyHops?: number;
   apiRateLimiter?: ApiRateLimiter;
   operatorAlertService?: OperatorAlertService;
   sandboxClosureService?: SandboxClosureService;
@@ -146,10 +148,15 @@ export async function buildApp(
   if (mode !== "test" && mode !== "live")
     throw Object.assign(new Error("MONEY_ENVIRONMENT_INVALID"), { code: "MONEY_ENVIRONMENT_INVALID" });
   const sandboxOnly = mode === "test";
-  const app = Fastify({
+  const serverOptions: FastifyServerOptions = {
     logger: options.logger ?? false,
     bodyLimit: 64 * 1024,
-  });
+    // Only the configured number of proxy hops is trusted for request.ip; with 0 every
+    // X-Forwarded-For value is ignored.
+    trustProxy: (_address: string, hop: number) => hop < (options.trustProxyHops ?? 0),
+  };
+  const app = Fastify(serverOptions);
+
 
   await app.register(sensible);
   await registerInviteDeliveryRoute(app, options.inviteDelivery);

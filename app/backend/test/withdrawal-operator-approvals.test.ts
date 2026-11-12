@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from "node:crypto";
 import {Keypair} from "@solana/web3.js";
 import {readFile,readdir} from "node:fs/promises";
@@ -46,7 +47,7 @@ async function setup(type:"pf"|"pj"="pf"){
  return{owner,customer,provider,terms,wallet,quoteId:actualQuoteId,makeQuote,requestId:randomUUID()};
 }
 async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
 }
 const path="/v1/me/purchase-intents",headers={authorization:"Bearer valid"};
 
@@ -89,7 +90,7 @@ async function completedFixture(){
  return{...f,pixId:charge.data.id,withdrawalRequestId:randomUUID()};
 }
 async function withdrawalApp(f:Awaited<ReturnType<typeof completedFixture>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:f.s.owner};}},...(enabled?{customerWithdrawalRequestService:withdrawals}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:f.s.owner};}},...(enabled?{customerWithdrawalRequestService:withdrawals}:{})});apps.push(app);return app;
 }
 const withdrawalPath="/v1/me/withdrawal-requests";
 
@@ -106,7 +107,7 @@ async function approvalFixture(ready=true){
  return{...f,wr,user,approvals,approvalRequestId:randomUUID(),reason:"Reviewed the completed sandbox conversion and verified destination."};
 }
 async function approvalApp(f:Awaited<ReturnType<typeof approvalFixture>>,identity=f.user,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},...(enabled?{withdrawalOperatorApprovalService:f.approvals}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},...(enabled?{withdrawalOperatorApprovalService:f.approvals}:{})});apps.push(app);return app;
 }
 describe("withdrawal operator approval audit",()=>{
  it("records an allowlisted MFA operator decision without any send and exposes safe approval state to its owner",async()=>{
@@ -190,7 +191,7 @@ describe("fresh operator MFA",()=>{
 describe("GET /v1/admin/operator-status",()=>{
  const url="/v1/admin/operator-status";
  const statusApp=async(identity:{id:string;assuranceLevel?:"aal2"},operators:string[])=>{
-  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},operatorUserIds:new Set(operators)});apps.push(app);return app;
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},operatorUserIds:new Set(operators)});apps.push(app);return app;
  };
  it("operator-status is false for a non-allowlisted user and reveals nothing else",async()=>{
   const operator=randomUUID(),app=await statusApp({id:randomUUID()},[operator]);

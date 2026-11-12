@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { PGlite } from "@electric-sql/pglite";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -154,7 +155,7 @@ async function setup() {
   };
 }
 async function appFor(s: Awaited<ReturnType<typeof setup>>, enabled = true) {
-  const access = {
+  const access = { legal: allAcceptedLegal,
     authenticate: async (token: string) => {
       if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN");
       return { id: s.owner, email: "synthetic@example.test" };

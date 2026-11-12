@@ -64,13 +64,15 @@ afterAll(async () => {
   await db.close();
 });
 async function appFor(
-  legal: LegalAcceptanceService | undefined,
+  legal: LegalAcceptanceService,
   operators = new Set<string>(),
+  trustProxyHops = 0,
 ) {
   const app = await buildApp({
+    trustProxyHops,
     customerAccess: {
       customers,
-      ...(legal ? { legal } : {}),
+      legal: legal as LegalAcceptanceService,
       authenticate: async (token: string) => {
         if (!token.startsWith("u-")) throw new AuthenticationError("INVALID_TOKEN");
         return { id: token.slice(2), email: "x@example.test" };
@@ -231,6 +233,32 @@ describe("legal acceptance gate", () => {
     ])
       expect((await app.inject({ method: "POST", url: "/v1/me/legal-acceptances", headers: c.headers, payload })).statusCode).toBe(400);
   });
+  it("with TRUST_PROXY_HOPS=1 records the client address the proxy saw, not spoofed entries", async () => {
+    const app = await appFor(serviceFor(), new Set(), 1);
+    const c = await newCustomer();
+    await app.inject({
+      method: "POST",
+      url: "/v1/me/legal-acceptances",
+      remoteAddress: "10.0.0.1",
+      headers: { ...c.headers, "x-forwarded-for": "203.0.113.50, 198.51.100.7" },
+      payload: accept(),
+    });
+    const row = (await db.query("select ip from peragus_customer_legal_acceptances where customer_id=$1 limit 1", [c.customer.id])).rows[0] as any;
+    expect(row.ip).toBe("198.51.100.7");
+  });
+  it("with TRUST_PROXY_HOPS=2 skips the second proxy", async () => {
+    const app = await appFor(serviceFor(), new Set(), 2);
+    const c = await newCustomer();
+    await app.inject({
+      method: "POST",
+      url: "/v1/me/legal-acceptances",
+      remoteAddress: "10.0.0.1",
+      headers: { ...c.headers, "x-forwarded-for": "203.0.113.50, 198.51.100.7" },
+      payload: accept(),
+    });
+    const row = (await db.query("select ip from peragus_customer_legal_acceptances where customer_id=$1 limit 1", [c.customer.id])).rows[0] as any;
+    expect(row.ip).toBe("203.0.113.50");
+  });
   it("does not trust a client-supplied forwarded address", async () => {
     const app = await appFor(serviceFor());
     const c = await newCustomer();
@@ -247,10 +275,15 @@ describe("legal acceptance gate", () => {
     const noProfile = await app.inject({ method: "GET", url: "/v1/me/legal-acceptances", headers: { authorization: `Bearer u-${op}` } });
     expect(noProfile.json().error.code).toBe("CUSTOMER_REQUIRED");
   });
-  it("is not applied when no legal service is configured (existing deployments of the app factory)", async () => {
-    const app = await appFor(undefined);
-    const c = await newCustomer();
-    expect((await app.inject({ method: "GET", url: "/v1/me/operations", headers: c.headers })).json()?.error?.code).not.toBe("LEGAL_ACCEPTANCE_REQUIRED");
+  it("refuses to build customer access without a legal service", async () => {
+    await expect(
+      buildApp({
+        customerAccess: {
+          customers,
+          authenticate: async () => ({ id: randomUUID(), email: "x@example.test" }),
+        } as never,
+      }),
+    ).rejects.toThrow("LEGAL_ACCEPTANCE_SERVICE_REQUIRED");
   });
 });
 
@@ -280,6 +313,17 @@ describe("legal acceptance storage", () => {
 });
 
 describe("LEGAL_REQUIRED_DOCUMENTS env", () => {
+  it.each(["3", "-1", "1.5", "x"])("rejects TRUST_PROXY_HOPS=%s", async (value) => {
+    const { getEnv } = await import("../src/config/env.js");
+    const saved = process.env.TRUST_PROXY_HOPS;
+    try {
+      process.env.TRUST_PROXY_HOPS = value;
+      expect(() => getEnv()).toThrow();
+    } finally {
+      if (saved === undefined) delete process.env.TRUST_PROXY_HOPS;
+      else process.env.TRUST_PROXY_HOPS = saved;
+    }
+  });
   it("is validated by the env schema when present", async () => {
     const { getEnv } = await import("../src/config/env.js");
     const saved = process.env.LEGAL_REQUIRED_DOCUMENTS;
@@ -289,6 +333,22 @@ describe("LEGAL_REQUIRED_DOCUMENTS env", () => {
     } finally {
       if (saved === undefined) delete process.env.LEGAL_REQUIRED_DOCUMENTS;
       else process.env.LEGAL_REQUIRED_DOCUMENTS = saved;
+    }
+  });
+  it("accepts a valid-shape value and a trust-proxy hop count", async () => {
+    const { getEnv } = await import("../src/config/env.js");
+    const saved = { l: process.env.LEGAL_REQUIRED_DOCUMENTS, t: process.env.TRUST_PROXY_HOPS };
+    try {
+      process.env.LEGAL_REQUIRED_DOCUMENTS = docs();
+      process.env.TRUST_PROXY_HOPS = "1";
+      const env = getEnv();
+      expect(env.LEGAL_REQUIRED_DOCUMENTS).toBe(docs());
+      expect(env.TRUST_PROXY_HOPS).toBe(1);
+    } finally {
+      for (const [k, v] of [["LEGAL_REQUIRED_DOCUMENTS", saved.l], ["TRUST_PROXY_HOPS", saved.t]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
   });
 });

@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
@@ -42,7 +43,7 @@ describe("money mode drives customer-facing environment", () => {
     verificationStatus: "draft" as const,
     suspended: false,
   };
-  const customerAccess = {
+  const customerAccess = { legal: allAcceptedLegal,
     authenticate: async () => ({ id: "owner-1", email: "c@example.test" }),
     customers: {
       findByOwner: async () => customer,

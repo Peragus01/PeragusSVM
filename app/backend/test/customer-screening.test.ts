@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -53,7 +54,7 @@ async function setup(type:"pf"|"pj"="pf") {
     seed:(rows:any[])=>{screenings=rows;}, loseResponse:(hide=false)=>{timeout=true;missList=hide;}};
 }
 async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
-  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerScreeningService:s.service}:{})});apps.push(app);return app;
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerScreeningService:s.service}:{})});apps.push(app);return app;
 }
 const path="/v1/me/onboarding/screening",headers={authorization:"Bearer valid"};
 describe("test-only screening evidence",()=>{

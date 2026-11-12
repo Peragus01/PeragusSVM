@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from "node:crypto";
 import {readFile,readdir} from "node:fs/promises";
 import {Keypair} from "@solana/web3.js";
@@ -140,7 +141,7 @@ describe("durable GET-only customer reconciliation",()=>{
  });
  it("requires allowlisted MFA operators and rejects selectors without exposing private DB errors",async()=>{
   const f=await fixture(),status=new CustomerReconciliationStatusService(pool,new Set([f.operator.id]),"test");
-  const appFor=async(user:any,service=status)=>{const app=await buildApp({customerAccess:{customers,authenticate:async()=>user},customerReconciliationStatusService:service});apps.push(app);return app;};
+  const appFor=async(user:any,service=status)=>{const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>user},customerReconciliationStatusService:service});apps.push(app);return app;};
   const url="/v1/admin/customer-reconciliation";
   expect((await (await appFor(f.operator)).inject({method:"GET",url,headers})).statusCode).toBe(200);
   expect((await (await appFor({id:f.operator.id})).inject({method:"GET",url,headers})).statusCode).toBe(403);
