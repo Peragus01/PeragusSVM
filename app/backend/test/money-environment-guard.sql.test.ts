@@ -20,7 +20,9 @@ const GUARDED=["peragus_customer_wallet_challenges","peragus_customer_wallets","
  // purchase operation status log (045)
  "peragus_operation_status_events",
  // operator refund decisions (048)
- "peragus_operator_refund_decisions"];
+ "peragus_operator_refund_decisions",
+ // destination token-account checks before a send (049)
+ "peragus_withdrawal_destination_checks"];
 const NETWORK_COLUMNS:Record<string,string>={peragus_customer_wallets:"network",
  peragus_customer_purchase_intents:"wallet_proof_network",peragus_customer_withdrawal_requests:"proof_network"};
 vi.setConfig({testTimeout:60000});

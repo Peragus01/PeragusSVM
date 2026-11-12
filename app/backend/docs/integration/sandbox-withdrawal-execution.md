@@ -85,3 +85,26 @@ same request, and verify sanitized evidence plus no second provider POST or fals
 on-chain delivery. Test MFA/customer/strict input gates. Preserve the audit and
 claim, then disable the execution flag. All external sandbox acceptance remains
 pending until the deployed code is tested.
+
+## Live USDT send (Task 10)
+
+The same endpoint sends live USDT when the money mode is live (`SANDBOX_WITHDRAWAL_EXECUTION_ENABLED`
+is no longer refused in live; closure still is). Differences from the sandbox description above:
+
+- Confirmation literal: `SANDBOX_ONLY` in test, `LIVE_USDT_SEND` in live.
+- The amount sent is the purchase's immutable `locked_usdt_amount` (OZAV deducts the network fee from
+  it); the managed wallet balance must cover it (`WITHDRAWAL_BALANCE_INSUFFICIENT`).
+- Before anything is reserved or POSTed, the destination owner must hold a token account for the
+  environment's USDT mint. If not: `409 DESTINATION_TOKEN_ACCOUNT_MISSING`, the operation stays
+  `approved`, and the customer's operation view shows `withdrawal.destination_blocker`. An RPC
+  failure answers `409 DESTINATION_TOKEN_ACCOUNT_UNVERIFIED`.
+- The destination is identified first (`POST /v2/customers/{id}/destination-identifications`,
+  `self_custodied`, `wallet_attested_ownership_at` = wallet proof timestamp). A failure answers
+  `409 DESTINATION_IDENTIFICATION_FAILED` with nothing claimed.
+- The claim locks the purchase row, requires status `approved` and moves it to `sending` in the same
+  transaction, before the send POST. A double or concurrent execute yields one claim and one POST.
+- Outcomes: accepted -> `sent` (transfer id and `settlement_references.tx_hash` stored); ambiguous
+  answer or timeout -> stays `sending`, recovered by metadata/GET only; definitive refusal (400, 401,
+  403, 404, 422, e.g. `TRAVEL_RULE_REQUIRED`) -> `needs_review`, `409 WITHDRAWAL_SEND_REFUSED` with
+  `provider_code`, a `withdrawal_review` operator alert, and never another POST.
+- Views report the configured `environment` and `proof_network` (`solana:mainnet` in live).

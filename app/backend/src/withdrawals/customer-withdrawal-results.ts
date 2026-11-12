@@ -4,7 +4,7 @@ import {rowEnvironment,type RowEnvironment} from "../repositories/row-environmen
 import {WithdrawalRequestError} from "./customer-withdrawal-requests.js";
 
 interface ResultRow {
-  id:string; amount_usdt:string; wallet_address:string; approved:boolean;
+  id:string; amount_usdt:string; wallet_address:string; approved:boolean; refused:boolean;
   attempted:boolean; status:string|null; source_status:string|null;
   destination_status:string|null; target_amount:string|null; observed_at:Date|string|null;
 }
@@ -20,7 +20,7 @@ export class CustomerWithdrawalResultService {
   private readonly e:RowEnvironment;
   constructor(private readonly pool:Pick<Pool,"query">,mode:MoneyMode){this.e=rowEnvironment(mode);}
   async read(customerId:string,id:string){
-    const result=await this.pool.query<ResultRow>(`select r.id,r.amount_usdt,r.wallet_address,
+    const result=await this.pool.query<ResultRow>(`select r.id,coalesce(e.send_amount_usdt,r.amount_usdt)::text as amount_usdt,r.wallet_address,(e.provider_refusal_code is not null) as refused,
       (a.id is not null) as approved,coalesce(e.create_attempted,false) as attempted,
       e.observation->>'status' as status,
       e.observation->>'sourceLegStatus' as source_status,
@@ -40,9 +40,9 @@ export class CustomerWithdrawalResultService {
     const known=completed && gross!==null && target!==null && target>0n && target<=gross;
     return {
       withdrawal_request_id:row.id,environment:this.e.mode,real_money:this.e.mode==="live",
-      state:row.status?`provider_${row.status}`:row.attempted?"uncertain":row.approved?"approved":"recorded",
+      state:row.status?`provider_${row.status}`:row.refused?"provider_refused":row.attempted?"uncertain":row.approved?"approved":"recorded",
       approved:row.approved,withdrawal_started:row.attempted,provider_completed:completed,
-      recovery_required:row.attempted && row.status===null,
+      recovery_required:row.attempted && row.status===null && !row.refused,
       amounts:{currency:"USDT",gross_amount:row.amount_usdt,
         net_amount:known?format(target!):null,
         deducted_amount:known?format(gross!-target!):null,
@@ -50,7 +50,7 @@ export class CustomerWithdrawalResultService {
         fee_breakdown:null},
       destination:{wallet_address:row.wallet_address,network:"solana",proof_network:this.e.network},
       observed_at:row.observed_at?new Date(row.observed_at).toISOString():null,
-      observation_freshness:"not_evaluated",onchain_delivery_verified:false,mainnet_execution:false
+      observation_freshness:"not_evaluated",onchain_delivery_verified:false,mainnet_execution:this.e.mode==="live" && row.attempted
     };
   }
 }

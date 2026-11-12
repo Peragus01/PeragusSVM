@@ -9,7 +9,10 @@ import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-
 import {CustomerReconciliationService,CustomerReconciliationStatusService,registerCustomerReconciliationWorker,assertCustomerReconciliationSafety} from "../src/jobs/customer-reconciliation.js";
 import {createCustomerReconciliationReader} from "../src/purchases/customer-reconciliation-reader.js";
 const db=new PGlite();
-const pool={query:async(sql:string,args?:unknown[])=>{const r=await db.query(sql,args);return {...r,rowCount:r.rows.length};}} as unknown as Pool;
+const query=async(sql:string,args?:unknown[])=>{const r=await db.query(sql,args);return {...r,rowCount:r.rows.length};};
+// PGlite has one session: connections (used by the withdrawal bind transaction) are handed out one at a time.
+let connection=Promise.resolve();
+const pool={query,connect:async()=>{const previous=connection;let release!:()=>void;connection=new Promise<void>(resolve=>{release=resolve;});await previous;return{query,release};}} as unknown as Pool;
 const customers=new PostgresCustomerRepository(pool),apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
  await db.exec("create role anon;create role authenticated;alter default privileges grant all on tables to anon,authenticated;");

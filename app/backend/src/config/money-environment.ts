@@ -79,15 +79,15 @@ export function providerKeyMatchesMode(
  * Sandbox money executors that must stay off while the money mode is live.
  * CUSTOMER_SANDBOX_PIX_ENABLED is absent: the customer Pix path is live-safe (the
  * transfer carries the accepted FX rate lock and instructions are shown only for a
- * verified lock); its simulation stays refused. Task 10 lifts the withdrawal
- * execution/closure entries when the live send path exists.
+ * verified lock); its simulation stays refused. SANDBOX_WITHDRAWAL_EXECUTION_ENABLED
+ * is absent since Task 10: the execution path sends live USDT (locked amount, destination
+ * identification, token-account check, one claim per operation). Closure stays refused.
  * SANDBOX_WITHDRAWAL_RECOVERY_ENABLED is deliberately absent: its provider reader
  * exposes GET operations only and cannot reserve, claim or send.
  */
 export const SANDBOX_MONEY_PATH_FLAGS = [
   "CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED",
   "CUSTOMER_VERIFICATION_SIMULATION_ENABLED",
-  "SANDBOX_WITHDRAWAL_EXECUTION_ENABLED",
   "SANDBOX_WITHDRAWAL_CLOSURE_ENABLED",
 ] as const;
 export type SandboxMoneyPathFlag = (typeof SANDBOX_MONEY_PATH_FLAGS)[number];

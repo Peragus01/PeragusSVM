@@ -58,9 +58,10 @@ const path="/v1/me/purchase-intents",headers={authorization:"Bearer valid"};
 import {PostgresCustomerPixRepository} from "../src/repositories/postgres-customer-sandbox-pix.js";
 import {CustomerSandboxPixService} from "../src/purchases/customer-sandbox-pix.js";
 import type {OzavTransfer} from "../src/providers/ozav-client.js";
-async function fixture(){
+// quoteTarget is the quoted USDT target, recorded as the purchase's immutable locked_usdt_amount (test quotes).
+async function fixture(quoteTarget="200.000000"){
  const s=await setup();
- await db.query("update peragus_customer_indicative_quotes set source_amount_brl=1000,observation=jsonb_set(observation,'{source,amount}','\"1000.00\"') where id=$1",[s.quoteId]);
+ await db.query("update peragus_customer_indicative_quotes set source_amount_brl=1000,observation=jsonb_set(jsonb_set(observation,'{source,amount}','\"1000.00\"'),'{target,amount}',to_jsonb($2::text)) where id=$1",[s.quoteId,quoteTarget]);
  const p=await service.record(s.customer.id,s.requestId,s.quoteId),pixRepo=new PostgresCustomerPixRepository(pool,"test");
  let posts=0,gets=0,simulations=0,listed:string|null=null;let mode="normal";
  const transfer:OzavTransfer={id:`ozav_tr_${randomUUID().replaceAll('-','')}`,status:"awaiting_payment",customerId:s.provider,
@@ -88,8 +89,8 @@ async function fixture(){
 import {PostgresCustomerWithdrawalRequestRepository} from "../src/repositories/postgres-customer-withdrawal-requests.js";
 import {CustomerWithdrawalRequestService} from "../src/withdrawals/customer-withdrawal-requests.js";
 const withdrawalRepo=new PostgresCustomerWithdrawalRequestRepository(pool,"test"),withdrawals=new CustomerWithdrawalRequestService(withdrawalRepo);
-async function completedFixture(){
- const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+async function completedFixture(quoteTarget?:string){
+ const f=await fixture(quoteTarget),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
  await f.pix.simulatePayment(f.s.customer.id,charge.data.id);
  return{...f,pixId:charge.data.id,withdrawalRequestId:randomUUID()};
 }
@@ -103,8 +104,8 @@ import {WithdrawalOperatorApprovalService,parseWithdrawalOperators} from "../src
 const approvalRepo=new PostgresWithdrawalOperatorApprovalRepository(pool,"test");
 // The progression moves a converted operation to awaiting_approval; fixtures replay those moves.
 async function awaitingApproval(purchaseId:string){for(const to of ["awaiting_pix","converted","awaiting_approval"] as const)await repo.transitionOperation(purchaseId,to,"system:test","test_fixture");}
-async function approvalFixture(){
- const f=await completedFixture(),wr=await withdrawals.record(f.s.customer.id,f.withdrawalRequestId,f.pixId),operatorId=randomUUID(),user={id:operatorId,email:"operator@example.test",assuranceLevel:"aal2" as const,mfaVerifiedAt:Math.floor(Date.now()/1000)};
+async function approvalFixture(quoteTarget?:string){
+ const f=await completedFixture(quoteTarget),wr=await withdrawals.record(f.s.customer.id,f.withdrawalRequestId,f.pixId),operatorId=randomUUID(),user={id:operatorId,email:"operator@example.test",assuranceLevel:"aal2" as const,mfaVerifiedAt:Math.floor(Date.now()/1000)};
  await awaitingApproval(f.p.data.id);
  const approvals=new WithdrawalOperatorApprovalService(approvalRepo,new Set([operatorId]));
  return{...f,wr,user,approvals,approvalRequestId:randomUUID(),reason:"Reviewed the completed sandbox conversion and verified destination."};
@@ -114,20 +115,33 @@ async function approvalApp(f:Awaited<ReturnType<typeof approvalFixture>>,identit
 }
 
 import {PostgresSandboxExecutionRepository} from "../src/repositories/postgres-sandbox-withdrawal-execution.js";
-import {SandboxWithdrawalExecutionService,type ExecutionPolicy} from "../src/withdrawals/sandbox-execution.js";
+import {SandboxWithdrawalExecutionService,executionView,type ExecutionPolicy} from "../src/withdrawals/sandbox-execution.js";
+import {SandboxWithdrawalProviderError} from "../src/providers/ozav-sandbox-withdrawal.js";
+const TEST_USDT_MINT=Keypair.generate().publicKey.toBase58();
+const operationStatus=async(id:string)=>(await db.query<{status:string}>("select status from peragus_customer_purchase_intents where id=$1",[id])).rows[0]!.status;
+const statusEvents=async(id:string)=>(await db.query<{from_status:string|null;to_status:string;actor:string;reason:string}>("select from_status,to_status,actor,reason from peragus_operation_status_events where purchase_id=$1 order by id",[id])).rows;
 beforeEach(async()=>{await db.query("truncate peragus_sandbox_withdrawal_executions cascade");});
 // Most tests exercise execution itself: no approval->execution delay unless a test asks for one.
-async function executionFixture(policy:Partial<ExecutionPolicy>={minDelaySeconds:0}){
- const f=await approvalFixture();await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
- let sends=0,identityReads=0,mode="normal",found:string|null=null;
+async function executionFixture(policy:Partial<ExecutionPolicy>={minDelaySeconds:0},locked="200.000000"){
+ const f=await approvalFixture(locked);await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
+ let sends=0,identityReads=0,mode="normal",found:string|null=null,txHash:string|null=null;
+ const calls:string[]=[],identifications:unknown[][]=[];let tokenAccount:boolean|Error=true;const tokenChecks:unknown[][]=[];
  const sendId=`ozav_tr_${randomUUID().replaceAll('-','')}`;
- const observed={id:sendId,customerId:f.s.provider,status:"completed",sourceWalletId:"ozav_wal_testmanaged",sourceCurrency:"USDT",destinationAddress:f.s.wallet,network:"solana",sourceAmount:"200.000000",targetAmount:"199.500000",sourceLegStatus:"completed",destinationLegStatus:"completed",transactionReference:"synthetic-sandbox-reference"};
+ const observed={id:sendId,customerId:f.s.provider,status:"completed",sourceWalletId:"ozav_wal_testmanaged",sourceCurrency:"USDT",destinationAddress:f.s.wallet,network:"solana",sourceAmount:locked,targetAmount:"199.500000",sourceLegStatus:"completed",destinationLegStatus:"completed",transactionReference:"synthetic-sandbox-reference"};
  const identity={name:"PRIVATE_SYNTHETIC_NAME",cpf:"11144477735",street:"PRIVATE_SYNTHETIC_STREET",city:"Test",country:"BR"};
  const provider={funding:{getTransfer:async()=>f.transfer},capabilities:async()=>{},identity:async()=>{identityReads++;return identity;},available:async()=>"10200.00",
-  send:async(input:any)=>{sends++;expect(input.amount).toBe("200.000000");expect(input.address).toBe(f.s.wallet);expect(input.identity).toBe(identity);if(mode==="timeout")throw new Error("secret provider payload");return sendId;},
+  identifyDestination:async(...args:unknown[])=>{calls.push("identify");identifications.push(args);if(mode==="identify_fails")throw new Error("private identification failure");},
+  send:async(input:any)=>{sends++;calls.push("send");expect(input.amount).toBe(locked);expect(input.address).toBe(f.s.wallet);expect(input.identity).toBe(identity);
+   if(mode==="timeout")throw new Error("secret provider payload");
+   if(mode==="travel_rule")throw new SandboxWithdrawalProviderError(422,"TRAVEL_RULE_REQUIRED");
+   if(mode==="server_error")throw new SandboxWithdrawalProviderError(500,null);
+   return{id:sendId,txHash};},
   transfer:async()=>observed,find:async()=>found} as any;
- const repo=new PostgresSandboxExecutionRepository(pool,"test"),execution=new SandboxWithdrawalExecutionService(repo,provider,f.approvals,policy);
- return{...f,provider,repo,execution,policy,observed,sendId,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;}};
+ // Injected Solana RPC reader (never a real RPC in tests).
+ const destination={usdtMint:TEST_USDT_MINT,reader:{hasTokenAccount:async(...args:unknown[])=>{tokenChecks.push(args);if(tokenAccount instanceof Error)throw tokenAccount;return tokenAccount;}}};
+ const repo=new PostgresSandboxExecutionRepository(pool,"test"),execution=new SandboxWithdrawalExecutionService(repo,provider,f.approvals,destination,policy);
+ return{...f,provider,repo,execution,policy,observed,sendId,destination,locked,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;},
+  calls,identifications,tokenChecks,setTokenAccount:(v:boolean|Error)=>{tokenAccount=v;},setTxHash:(v:string|null)=>{txHash=v;}};
 }
 describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
  // The delay is measured by the database clock: move the persisted approval back in time
@@ -165,7 +179,7 @@ describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
   expect(f.sends()).toBe(0);
   const second={id:randomUUID(),email:"second@example.test",assuranceLevel:"aal2" as const,mfaVerifiedAt:Math.floor(Date.now()/1000)};
   const guard=new WithdrawalOperatorApprovalService(approvalRepo,new Set([f.user.id,second.id]));
-  const other=new SandboxWithdrawalExecutionService(f.repo,f.provider,guard,{minDelaySeconds:0,fourEyes:true});
+  const other=new SandboxWithdrawalExecutionService(f.repo,f.provider,guard,f.destination,{minDelaySeconds:0,fourEyes:true});
   expect((await other.execute(second,f.wr.data.id,randomUUID())).replayed).toBe(false);expect(f.sends()).toBe(1);
  });
  it("four-eyes disabled (default) allows the approver to execute",async()=>{
@@ -498,6 +512,148 @@ describe("approved sandbox withdrawal execution",()=>{
 });
 
 
+describe("live USDT send with destination identification (Task 10)",()=>{
+ it("identifies the destination with the wallet proof timestamp before sending",async()=>{
+  const f=await executionFixture();
+  const proof=(await db.query<{verified_at:Date}>("select verified_at from peragus_customer_wallets where customer_id=$1",[f.s.customer.id])).rows[0]!.verified_at;
+  const r=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  expect(r.replayed).toBe(false);
+  expect(f.calls).toEqual(["identify","send"]);
+  expect(f.identifications).toEqual([[f.s.provider,f.s.wallet,new Date(proof).toISOString()]]);
+  expect(f.tokenChecks).toEqual([[f.s.wallet,TEST_USDT_MINT]]);
+  expect(await operationStatus(f.p.data.id)).toBe("sent");
+  const moves=(await statusEvents(f.p.data.id)).slice(-2);
+  expect(moves).toMatchObject([{from_status:"approved",to_status:"sending",actor:`operator:${f.user.id}`},{from_status:"sending",to_status:"sent"}]);
+  expect(moves[1]!.reason).toContain(f.sendId);
+ });
+ it("double execute request produces exactly one send POST",async()=>{
+  const f=await executionFixture();
+  const results=await Promise.allSettled([f.execution.execute(f.user,f.wr.data.id,f.executionRequestId),f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)]);
+  expect(f.sends()).toBe(1);
+  const ok=results.filter(r=>r.status==="fulfilled").map(r=>(r as PromiseFulfilledResult<any>).value);
+  expect(ok.filter(r=>!r.replayed)).toHaveLength(1);
+  const claims=(await statusEvents(f.p.data.id)).filter(e=>e.to_status==="sending");
+  expect(claims).toHaveLength(1);expect(await operationStatus(f.p.data.id)).toBe("sent");
+  // A different request key after the claim is refused before any provider call.
+  await expect(f.execution.execute(f.user,f.wr.data.id,randomUUID())).rejects.toThrow("WITHDRAWAL_EXECUTION_ALREADY_REQUESTED");
+  const replay=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);expect(replay.replayed).toBe(true);
+  expect(f.sends()).toBe(1);
+ });
+ it("send amount equals the locked USDT amount",async()=>{
+  // Quote locked 199 USDT; the conversion delivered 200 USDT to the managed wallet.
+  const f=await executionFixture({minDelaySeconds:0},"199.000000");
+  expect((await db.query<{locked:string}>("select locked_usdt_amount::text as locked from peragus_customer_purchase_intents where id=$1",[f.p.data.id])).rows[0]!.locked).toBe("199.000000");
+  f.provider.available=async()=>"198.999999";
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("WITHDRAWAL_BALANCE_INSUFFICIENT");
+  expect(f.sends()).toBe(0);expect(await operationStatus(f.p.data.id)).toBe("approved");
+  f.provider.available=async()=>"199.00";f.observed.targetAmount="198.500000";
+  const r=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  expect(f.sends()).toBe(1);expect(r.data.source).toEqual({currency:"USDT",amount:"199.000000"});
+  const stored=(await db.query<{send_amount_usdt:string;amount_usdt:string}>("select send_amount_usdt::text,amount_usdt::text from peragus_sandbox_withdrawal_executions where id=$1",[r.data.id])).rows[0]!;
+  expect(stored).toEqual({send_amount_usdt:"199.000000",amount_usdt:"200.000000"});
+ });
+ it("TRAVEL_RULE_REQUIRED keeps the operation in sending with needs_review, never re-posts",async()=>{
+  const f=await executionFixture();f.setMode("travel_rule");
+  const error=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId).catch(e=>e);
+  expect(error).toMatchObject({code:"WITHDRAWAL_SEND_REFUSED",providerCode:"TRAVEL_RULE_REQUIRED"});
+  expect(f.sends()).toBe(1);
+  expect(await operationStatus(f.p.data.id)).toBe("needs_review");
+  const last=(await statusEvents(f.p.data.id)).at(-1)!;
+  expect(last).toMatchObject({from_status:"sending",to_status:"needs_review"});expect(last.reason).toContain("TRAVEL_RULE_REQUIRED");
+  // Replays and reconciliation never POST again and never look for a transfer that was refused.
+  f.setMode("normal");let reads=0;f.provider.find=async()=>{reads++;return null;};
+  const replay=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  expect(replay).toMatchObject({replayed:true,data:{state:"provider_refused",provider_refusal_code:"TRAVEL_RULE_REQUIRED",recovery_required:false,manual_review_required:true}});
+  expect(await f.execution.reconcile(f.user,f.wr.data.id)).toMatchObject({state:"provider_refused"});
+  expect(reads).toBe(0);expect(f.sends()).toBe(1);
+  const alerts=await new OperatorAlertService(pool,new Set([f.user.id]),"test").list(f.user,{limit:"50"});
+  expect(alerts.data.filter(a=>a.purchase_intent_id===f.p.data.id).map(a=>a.kind).sort()).toEqual(["operation_review","withdrawal_review"]);
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const read=await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers});
+  expect(read.json().data).toMatchObject({state:"provider_refused",provider_refusal_code:"TRAVEL_RULE_REQUIRED"});
+ });
+ it("asks for the confirmation literal of the configured money mode before executing",async()=>{
+  const f=await executionFixture();f.provider.mode="live";
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const url=`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`;
+  const wrong=await app.inject({method:"POST",url,headers,payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
+  expect(wrong.statusCode).toBe(400);expect(f.calls).toEqual([]);expect(await operationStatus(f.p.data.id)).toBe("approved");
+  const right=await app.inject({method:"POST",url,headers,payload:{request_id:f.executionRequestId,confirmation:"LIVE_USDT_SEND"}});
+  expect(right.statusCode).toBe(201);expect(f.sends()).toBe(1);
+ });
+ it("answers a definitive refusal on the route with 409 and the provider code",async()=>{
+  const f=await executionFixture();f.setMode("travel_rule");
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers,payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
+  expect(r.statusCode).toBe(409);expect(r.json().error).toMatchObject({code:"WITHDRAWAL_SEND_REFUSED",provider_code:"TRAVEL_RULE_REQUIRED",automatic_retry:false});
+  expect(f.sends()).toBe(1);
+ });
+ it("an ambiguous answer stays in sending and reconciliation moves it to sent without another POST",async()=>{
+  for(const mode of ["timeout","server_error"]){
+   await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+   const f=await executionFixture();f.setMode(mode);
+   await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+   expect(await operationStatus(f.p.data.id)).toBe("sending");
+   expect((await f.execution.reconcile(f.user,f.wr.data.id)).recovery_required).toBe(true);
+   expect(await operationStatus(f.p.data.id)).toBe("sending");
+   f.setFound(f.sendId);
+   expect((await f.execution.reconcile(f.user,f.wr.data.id)).provider_completed).toBe(true);
+   expect(await operationStatus(f.p.data.id)).toBe("sent");expect(f.sends()).toBe(1);
+  }
+ },30_000);
+ it("persists the OZAV transfer id and the tx hash when OZAV reports it",async()=>{
+  const f=await executionFixture();f.setTxHash("5ynthetic7xHash1111111111111111111111111111111111");
+  f.provider.transfer=async()=>{throw new Error("GET unavailable right after the send");};
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();
+  const row=(await db.query<{provider_send_id:string;provider_tx_hash:string}>("select provider_send_id,provider_tx_hash from peragus_sandbox_withdrawal_executions where withdrawal_request_id=$1",[f.wr.data.id])).rows[0]!;
+  expect(row).toEqual({provider_send_id:f.sendId,provider_tx_hash:"5ynthetic7xHash1111111111111111111111111111111111"});
+  expect(await operationStatus(f.p.data.id)).toBe("sent");
+  expect((await f.execution.read(f.user,f.wr.data.id)).provider_transaction_reference).toBe("5ynthetic7xHash1111111111111111111111111111111111");
+  expect(f.sends()).toBe(1);
+ });
+ it("keeps the operation approved and reports DESTINATION_TOKEN_ACCOUNT_MISSING without any POST",async()=>{
+  const f=await executionFixture();f.setTokenAccount(false);
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("DESTINATION_TOKEN_ACCOUNT_MISSING");
+  expect(f.calls).toEqual([]);expect(await f.repo.read(f.wr.data.id)).toBeNull();
+  expect(await operationStatus(f.p.data.id)).toBe("approved");
+  const history=new CustomerOperationHistoryService(pool,"test");
+  expect((await history.get(f.s.customer.id,f.p.data.id))!.withdrawal).toMatchObject({state:"approved",destination_blocker:"DESTINATION_TOKEN_ACCOUNT_MISSING"});
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers,payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
+  expect(r.statusCode).toBe(409);expect(r.json().error.code).toBe("DESTINATION_TOKEN_ACCOUNT_MISSING");
+  f.setTokenAccount(new Error("private rpc failure"));
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");
+  expect(f.calls).toEqual([]);
+  // The customer creates the token account; the next execution clears the blocker and sends once.
+  f.setTokenAccount(true);
+  expect((await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).replayed).toBe(false);
+  expect(f.sends()).toBe(1);
+  expect((await history.get(f.s.customer.id,f.p.data.id))!.withdrawal).toMatchObject({destination_blocker:null});
+ });
+ it("refuses execution unless the operation is approved, before any provider POST",async()=>{
+  const f=await executionFixture();
+  await repo.transitionOperation(f.p.data.id,"needs_review","system:test","synthetic review");
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("WITHDRAWAL_OPERATION_NOT_APPROVED");
+  expect(f.calls).toEqual([]);expect(await f.repo.read(f.wr.data.id)).toBeNull();
+ });
+ it("a failed destination identification leaves the operation approved and nothing claimed",async()=>{
+  const f=await executionFixture();f.setMode("identify_fails");
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("DESTINATION_IDENTIFICATION_FAILED");
+  expect(f.sends()).toBe(0);expect(await operationStatus(f.p.data.id)).toBe("approved");expect(await f.repo.read(f.wr.data.id)).toBeNull();
+ });
+ it("reports the configured money mode and network in the execution view",()=>{
+  const base={id:randomUUID(),withdrawalId:randomUUID(),customerId:randomUUID(),approvalId:randomUUID(),approverId:randomUUID(),pixId:randomUUID(),purchaseId:randomUUID(),
+   providerCustomerId:"ozav_cus_x",providerWalletId:"ozav_wal_x",providerQuoteId:"ozav_q_x",transferId:"ozav_tr_x",amountBrl:"1000.00",amountUsdt:"200.000000",sendAmountUsdt:"199.000000",
+   walletAddress:Keypair.generate().publicKey.toBase58(),verifiedAt:new Date().toISOString(),operatorId:randomUUID(),requestId:randomUUID(),attempted:true,sendTransferId:null,observation:null,
+   txHash:null,refusalCode:null,closedAt:null};
+  expect(executionView({...base,environment:"live"})).toMatchObject({environment:"live",real_money:true,destination:{proof_network:"solana:mainnet"},mainnet_execution:true,source:{amount:"199.000000"}});
+  expect(executionView({...base,environment:"test"})).toMatchObject({environment:"test",real_money:false,destination:{proof_network:"solana:devnet"},mainnet_execution:false});
+  expect(closureView({id:randomUUID(),execution_id:randomUUID(),withdrawal_request_id:randomUUID(),operator_user_id:randomUUID(),request_id:randomUUID(),reason:"r",amount_usdt:"1.000000",closed_at:new Date()},"live"))
+   .toMatchObject({environment:"live",real_money:true});
+ });
+});
+
+
 describe("owned operation detail",()=>{
  it("reads an old operation directly with write services absent and preserves the history projection",async()=>{
   const f=await completedFixture(),history=new CustomerOperationHistoryService(pool,"test");
@@ -644,7 +800,7 @@ describe("stored operational alerts",()=>{
  });
 });
 
-import {SandboxClosureService} from "../src/withdrawals/sandbox-closure.js";
+import {SandboxClosureService,closureView} from "../src/withdrawals/sandbox-closure.js";
 describe('audited sandbox withdrawal closure',()=>{
  const reason='Encerramento de piloto sandbox concluido, sem comprovar entrega real.';
  async function ready(){

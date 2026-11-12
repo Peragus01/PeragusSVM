@@ -50,7 +50,7 @@ export class OperatorAlertService {
     (c.state='pending' and c.next_check_at<=now()-interval '15 minutes' and (c.lease_until is null or c.lease_until<=now())))
    union all
    select e.id,
-    case when e.observation is null then 'withdrawal_uncertain' else 'withdrawal_review' end,
+    case when e.observation is null and e.provider_refusal_code is null then 'withdrawal_uncertain' else 'withdrawal_review' end,
     0,e.created_at,w.purchase_intent_id,e.pix_id,e.withdrawal_request_id,null::uuid
    from peragus_sandbox_withdrawal_executions e
    join peragus_customer_withdrawal_requests w on w.id=e.withdrawal_request_id and w.customer_id=e.customer_id and w.environment='${this.e.mode}'

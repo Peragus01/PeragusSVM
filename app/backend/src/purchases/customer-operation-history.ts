@@ -30,6 +30,7 @@ interface Row {
   pix_source_status:string|null; pix_destination_status:string|null; converted_amount:string|null;
   withdrawal_id:string|null; approved:boolean; execution_id:string|null; attempted:boolean;
   execution_status:string|null; execution_source_status:string|null; execution_destination_status:string|null;
+  execution_refused:boolean; destination_blocker:string|null;
 }
 const providerStatus=z.enum(["awaiting_payment","payment_confirmed","converting","payout_initiated",
   "completed","failed","cancelled","expired","needs_review","awaiting_approval"]);
@@ -72,12 +73,14 @@ export class CustomerOperationHistoryService {
       r.id as withdrawal_id,(a.id is not null) as approved,e.id as execution_id,
       coalesce(e.create_attempted,false) as attempted,e.observation->>'status' as execution_status,
       e.observation->>'sourceLegStatus' as execution_source_status,
-      e.observation->>'destinationLegStatus' as execution_destination_status
+      e.observation->>'destinationLegStatus' as execution_destination_status,
+      (e.provider_refusal_code is not null) as execution_refused,dc.blocker as destination_blocker
       from page p
       left join peragus_customer_sandbox_pix x on x.purchase_intent_id=p.id and x.customer_id=p.customer_id and x.environment='${this.e.mode}'
       left join peragus_customer_withdrawal_requests r on r.purchase_intent_id=p.id and r.customer_id=p.customer_id and r.environment='${this.e.mode}'
       left join peragus_withdrawal_operator_approvals a on a.withdrawal_request_id=r.id and a.customer_id=p.customer_id and a.environment='${this.e.mode}'
       left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=r.id and e.customer_id=p.customer_id and e.environment='${this.e.mode}'
+      left join peragus_withdrawal_destination_checks dc on dc.withdrawal_request_id=r.id and dc.customer_id=p.customer_id and dc.environment='${this.e.mode}'
       left join peragus_customer_refund_requests rf on rf.purchase_intent_id=p.id and rf.customer_id=p.customer_id and rf.environment='${this.e.mode}'
       left join peragus_manual_refund_decisions rd on rd.refund_request_id=rf.id and rd.customer_id=p.customer_id
       left join peragus_manual_refund_completions rc on rc.refund_request_id=rf.id and rc.customer_id=p.customer_id
@@ -99,13 +102,15 @@ export class CustomerOperationHistoryService {
         pix:row.pix_id?{id:row.pix_id,state:pixStatus??(row.pix_attempted?"uncertain":"reserved"),conversion_completed:converted}:null,
         withdrawal:row.withdrawal_id?{
           id:row.withdrawal_id,approved:row.approved,
-          state:sendStatus?`provider_${sendStatus}`:row.attempted?"uncertain":row.execution_id?"reserved":row.approved?"approved":"recorded",
+          state:sendStatus?`provider_${sendStatus}`:row.execution_refused?"provider_refused":row.attempted?"uncertain":row.execution_id?"reserved":row.approved?"approved":"recorded",
           withdrawal_started:row.attempted,
           provider_completed:sendStatus==="completed" && row.execution_source_status==="completed" && row.execution_destination_status==="completed",
-          recovery_required:row.attempted && sendStatus===null,
+          recovery_required:row.attempted && sendStatus===null && !row.execution_refused,
+          // e.g. DESTINATION_TOKEN_ACCOUNT_MISSING: the wallet must hold a USDT token account before the send.
+          destination_blocker:row.destination_blocker==="DESTINATION_TOKEN_ACCOUNT_MISSING"?row.destination_blocker:null,
           result_path:`/v1/me/withdrawal-requests/${row.withdrawal_id}/result`
         }:null,
-        observation_freshness:"not_evaluated",onchain_delivery_verified:false,mainnet_execution:false
+        observation_freshness:"not_evaluated",onchain_delivery_verified:false,mainnet_execution:this.e.mode==="live" && row.attempted
       };
     }),meta:{has_more:hasMore,next_cursor:hasMore && last?Buffer.from(JSON.stringify({created_at:last.created_at,id:last.id})).toString("base64url"):null}};
   }

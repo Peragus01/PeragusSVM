@@ -21,6 +21,7 @@ import { CustomerWithdrawalResultService } from "./withdrawals/customer-withdraw
 import { SandboxWithdrawalExecutionService } from "./withdrawals/sandbox-execution.js";
 import { PostgresSandboxExecutionRepository } from "./repositories/postgres-sandbox-withdrawal-execution.js";
 import { OzavSandboxWithdrawalProvider } from "./providers/ozav-sandbox-withdrawal.js";
+import { createSolanaTokenAccountReader } from "./providers/solana-token-accounts.js";
 import { WithdrawalOperatorApprovalService } from "./withdrawals/operator-approvals.js";
 import { PostgresWithdrawalOperatorApprovalRepository } from "./repositories/postgres-withdrawal-operator-approvals.js";
 import { CustomerWithdrawalRequestService } from "./withdrawals/customer-withdrawal-requests.js";
@@ -612,6 +613,11 @@ const app = await buildApp({
               moneyMode,
               operatorMfaPolicy,
             ),
+            // Before a send: the destination must hold a token account for this environment's USDT mint.
+            {
+              usdtMint: resolveMoneyEnvironment(env).usdtMint,
+              reader: createSolanaTokenAccountReader(new Connection(env.SOLANA_RPC_URL, "confirmed")),
+            },
             {
               mfaMaxAgeSeconds: env.OPERATOR_MFA_MAX_AGE_SECONDS,
               minDelaySeconds: env.OPERATOR_EXECUTION_MIN_DELAY_SECONDS,

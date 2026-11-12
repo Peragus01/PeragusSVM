@@ -3,9 +3,21 @@ import {providerKeyMatchesMode,type MoneyMode} from "../config/money-environment
 import {individualDraftSchema} from "../onboarding/individual-schema.js";
 import {OzavClient, OzavClientError, httpsOzavTransport, httpsOzavWriteTransport,
  type OzavTransport, type OzavWriteTransport} from "./ozav-client.js";
+/** HTTP answers on which OZAV definitively refused the send: no transfer exists, so nothing to reconcile. */
+const DEFINITIVE_REFUSALS=new Set([400,401,403,404,422]);
 export class SandboxWithdrawalProviderError extends OzavClientError {
- constructor(status:number,public readonly providerCode:string|null){super("Sandbox send outcome requires reconciliation",false,status);}
+ /** True when OZAV refused the request (4xx other than 408/409/429): never re-POST, review instead. */
+ readonly definitive:boolean;
+ constructor(status:number,public readonly providerCode:string|null){
+  super("Sandbox send outcome requires reconciliation",false,status);this.definitive=DEFINITIVE_REFUSALS.has(status);
+ }
 }
+const errorCode=(body:unknown)=>{const e=(body as {error?:{code?:unknown}}|null)?.error;
+ return typeof e?.code==="string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(e.code)?e.code:null;};
+const SOLANA_ADDRESS=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const pastTimestamp=(value:string)=>{const t=Date.parse(value);return /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(t) && t<=Date.now();};
+/** Accepted send: the OZAV transfer id and, when OZAV already reported it, the on-chain tx hash. */
+export interface WithdrawalSendAccepted {id:string;txHash:string|null;}
 const record=z.record(z.string(),z.unknown());
 const id=(prefix:string)=>z.string().regex(new RegExp(`^${prefix}[A-Za-z0-9_-]+$`));
 const decimal=z.string().regex(/^\d{1,15}(\.\d{1,6})?$/);
@@ -33,11 +45,11 @@ function observation(value:unknown):WithdrawalObservation {
   sourceAmount:from.amount,targetAmount:to?.amount??null,sourceLegStatus:leg(row.source_leg),destinationLegStatus:leg(row.destination_leg),
   transactionReference:refs.tx_hash==null?null:z.string().min(1).max(256).parse(refs.tx_hash)};
 }
-/** A separate send boundary bound to one money mode (key and capabilities); no generic POST retry. Live sends stay refused at boot until Task 10 (MONEY_PATH_NOT_LIVE_READY). */
+/** A separate send boundary bound to one money mode (key and capabilities); no generic POST retry. */
 export class OzavSandboxWithdrawalProvider {
  readonly funding:OzavClient;
  private readonly read:OzavTransport;private readonly write:OzavWriteTransport;
- private readonly mode:MoneyMode;
+ readonly mode:MoneyMode;
  constructor(private readonly key:string,options:{mode:MoneyMode;read?:OzavTransport;write?:OzavWriteTransport}){
   if(!providerKeyMatchesMode(key,options.mode))throw new OzavClientError("Sandbox key required",false);
   this.mode=options.mode;
@@ -47,7 +59,7 @@ export class OzavSandboxWithdrawalProvider {
  private async get(path:string){const r=await this.read(path,this.key,10000);if(r.statusCode!==200)throw new OzavClientError("Withdrawal read unavailable",false,r.statusCode);return record.parse(r.body);}
  async capabilities(){const c=await this.get("/v2/capabilities");const scopes=z.array(z.string()).parse(c.scopes),entitlements=z.array(z.string()).parse(c.entitlements),features=record.parse(c.features);
   if(c.environment!==this.mode || !["liquidity","custody","customers"].every(v=>entitlements.includes(v))
-   || !["customers:read","wallets:read","transfers:read","transfers:write"].every(v=>scopes.includes(v))
+   || !["customers:read","customers:write","wallets:read","transfers:read","transfers:write"].every(v=>scopes.includes(v))
    || features.transfers!=="live" || features.wallet_transfers!=="live")throw new OzavClientError("Withdrawal capabilities missing",false);
  }
  async identity(customerId:string,externalRef:string):Promise<WithdrawalIdentity>{
@@ -70,10 +82,23 @@ export class OzavSandboxWithdrawalProvider {
   if(balances.length!==1)throw new OzavClientError("USDT balance unknown",false);
   return decimal.parse(balances[0]!.amount);
  }
- async send(input:{executionId:string;withdrawalId:string;customerId:string;walletId:string;amount:string;address:string;verifiedAt:string;identity:WithdrawalIdentity}):Promise<string>{
+ /**
+  * Registers who holds the destination wallet (the customer's own, self-custodied, attested by the
+  * wallet proof) before a crypto_address send. OZAV records a new identification per POST and the
+  * latest applies, so a repeat is harmless; 409 (already identified) counts as success.
+  */
+ async identifyDestination(customerId:string,address:string,attestedAt:string):Promise<void>{
+  id("ozav_cus_").parse(customerId);
+  if(!SOLANA_ADDRESS.test(address) || !pastTimestamp(attestedAt))throw new OzavClientError("Invalid destination identification input",false);
+  const r=await this.write({path:`/v2/customers/${encodeURIComponent(customerId)}/destination-identifications`,
+   body:{chain:"solana",address,wallet_type:"self_custodied",wallet_attested_ownership_at:attestedAt}},this.key,15000);
+  if(r.statusCode===200 || r.statusCode===201 || r.statusCode===409)return;
+  throw new OzavClientError("Destination identification refused",false,r.statusCode);
+ }
+ async send(input:{executionId:string;withdrawalId:string;customerId:string;walletId:string;amount:string;address:string;verifiedAt:string;identity:WithdrawalIdentity}):Promise<WithdrawalSendAccepted>{
   z.string().uuid().parse(input.executionId);z.string().uuid().parse(input.withdrawalId);
   id("ozav_cus_").parse(input.customerId);id("ozav_wal_").parse(input.walletId);
-  if(usdtUnits(input.amount)<=0n || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(input.address)
+  if(usdtUnits(input.amount)<=0n || !SOLANA_ADDRESS.test(input.address)
    || !Number.isFinite(Date.parse(input.verifiedAt)) || Date.parse(input.verifiedAt)>Date.now())throw new OzavClientError("Invalid sandbox send input",false);
   const i=input.identity;
   const r=await this.write({path:"/v2/transfers",idempotencyKey:`peragus-send-${input.executionId}`,body:{
@@ -84,14 +109,12 @@ export class OzavSandboxWithdrawalProvider {
     beneficiary:{name:i.name,wallet_type:"self_custodied",wallet_attested_ownership_at:input.verifiedAt,is_self:true}},
    metadata:{peragus_execution_id:input.executionId,peragus_withdrawal_request_id:input.withdrawalId}
   }},this.key,15000);
-  if(r.statusCode!==200 && r.statusCode!==201){
-   const body=r.body as {error?:{code?:unknown}}|null;
-   const code=typeof body?.error?.code==="string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(body.error.code)?body.error.code:null;
-   throw new SandboxWithdrawalProviderError(r.statusCode,code);
-  }
+  if(r.statusCode!==200 && r.statusCode!==201)throw new SandboxWithdrawalProviderError(r.statusCode,errorCode(r.body));
   const body=record.parse(r.body);if(body.object!=="transfer")throw new OzavClientError("Send outcome invalid",false);
   // Retain reduced HTTP 200 IDs; only a later GET supplies persisted evidence.
-  return id("ozav_tr_").parse(body.id);
+  const refs=body.settlement_references==null?null:record.safeParse(body.settlement_references);
+  const hash=refs?.success && refs.data.network==="solana" && typeof refs.data.tx_hash==="string" && /^[!-~]{1,256}$/.test(refs.data.tx_hash)?refs.data.tx_hash:null;
+  return {id:id("ozav_tr_").parse(body.id),txHash:hash};
  }
  async transfer(transferId:string){return observation(await this.get(`/v2/transfers/${encodeURIComponent(id("ozav_tr_").parse(transferId))}`));}
  async find(customerId:string,executionId:string):Promise<string|null>{
