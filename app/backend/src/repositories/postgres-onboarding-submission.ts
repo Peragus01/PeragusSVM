@@ -2,14 +2,16 @@ import type { Pool } from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
 import type { OzavCustomerSnapshot } from "../providers/ozav-client.js";
-import { SubmissionError, type SubmissionRecord, type SubmissionRepository } from "../onboarding/submission-types.js";
+import { SubmissionError, type SubmissionAttestation, type SubmissionRecord, type SubmissionRepository } from "../onboarding/submission-types.js";
 interface Row { id: string; customer_id: string; draft_version: number; terms_session_id: string; request_hash: string; idempotency_key: string;
   encrypted_payload: unknown; state: "pending" | "linked"; provider_customer_id: string | null; provider_status: string | null;
-  verification_mode: "full" | "reliance" | null; provider_snapshot: OzavCustomerSnapshot | null; snapshot_version: number; refreshed_at: Date | string | null; }
+  verification_mode: "full" | "reliance" | null; provider_snapshot: OzavCustomerSnapshot | null; snapshot_version: number; refreshed_at: Date | string | null;
+  attestation?: SubmissionAttestation | null; }
 const map = (r: Row): SubmissionRecord => ({ id: r.id, customerId: r.customer_id, draftVersion: r.draft_version, termsSessionId: r.terms_session_id,
   requestHash: r.request_hash, idempotencyKey: r.idempotency_key, encryptedPayload: r.encrypted_payload, state: r.state,
   providerId: r.provider_customer_id, providerStatus: r.provider_status, verificationMode: r.verification_mode,
-  snapshot: r.provider_snapshot, snapshotVersion: r.snapshot_version, refreshedAt: r.refreshed_at == null ? null : new Date(r.refreshed_at).toISOString() });
+  snapshot: r.provider_snapshot, snapshotVersion: r.snapshot_version, refreshedAt: r.refreshed_at == null ? null : new Date(r.refreshed_at).toISOString(),
+  attestation: r.attestation ?? null });
 export class PostgresOnboardingSubmissionRepository implements SubmissionRepository {
   private readonly e: RowEnvironment;
   constructor(private readonly pool: Pool, mode: MoneyMode) { this.e = rowEnvironment(mode); }
@@ -19,9 +21,10 @@ export class PostgresOnboardingSubmissionRepository implements SubmissionReposit
   }
   async reserve(record: SubmissionRecord) {
     await this.pool.query(`insert into peragus_customer_onboarding_submissions
-      (id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,environment)
-      values($1,$2,$3,$4,$5,$6,$7::jsonb,$8) on conflict(customer_id) do nothing`,
-      [record.id, record.customerId, record.draftVersion, record.termsSessionId, record.requestHash, record.idempotencyKey, JSON.stringify(record.encryptedPayload), this.e.mode]);
+      (id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,environment,attestation,attested_at)
+      values($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,case when $9::text is null then null else now() end) on conflict(customer_id) do nothing`,
+      [record.id, record.customerId, record.draftVersion, record.termsSessionId, record.requestHash, record.idempotencyKey, JSON.stringify(record.encryptedPayload), this.e.mode,
+        record.attestation ?? null]);
     const saved = await this.find(record.customerId);
     if (!saved || saved.requestHash !== record.requestHash || saved.draftVersion !== record.draftVersion || saved.termsSessionId !== record.termsSessionId) throw new SubmissionError("ONBOARDING_CONFLICT");
     return saved;

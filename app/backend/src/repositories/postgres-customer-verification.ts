@@ -25,6 +25,9 @@ export class PostgresCustomerVerificationRepository implements VerificationRepos
     const r = await this.pool.query(`update peragus_customer_verifications set create_attempted=true,updated_at=now() where customer_id=$1 and environment='${this.e.mode}' and not create_attempted and verification_id is null returning customer_id`, [customerId]);
     return Boolean(r.rows[0]);
   }
+  async releaseCreate(customerId: string) {
+    await this.pool.query(`update peragus_customer_verifications set create_attempted=false,updated_at=now() where customer_id=$1 and environment='${this.e.mode}' and create_attempted and verification_id is null`, [customerId]);
+  }
   async save(record: VerificationRecord, observation: OzavVerification, outcome?: SimulationOutcome) {
     if (observation.customerId !== record.providerCustomerId || (record.verificationId && record.verificationId !== observation.id)) throw new VerificationError("VERIFICATION_CONFLICT");
     try {

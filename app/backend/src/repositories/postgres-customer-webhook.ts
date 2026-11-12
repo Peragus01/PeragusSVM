@@ -1,5 +1,7 @@
 import { PostgresOnboardingSubmissionRepository } from "./postgres-onboarding-submission.js";
 import { RegistrationSnapshotService } from "../onboarding/customer-submission-service.js";
+import { CustomerVerificationService } from "../onboarding/customer-verification-service.js";
+import { PostgresCustomerVerificationRepository } from "./postgres-customer-verification.js";
 import type { Pool } from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
@@ -12,7 +14,7 @@ import { CustomerWebhookConflict, type CustomerWebhookEvent, type CustomerWebhoo
 export class PostgresCustomerWebhookProcessor implements CustomerWebhookProcessor {
   private readonly e: RowEnvironment;
   constructor(private readonly pool: Pool, private readonly provider: Pick<OzavClient,
-    "getCustomerCapabilities" | "createSandboxCustomer" | "getSandboxCustomerSnapshot">, mode: MoneyMode,
+    "getCustomerCapabilities" | "createSandboxCustomer" | "getSandboxCustomerSnapshot" | "getCustomerVerification">, mode: MoneyMode,
     private readonly transfers?: Pick<PurchaseProgression, "refreshTransfer">) { this.e = rowEnvironment(mode); }
   async process(event: CustomerWebhookEvent, digest: string): Promise<CustomerWebhookResult> {
     // An event from the other environment never changes state here.
@@ -55,7 +57,18 @@ export class PostgresCustomerWebhookProcessor implements CustomerWebhookProcesso
         if (binding.rows[0] && registration.rows[0]) throw new CustomerWebhookConflict();
         const transactionalPool = { query: connection.query.bind(connection) } as unknown as Pool;
         if (registration.rows[0]) {
-          await new RegistrationSnapshotService(new PostgresOnboardingSubmissionRepository(transactionalPool, this.e.mode), this.provider).refresh(registration.rows[0].customer_id);
+          const customerId = registration.rows[0].customer_id;
+          const submissions = new PostgresOnboardingSubmissionRepository(transactionalPool, this.e.mode);
+          const verifications = new PostgresCustomerVerificationRepository(transactionalPool, this.e.mode);
+          if (event.type === "verification.updated" && (await verifications.find(customerId))?.verificationId) {
+            // The event only names the verification: its status and checks are re-read by
+            // GET /verifications/{id} (the GET is the truth), then the registration snapshot.
+            // Only refresh() is used, which needs capabilities, the verification GET and the customer GET.
+            await new CustomerVerificationService(verifications, submissions,
+              this.provider as ConstructorParameters<typeof CustomerVerificationService>[2], this.e.mode).refresh(customerId);
+          } else {
+            await new RegistrationSnapshotService(submissions, this.provider, this.e.mode).refresh(customerId);
+          }
           result = "processed";
         } else if (binding.rows[0]) {
           const service = new OzavSandboxCustomerService(new PostgresSandboxCustomerLinkRepository(transactionalPool, this.e.mode), this.provider);

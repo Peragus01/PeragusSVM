@@ -79,7 +79,7 @@ export class CustomerTermsService {
     if (row.state === "ready") {
       const draft = await this.drafts.read(customerId);
       if (!draft) throw new TermsFlowError("TERMS_PROFILE_REQUIRED");
-      // Synthetic staging identity only. Do not invent email, IP, user-agent or acceptance for the person.
+      // The draft's legal name only. Do not invent email, IP, user-agent or acceptance for the person.
       evidence = { accepted_by: { legal_name: draft.individual.legal_name }, accepted_at: this.now().toISOString() };
     } else {
       evidence = evidenceSchema.parse(this.vault.open(this.context(row), "acceptance", row.encryptedAcceptance));

@@ -86,11 +86,12 @@ async function main() {
       verifications,
       submissions,
       provider,
+      moneyModeFor(env),
     ),
-    screening = new CustomerScreeningService(screenings, submissions, provider);
+    screening = new CustomerScreeningService(screenings, submissions, provider, moneyModeFor(env));
   async function fresh(customer: Customer) {
     await notificationStep("provider_registration", () =>
-      new RegistrationSnapshotService(submissions, provider).refresh(
+      new RegistrationSnapshotService(submissions, provider, moneyModeFor(env)).refresh(
         customer.id,
       ),
     );

@@ -1,6 +1,7 @@
 import type { IndividualDraft } from "../onboarding/individual-schema.js";
 import https from "node:https";
 import { providerKeyMatchesMode, type MoneyMode } from "../config/money-environment.js";
+import { isAllowedHostedSessionUrl } from "./ozav-hosted-session.js";
 
 export interface OzavResponse {
   statusCode: number;
@@ -143,19 +144,37 @@ export interface OzavVerification {
       "pass" | "fail" | "review" | "pending" | "not_started"
     >
   >;
+  /**
+   * Live only: the hosted session link, already validated as an https OZAV URL.
+   * A test key never receives one, so a test response carrying it is refused.
+   */
+  sessionUrl?: string | null;
+}
+/**
+ * A live registration carries the person's own e-mail: a plausible address that is
+ * not on a reserved example domain (RFC 2606) nor a generated synthetic fixture.
+ */
+export function isLiveRegistrationEmail(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 254 || value !== value.trim().toLowerCase()) return false;
+  const match = /^([^\s@"<>()[\]\\,;:]{1,64})@((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})$/.exec(value);
+  if (!match) return false;
+  const domain = match[2]!;
+  return !/(^|\.)example\.(com|net|org)$/.test(domain) && !match[1]!.startsWith("peragus-onboarding-test-");
 }
 function parseVerification(
   input: unknown,
   customerId: string,
+  mode: MoneyMode,
   expectedId?: string,
 ): OzavVerification {
   const row = object(input);
   const id = identifier(row.id, "ozav_vrf_");
+  const hasSession = row.session_url !== undefined && row.session_url !== null;
   if (
     row.object !== "verification" ||
     row.customer_id !== customerId ||
     (expectedId && id !== expectedId) ||
-    (row.session_url !== undefined && row.session_url !== null)
+    (hasSession && (mode !== "live" || !isAllowedHostedSessionUrl(row.session_url)))
   )
     return invalidResponse();
   if (
@@ -189,6 +208,7 @@ function parseVerification(
     customerId,
     status: row.status as OzavVerification["status"],
     checks,
+    ...(mode === "live" ? { sessionUrl: hasSession ? (row.session_url as string) : null } : {}),
   };
 }
 
@@ -203,7 +223,8 @@ export interface OzavRegistrationPayload {
   verification_mode: "full";
   custody_model: "managed";
   monitoring: false;
-  metadata: { peragus_onboarding_test: "true" };
+  /** Test registrations are marked synthetic; live registrations carry no test marker. */
+  metadata: { peragus_onboarding_test: "true" } | { peragus_onboarding: "true" };
 }
 export interface OzavTermsSession {
   token: string | null;
@@ -1028,18 +1049,27 @@ export class OzavClient {
     payload: OzavRegistrationPayload,
     idempotencyKey: string,
   ): Promise<OzavSandboxCustomer & { verificationMode: "full" }> {
+    // Test: only the generated synthetic fixture shape. Live: the person's real e-mail and
+    // mode-derived refs, never a synthetic/test marker (each mode refuses the other's shape).
+    const metadata = JSON.stringify(payload.metadata);
+    const shaped =
+      this.mode === "live"
+        ? /^peragus-registration-[0-9a-f-]{36}$/.test(idempotencyKey) &&
+          /^peragus-onboarding:[0-9a-f-]{36}$/.test(payload.external_ref) &&
+          isLiveRegistrationEmail(payload.email) &&
+          metadata === JSON.stringify({ peragus_onboarding: "true" })
+        : /^peragus-registration-test-[0-9a-f-]{36}$/.test(idempotencyKey) &&
+          /^peragus-onboarding-test:[0-9a-f-]{36}$/.test(payload.external_ref) &&
+          /^peragus-onboarding-test-[0-9a-f-]{36}@example.com$/.test(payload.email) &&
+          metadata === JSON.stringify({ peragus_onboarding_test: "true" });
     if (
-      !/^peragus-registration-test-[0-9a-f-]{36}$/.test(idempotencyKey) ||
-      !/^peragus-onboarding-test:[0-9a-f-]{36}$/.test(payload.external_ref) ||
-      !/^peragus-onboarding-test-[0-9a-f-]{36}@example.com$/.test(
-        payload.email,
-      ) ||
+      !shaped ||
       payload.verification_mode !== "full" ||
       payload.custody_model !== "managed" ||
       payload.type !== "individual" ||
       !/^ts_[A-Za-z0-9_-]{8,256}$/.test(payload.terms_session_id)
     )
-      throw new OzavClientError("Invalid sandbox registration", false);
+      throw new OzavClientError("Invalid onboarding registration", false);
     const row = object(
       (
         await this.post({
@@ -1053,7 +1083,9 @@ export class OzavClient {
       row.object !== "customer" ||
       row.type !== "individual" ||
       row.external_ref !== payload.external_ref ||
-      row.email !== payload.email ||
+      typeof row.email !== "string" ||
+      // E-mail domains and (in practice) local parts are case-insensitive at the provider.
+      row.email.toLowerCase() !== payload.email.toLowerCase() ||
       object(row.verification).mode !== "full"
     )
       return invalidResponse();
@@ -1153,7 +1185,7 @@ export class OzavClient {
       )
         return invalidResponse();
       for (const item of row.data) {
-        const session = parseVerification(item, customerId);
+        const session = parseVerification(item, customerId, this.mode);
         if (seen.has(session.id)) return invalidResponse();
         seen.add(session.id);
         sessions.push(session);
@@ -1185,7 +1217,7 @@ export class OzavClient {
         ],
       },
     });
-    return parseVerification(response.body, customerId);
+    return parseVerification(response.body, customerId, this.mode);
   }
   async getCustomerVerification(
     customerId: string,
@@ -1196,6 +1228,7 @@ export class OzavClient {
     return parseVerification(
       await this.get(`/v2/verifications/${encodeURIComponent(verificationId)}`),
       customerId,
+      this.mode,
       verificationId,
     );
   }
@@ -1208,6 +1241,9 @@ export class OzavClient {
     identifier(verificationId, "ozav_vrf_");
     if (outcome !== "approved" && outcome !== "rejected")
       throw new OzavClientError("Invalid simulation outcome", false);
+    // Sandbox-only provider helper: never called with a live key.
+    if (this.mode !== "test")
+      throw new OzavClientError("Verification simulation requires test mode", false);
     return parseVerification(
       (
         await this.post({
@@ -1216,6 +1252,7 @@ export class OzavClient {
         })
       ).body,
       customerId,
+      this.mode,
       verificationId,
     );
   }

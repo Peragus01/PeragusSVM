@@ -255,7 +255,7 @@ export class SandboxWithdrawalExecutionService {
   const funding=await this.provider.funding.getTransfer(c.transferId);validatePixTransfer(c,funding);
   if(funding.status!=="completed" || funding.sourceLegStatus!=="completed" || funding.destinationLegStatus!=="completed"
    || usdtUnits(funding.amounts.target.amount)!==usdtUnits(c.amountUsdt))throw new SandboxExecutionError("WITHDRAWAL_FUNDING_NOT_CONFIRMED");
-  const identity=await this.provider.identity(c.providerCustomerId,onboardingExternalRef(c.customerId));
+  const identity=await this.provider.identity(c.providerCustomerId,onboardingExternalRef(c.customerId,this.mode));
   const available=await this.provider.available(c.providerCustomerId,c.providerWalletId);
   if(usdtUnits(available)<amount)throw new SandboxExecutionError("WITHDRAWAL_BALANCE_INSUFFICIENT");
   // The destination must already hold a token account for this environment's USDT mint.

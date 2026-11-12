@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { CustomerNotice, CustomerPanel } from "./customer-ui";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
+import { browserNavigation, hostedSessionUrl } from "@/lib/peragus/hosted-session";
 
 type Draft = { version: number; individual: Individual };
 type Individual = {
@@ -82,6 +83,10 @@ const fieldMessages: Record<string, string> = {
   "individual.residential_address.postal_code": "Informe um CEP com 8 dígitos.",
 };
 const fieldSummary = "Corrija os campos destacados para continuar.";
+const sessionUnavailable =
+  "A sessão de verificação de identidade está indisponível no momento. Tente novamente em alguns minutos.";
+const verificationOpen = (value: Verification | null | undefined) =>
+  value?.status === "pending" || value?.status === "in_progress";
 export function CustomerOnboarding() {
   const { accessToken, identity } = useCustomerSession();
   const test = useMoneyMode() === "test";
@@ -205,8 +210,16 @@ export function CustomerOnboarding() {
       else if (path.startsWith("onboarding/terms")) {
         setTerms(result as Terms);
         setAccepted(false);
-      } else if (path.includes("verification")) setVerification(result as Verification);
-      else if (path.includes("screening"))
+      } else if (path.includes("verification")) {
+        setVerification(result as Verification);
+        // Live: starting sends the person to OZAV's hosted session, only to a validated OZAV URL.
+        if (path === "onboarding/verification" && !test) {
+          const started = result as Verification | null;
+          const url = verificationOpen(started) ? hostedSessionUrl(started?.session_url) : null;
+          if (url) browserNavigation.assign(url);
+          else if (verificationOpen(started)) setError(sessionUnavailable);
+        }
+      } else if (path.includes("screening"))
         setScreening(result as { status: string; result: string });
       else if (path.startsWith("onboarding")) setRegistration(result as { state: string });
       if (path.startsWith("onboarding")) {
@@ -556,7 +569,10 @@ export function CustomerOnboarding() {
                           void act("onboarding/submit", {
                             draft_version: draft.version,
                             terms_session_id: terms.session_id,
-                            sandbox_data_confirmed: true,
+                            // Test confirms synthetic data; live confirms the data are the person's own and true.
+                            ...(test
+                              ? { sandbox_data_confirmed: true }
+                              : { data_truthfulness_confirmed: true }),
                           })
                         }
                       >
@@ -613,10 +629,26 @@ export function CustomerOnboarding() {
                         </p>
                       </details>
                     ) : (
-                      <p className="customer-muted">
-                        O envio de arquivos, quando disponível, aparece na seção de documentos. A
-                        verificação permanece pendente até a análise.
-                      </p>
+                      <>
+                        <p className="customer-muted">
+                          A verificação de identidade é feita na página segura da OZAV, com seu
+                          documento e uma selfie. Depois de concluir, volte aqui e atualize a
+                          verificação.
+                        </p>
+                        {verificationOpen(verification) &&
+                          hostedSessionUrl(verification.session_url) && (
+                            <button
+                              className="customer-button"
+                              disabled={busy}
+                              onClick={() => {
+                                const url = hostedSessionUrl(verification.session_url);
+                                if (url) browserNavigation.assign(url);
+                              }}
+                            >
+                              Continuar verificação de identidade
+                            </button>
+                          )}
+                      </>
                     )}
                     <button
                       className="customer-button-secondary"
@@ -655,7 +687,7 @@ export function CustomerOnboarding() {
                 </button>
                 <p className="customer-muted">
                   Seu cadastro permanece pendente até a conclusão das verificações obrigatórias.
-                  Este ambiente não permite operações reais.
+                  {test && " Este ambiente não permite operações reais."}
                 </p>
               </CustomerPanel>
             </>

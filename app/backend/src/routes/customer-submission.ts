@@ -26,9 +26,15 @@ export async function registerCustomerSubmissionRoutes(app: FastifyInstance, ser
             if (!z.object({}).strict().safeParse(body).success) return reply.code(400).send({ error: { code: "VALIDATION_ERROR" } });
             return { data: await service.refresh(customer.id) };
           }
-          const parsed = z.object({ draft_version: z.number().int().min(1).max(2_000_000_000), terms_session_id: z.string().uuid(), sandbox_data_confirmed: z.literal(true) }).strict().safeParse(body);
+          // Per-mode attestation: test confirms synthetic data; live confirms the data are the person's own and true.
+          const live = service.mode === "live";
+          const base = { draft_version: z.number().int().min(1).max(2_000_000_000), terms_session_id: z.string().uuid() };
+          const parsed = (live ? z.object({ ...base, data_truthfulness_confirmed: z.literal(true) }) : z.object({ ...base, sandbox_data_confirmed: z.literal(true) }))
+            .strict().safeParse(body);
           if (!parsed.success) return reply.code(400).send({ error: { code: "VALIDATION_ERROR" } });
-          const result = await service.submit(customer.id, parsed.data.draft_version, parsed.data.terms_session_id);
+          const result = await service.submit(customer.id, parsed.data.draft_version, parsed.data.terms_session_id, live
+            ? { attestation: "data_truthfulness_confirmed", email: request.authenticatedUser.email }
+            : { attestation: "sandbox_data_confirmed" });
           reply.header("Idempotency-Replayed", String(result.replayed));
           return reply.code(result.replayed ? 200 : 201).send({ data: result.data, meta: { idempotent_replay: result.replayed, operations_enabled: false } });
         } catch (error) {

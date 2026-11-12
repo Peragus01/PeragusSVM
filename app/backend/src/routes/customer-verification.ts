@@ -34,7 +34,8 @@ export async function registerCustomerVerificationRoutes(app: FastifyInstance, s
           const result = await service.start(customer.id);
           return reply.code(result.replayed ? 200 : 201).send({ data: result.data, meta: { idempotent_replay: result.replayed, operations_enabled: false } });
         } catch (error) {
-          if (error instanceof VerificationError) return reply.code(409).send({ error: { code: error.code } });
+          // Live fails closed without a hosted session; retrying shortly may help (OZAV's own code).
+          if (error instanceof VerificationError) return reply.code(error.code === "VERIFICATION_SESSION_UNAVAILABLE" ? 503 : 409).send({ error: { code: error.code } });
           if (error instanceof OzavClientError) return reply.code(502).send({ error: { code: "VERIFICATION_PROVIDER_UNAVAILABLE", provider_http_status: error.statusCode ?? null, retryable: error.retryable } });
           request.log.warn({ event: "customer_verification_unavailable" });
           return reply.code(503).send({ error: { code: "CUSTOMER_VERIFICATION_UNAVAILABLE" } });

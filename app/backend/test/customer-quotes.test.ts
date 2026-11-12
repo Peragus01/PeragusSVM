@@ -100,7 +100,8 @@ async function setup(type: "pf" | "pj" = "pf", mode: "test" | "live" = "test") {
         id: providerId,
         object: "customer",
         type: "individual",
-        external_ref: `peragus-onboarding-test:${customer.id}`,
+        // Mode-derived registration ref (live registrations carry no test marker).
+        external_ref: `${mode === "live" ? "peragus-onboarding" : "peragus-onboarding-test"}:${customer.id}`,
         status,
         verification: { mode: "full", status },
         requirements: {

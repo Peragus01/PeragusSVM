@@ -74,6 +74,8 @@ export function journeyMessage(error: unknown) {
         VALIDATION_ERROR: "Confira os campos informados.",
         PROFILE_VERSION_CONFLICT:
           "Os dados mudaram em outra sessão. Atualize a página antes de salvar.",
+        VERIFICATION_SESSION_UNAVAILABLE:
+          "A sessão de verificação de identidade está indisponível no momento. Tente novamente em alguns minutos.",
         OUTCOME_UNKNOWN:
           "Não foi possível confirmar o resultado. Consulte o estado antes de tentar novamente.",
       } as Record<string, string>

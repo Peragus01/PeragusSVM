@@ -209,7 +209,7 @@ export class CustomerQuoteService {
       throw new CustomerQuoteError("QUOTE_CAPABILITY_REQUIRED");
     const customer = await this.provider.getSandboxCustomerSnapshot(
       binding.providerId,
-      onboardingExternalRef(customerId),
+      onboardingExternalRef(customerId, this.mode),
     );
     if (
       customer.provider_status !== "approved" ||

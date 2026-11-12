@@ -142,7 +142,7 @@ export class CustomerPixService {
       || !["customers:read", "wallets:read", "transfers:read", "transfers:write"].every(v => caps.scopes.includes(v))) {
       throw new CustomerPixError("PIX_CAPABILITY_REQUIRED");
     }
-    const customer = await this.provider.getSandboxCustomerSnapshot(context.providerCustomerId, onboardingExternalRef(customerId));
+    const customer = await this.provider.getSandboxCustomerSnapshot(context.providerCustomerId, onboardingExternalRef(customerId, this.mode));
     if (customer.provider_status !== "approved" || customer.verification_mode !== "full" || customer.requirements_pending !== false) {
       throw new CustomerPixError("PIX_CUSTOMER_NOT_READY");
     }
@@ -219,7 +219,7 @@ export class CustomerPixService {
       || !["customers:read", "transfers:read", "transfers:write"].every(v => caps.scopes.includes(v))) {
       throw new CustomerPixError("PIX_CAPABILITY_REQUIRED");
     }
-    const customer = await this.provider.getSandboxCustomerSnapshot(row.providerCustomerId, onboardingExternalRef(customerId));
+    const customer = await this.provider.getSandboxCustomerSnapshot(row.providerCustomerId, onboardingExternalRef(customerId, this.mode));
     if (customer.provider_status !== "approved" || customer.verification_mode !== "full" || customer.requirements_pending !== false) {
       throw new CustomerPixError("PIX_CUSTOMER_NOT_READY");
     }

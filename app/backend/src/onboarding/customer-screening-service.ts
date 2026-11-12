@@ -33,7 +33,7 @@ export class CustomerScreeningService {
     if (prior && prior.providerCustomerId !== binding.providerId) throw new ScreeningError("SCREENING_CONFLICT");
     if (prior?.screeningId) return { data: this.view(prior), replayed: true };
     await this.capabilities(true);
-    await this.provider.getSandboxCustomerSnapshot(binding.providerId!,onboardingExternalRef(customerId));
+    await this.provider.getSandboxCustomerSnapshot(binding.providerId!,onboardingExternalRef(customerId,this.mode));
     const row = await this.repository.reserve(customerId,binding.providerId!);
     if (row.screeningId) return { data: this.view(row), replayed: true };
     // Reconcile a previous manual request or a response lost after provider creation.
