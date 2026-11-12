@@ -89,6 +89,11 @@ export function parseTokens(value: Record<string, unknown>): AuthTokens {
     expires_at: Date.now() + value["expires_in"] * 1000,
   };
 }
+export async function refreshSession(refreshToken: string): Promise<AuthTokens> {
+  return parseTokens(
+    await supabaseAuth("token?grant_type=refresh_token", { refresh_token: refreshToken }),
+  );
+}
 export async function fetchIdentity(
   token: string,
   signal?: AbortSignal,

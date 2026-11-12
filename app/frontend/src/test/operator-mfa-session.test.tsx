@@ -49,6 +49,7 @@ function Probe() {
 }
 afterEach(() => {
   cleanup();
+  window.sessionStorage.clear();
   vi.restoreAllMocks();
 });
 async function login() {
@@ -60,7 +61,7 @@ async function login() {
   fireEvent.click(screen.getByText("Login"));
   await screen.findByText("synthetic.aal1");
 }
-describe("operator MFA in existing memory-only session", () => {
+describe("operator MFA in existing session", () => {
   it("enrolls a TOTP factor, verifies it and promotes the in-memory session", async () => {
     // The raw GoTrue endpoint returns SVG. supabase-js normally converts this
     // to a data URL, but this application intentionally calls Auth directly.
@@ -184,7 +185,9 @@ describe("operator MFA in existing memory-only session", () => {
     expect(new Headers(fetcher.mock.calls[4]![1]?.headers).get("authorization")).toBe(
       "Bearer synthetic.aal1",
     );
-    expect(storage).not.toHaveBeenCalled();
+    // Only the tab-scoped session record is written, and never to localStorage.
+    expect(storage.mock.calls.every(([key]) => key === "peragus.session")).toBe(true);
+    expect(window.localStorage.length).toBe(0);
   });
   it("does not replace tokens after rejected MFA", async () => {
     const fetcher = vi

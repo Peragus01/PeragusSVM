@@ -32,6 +32,8 @@ export type SessionContextValue = {
    * whose `amr` totp timestamp is the time of this verification (fresh MFA).
    */
   verifyOperatorMfa: (code: string) => Promise<string>;
+  /** Shared single-flight refresh; resolves with the new access token, or null (and logs out) on rejection. */
+  refreshAccessToken: () => Promise<string | null>;
   logout: () => void;
   reloadIdentity: (signal?: AbortSignal) => Promise<void>;
 };
