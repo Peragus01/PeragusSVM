@@ -8,7 +8,7 @@ import {Keypair} from "@solana/web3.js";
 import {readFile,readdir} from "node:fs/promises";
 import {PGlite} from "@electric-sql/pglite";
 import type {Pool} from "pg";
-import {beforeAll,afterAll,beforeEach,describe,it,expect} from "vitest";
+import {beforeAll,afterAll,beforeEach,describe,it,expect,vi} from "vitest";
 import {buildApp} from "../src/app.js";
 import {AuthenticationError} from "../src/auth/customer-access.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
@@ -125,7 +125,7 @@ beforeEach(async()=>{await db.query("truncate peragus_sandbox_withdrawal_executi
 async function executionFixture(policy:Partial<ExecutionPolicy>={minDelaySeconds:0},locked="200.000000"){
  const f=await approvalFixture(locked);await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
  let sends=0,identityReads=0,mode="normal",found:string|null=null,txHash:string|null=null;
- const calls:string[]=[],identifications:unknown[][]=[];let tokenAccount:boolean|Error=true;const tokenChecks:unknown[][]=[];
+ const calls:string[]=[],identifications:unknown[][]=[];let tokenAccount:boolean|"frozen"|Error=true;const tokenChecks:unknown[][]=[];
  const sendId=`ozav_tr_${randomUUID().replaceAll('-','')}`;
  const observed={id:sendId,customerId:f.s.provider,status:"completed",sourceWalletId:"ozav_wal_testmanaged",sourceCurrency:"USDT",destinationAddress:f.s.wallet,network:"solana",sourceAmount:locked,targetAmount:"199.500000",sourceLegStatus:"completed",destinationLegStatus:"completed",transactionReference:"synthetic-sandbox-reference"};
  const identity={name:"PRIVATE_SYNTHETIC_NAME",cpf:"11144477735",street:"PRIVATE_SYNTHETIC_STREET",city:"Test",country:"BR"};
@@ -138,10 +138,10 @@ async function executionFixture(policy:Partial<ExecutionPolicy>={minDelaySeconds
    return{id:sendId,txHash};},
   transfer:async()=>observed,find:async()=>found} as any;
  // Injected Solana RPC reader (never a real RPC in tests).
- const destination={usdtMint:TEST_USDT_MINT,reader:{hasTokenAccount:async(...args:unknown[])=>{tokenChecks.push(args);if(tokenAccount instanceof Error)throw tokenAccount;return tokenAccount;}}};
+ const destination={usdtMint:TEST_USDT_MINT,reader:{tokenAccountState:async(...args:unknown[])=>{tokenChecks.push(args);if(tokenAccount instanceof Error)throw tokenAccount;return tokenAccount===true?"ready":tokenAccount===false?"missing":tokenAccount;}}};
  const repo=new PostgresSandboxExecutionRepository(pool,"test"),execution=new SandboxWithdrawalExecutionService(repo,provider,f.approvals,destination,policy);
  return{...f,provider,repo,execution,policy,observed,sendId,destination,locked,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;},
-  calls,identifications,tokenChecks,setTokenAccount:(v:boolean|Error)=>{tokenAccount=v;},setTxHash:(v:string|null)=>{txHash=v;}};
+  calls,identifications,tokenChecks,setTokenAccount:(v:boolean|"frozen"|Error)=>{tokenAccount=v;},setTxHash:(v:string|null)=>{txHash=v;}};
 }
 describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
  // The delay is measured by the database clock: move the persisted approval back in time
@@ -560,12 +560,13 @@ describe("live USDT send with destination identification (Task 10)",()=>{
   expect(await operationStatus(f.p.data.id)).toBe("needs_review");
   const last=(await statusEvents(f.p.data.id)).at(-1)!;
   expect(last).toMatchObject({from_status:"sending",to_status:"needs_review"});expect(last.reason).toContain("TRAVEL_RULE_REQUIRED");
-  // Replays and reconciliation never POST again and never look for a transfer that was refused.
+  // Replays and reconciliation never POST again; reconciliation only looks the refused send up
+  // by metadata (GET) to make sure no transfer exists for it.
   f.setMode("normal");let reads=0;f.provider.find=async()=>{reads++;return null;};
   const replay=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
   expect(replay).toMatchObject({replayed:true,data:{state:"provider_refused",provider_refusal_code:"TRAVEL_RULE_REQUIRED",recovery_required:false,manual_review_required:true}});
   expect(await f.execution.reconcile(f.user,f.wr.data.id)).toMatchObject({state:"provider_refused"});
-  expect(reads).toBe(0);expect(f.sends()).toBe(1);
+  expect(reads).toBe(1);expect(f.sends()).toBe(1);
   const alerts=await new OperatorAlertService(pool,new Set([f.user.id]),"test").list(f.user,{limit:"50"});
   expect(alerts.data.filter(a=>a.purchase_intent_id===f.p.data.id).map(a=>a.kind).sort()).toEqual(["operation_review","withdrawal_review"]);
   const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
@@ -653,6 +654,185 @@ describe("live USDT send with destination identification (Task 10)",()=>{
  });
 });
 
+
+import {OzavClientError} from "../src/providers/ozav-client.js";
+import {decideDelivery,type DeliveryCheck} from "../src/withdrawals/sandbox-execution.js";
+// A syntactically valid Solana signature (64 bytes in base58); only ever read from a fake RPC.
+const SIGNATURE="5".repeat(88);
+const CUSTODY=Keypair.generate().publicKey.toBase58();
+/** Parsed transaction fixture: custody pays, `to` is credited `credited` units of `mint`. */
+function chainTx(to:string,credited:bigint,mint=TEST_USDT_MINT,err:unknown=null){
+ const balance=(accountIndex:number,owner:string,amount:bigint)=>({accountIndex,mint,owner,uiTokenAmount:{amount:amount.toString(),decimals:6,uiAmount:null,uiAmountString:""}});
+ return{slot:1,blockTime:1,transaction:{},meta:{err,fee:5000,
+  preTokenBalances:[balance(1,CUSTODY,900000000n),balance(2,to,0n)],
+  postTokenBalances:[balance(1,CUSTODY,900000000n-credited),balance(2,to,credited)]}};
+}
+const deliveryCheck=(tx:unknown)=>({usdtMint:TEST_USDT_MINT,toleranceUnits:100000n,connection:{getParsedTransaction:vi.fn(async()=>tx)}}) as DeliveryCheck&{connection:{getParsedTransaction:ReturnType<typeof vi.fn>}};
+describe("on-chain delivery verification and completion (Task 11)",()=>{
+ /** Executes the send (operation `sent`) and reconciles it with the on-chain check. */
+ async function sentAndReconciled(tx:(wallet:string)=>unknown,net:string|null="199.950000",reference:string|null=SIGNATURE){
+  const f=await executionFixture();f.observed.targetAmount=net as any;f.observed.transactionReference=reference as any;
+  await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  expect(await operationStatus(f.p.data.id)).toBe("sent");
+  const delivery=deliveryCheck(tx(f.s.wallet));
+  const checked=new SandboxWithdrawalExecutionService(f.repo,f.provider,f.approvals,f.destination,f.policy,delivery);
+  const view=await checked.reconcile(f.user,f.wr.data.id);
+  return{...f,delivery,checked,view};
+ }
+ it("operation becomes delivered_verified only when verified; otherwise needs_review",async()=>{
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,199950000n));
+  expect(f.delivery.connection.getParsedTransaction).toHaveBeenCalledWith(SIGNATURE,{commitment:"finalized",maxSupportedTransactionVersion:0});
+  expect(await operationStatus(f.p.data.id)).toBe("delivered_verified");
+  expect(f.view).toMatchObject({onchain_delivery_verified:true,delivery_status:"verified",delivered_amount:"199.950000",manual_review_required:false});
+  const last=(await statusEvents(f.p.data.id)).at(-1)!;
+  expect(last).toMatchObject({from_status:"sent",to_status:"delivered_verified",actor:`operator:${f.user.id}`});
+  expect(last.reason).toContain("DELIVERY_VERIFIED");expect(last.reason).toContain("VERIFIED_AGAINST_PROVIDER_NET");
+  // Customer views: the net amount delivered on chain and the explorer link of this mode's cluster.
+  const detail=(await new CustomerOperationHistoryService(pool,"test").get(f.s.customer.id,f.p.data.id))!;
+  expect(detail).toMatchObject({onchain_delivery_verified:true,delivered_target:{currency:"USDT",amount:"199.950000"},delivery_simulated:false,
+   explorer_url:`https://explorer.solana.com/tx/${SIGNATURE}?cluster=devnet`});
+  expect(await new CustomerWithdrawalResultService(pool,"test").read(f.s.customer.id,f.wr.data.id)).toMatchObject({onchain_delivery_verified:true,
+   amounts:{delivered_amount:"199.950000"},explorer_url:`https://explorer.solana.com/tx/${SIGNATURE}?cluster=devnet`});
+  // Settled: further reconciliations read nothing more on chain and never send.
+  await f.checked.reconcile(f.user,f.wr.data.id);
+  expect(f.delivery.connection.getParsedTransaction).toHaveBeenCalledTimes(1);expect(f.sends()).toBe(1);
+  // The same send with a credit that disagrees goes to review instead.
+  await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+  const g=await sentAndReconciled(wallet=>chainTx(wallet,199000000n));
+  expect(await operationStatus(g.p.data.id)).toBe("needs_review");
+  expect(g.view).toMatchObject({onchain_delivery_verified:false,delivery_status:"review",delivery_reason:"AMOUNT_MISMATCH",manual_review_required:true,delivered_amount:null});
+  expect((await statusEvents(g.p.data.id)).at(-1)).toMatchObject({from_status:"sent",to_status:"needs_review"});
+  expect((await new CustomerOperationHistoryService(pool,"test").get(g.s.customer.id,g.p.data.id))).toMatchObject({onchain_delivery_verified:false,delivered_target:null});
+ },30_000);
+ it("less than the locked amount, another mint, another recipient or a failed tx is needs_review, never delivered_verified (Review Focus 5)",async()=>{
+  const stranger=Keypair.generate().publicKey.toBase58(),otherMint=Keypair.generate().publicKey.toBase58();
+  const cases:[string,(wallet:string)=>unknown][]=[
+   ["AMOUNT_MISMATCH",wallet=>chainTx(wallet,199949999n)],
+   ["MINT_MISMATCH",wallet=>chainTx(wallet,199950000n,otherMint)],
+   ["RECIPIENT_MISMATCH",()=>chainTx(stranger,199950000n)],
+   ["TX_FAILED",wallet=>chainTx(wallet,199950000n,TEST_USDT_MINT,{InstructionError:[0,"Custom"]})]];
+  for(const [reason,tx] of cases){
+   await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+   const f=await sentAndReconciled(tx);
+   expect(await operationStatus(f.p.data.id)).toBe("needs_review");
+   expect(f.view).toMatchObject({onchain_delivery_verified:false,delivery_status:"review",delivery_reason:reason});
+   expect((await statusEvents(f.p.data.id)).map(e=>e.to_status)).not.toContain("delivered_verified");
+   expect((await statusEvents(f.p.data.id)).at(-1)!.reason).toContain(reason);
+   // Review is final for the automatic check: later reconciliations do not re-verify it.
+   await f.checked.reconcile(f.user,f.wr.data.id);
+   expect(await operationStatus(f.p.data.id)).toBe("needs_review");expect(f.sends()).toBe(1);
+  }
+ },60_000);
+ it("needs review when the OZAV net amount falls below locked minus tolerance, before any RPC read",async()=>{
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,199899999n),"199.899999");
+  expect(f.delivery.connection.getParsedTransaction).not.toHaveBeenCalled();
+  expect(await operationStatus(f.p.data.id)).toBe("needs_review");
+  expect(f.view.delivery_reason).toContain("AMOUNT_MISMATCH");
+ });
+ it("the credit must equal the OZAV net amount exactly",async()=>{
+  // Within locked - tolerance, but not what OZAV reports as delivered.
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,199960000n));
+  expect(await operationStatus(f.p.data.id)).toBe("needs_review");
+  expect(f.view.delivery_reason).toBe("AMOUNT_MISMATCH");
+ });
+ it("verifies against locked minus tolerance when OZAV reports no net amount, and says so",async()=>{
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,199900000n),null);
+  expect(await operationStatus(f.p.data.id)).toBe("delivered_verified");
+  expect(f.view).toMatchObject({delivered_amount:"199.900000",delivery_reason:"VERIFIED_AGAINST_LOCKED_MINUS_TOLERANCE: provider reported no net amount"});
+  await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+  const g=await sentAndReconciled(wallet=>chainTx(wallet,199899999n),null);
+  expect(await operationStatus(g.p.data.id)).toBe("needs_review");
+ },30_000);
+ it("test mode with a sandbox hash not found on devnet stays sent and is labelled simulated, never delivered_verified",async()=>{
+  // A sandbox reference that is not a Solana signature: no RPC read at all.
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,199950000n),"199.950000","synthetic-sandbox-reference");
+  expect(f.delivery.connection.getParsedTransaction).not.toHaveBeenCalled();
+  expect(await operationStatus(f.p.data.id)).toBe("sent");
+  expect(f.view).toMatchObject({onchain_delivery_verified:false,delivery_simulated:true,delivery_status:"simulated",manual_review_required:false});
+  const detail=(await new CustomerOperationHistoryService(pool,"test").get(f.s.customer.id,f.p.data.id))!;
+  expect(detail).toMatchObject({onchain_delivery_verified:false,delivery_simulated:true,delivered_target:null,explorer_url:null});
+  // A signature devnet does not know (null transaction) is simulated too.
+  await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+  const g=await sentAndReconciled(()=>null);
+  expect(g.delivery.connection.getParsedTransaction).toHaveBeenCalledTimes(1);
+  expect(await operationStatus(g.p.data.id)).toBe("sent");
+  expect(g.view).toMatchObject({onchain_delivery_verified:false,delivery_simulated:true});
+  expect((await statusEvents(g.p.data.id)).map(e=>e.to_status)).not.toContain("delivered_verified");
+ },30_000);
+ it("an unavailable RPC leaves the operation sent with nothing recorded",async()=>{
+  const f=await executionFixture();f.observed.targetAmount="199.950000";f.observed.transactionReference=SIGNATURE;
+  await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  const delivery:DeliveryCheck={usdtMint:TEST_USDT_MINT,toleranceUnits:100000n,connection:{getParsedTransaction:async()=>{throw new Error("private rpc failure");}} as any};
+  const view=await new SandboxWithdrawalRecoveryService(f.repo,{find:f.provider.find,transfer:f.provider.transfer},new Set([f.user.id]),delivery).reconcile(f.user,f.wr.data.id);
+  expect(view).toMatchObject({onchain_delivery_verified:false,delivery_status:null,delivery_simulated:false});
+  expect(await operationStatus(f.p.data.id)).toBe("sent");
+ });
+ it("live: a transaction not finalized yet keeps the operation sent (never simulated)",async()=>{
+  const wallet=Keypair.generate().publicKey.toBase58();
+  const observation={id:"ozav_tr_send",customerId:"ozav_cus_x",status:"completed",sourceWalletId:"ozav_wal_x",sourceCurrency:"USDT",destinationAddress:wallet,network:"solana",
+   sourceAmount:"200.000000",targetAmount:"199.950000",sourceLegStatus:"completed",destinationLegStatus:"completed",transactionReference:SIGNATURE} as any;
+  const row={id:randomUUID(),withdrawalId:randomUUID(),customerId:randomUUID(),approvalId:randomUUID(),approverId:randomUUID(),pixId:randomUUID(),purchaseId:randomUUID(),
+   providerCustomerId:"ozav_cus_x",providerWalletId:"ozav_wal_x",providerQuoteId:"ozav_q_x",transferId:"ozav_tr_x",amountBrl:"1000.00",amountUsdt:"200.000000",sendAmountUsdt:"200.000000",
+   walletAddress:wallet,verifiedAt:new Date().toISOString(),operatorId:randomUUID(),requestId:randomUUID(),attempted:true,sendTransferId:"ozav_tr_send",closedAt:null,
+   environment:"live" as const,txHash:SIGNATURE,refusalCode:null,observation};
+  expect(await decideDelivery(row,deliveryCheck(null))).toBeNull();
+  expect(await decideDelivery({...row,txHash:null,observation:{...observation,transactionReference:null}},deliveryCheck(null))).toBeNull();
+  expect(await decideDelivery(row,deliveryCheck(chainTx(wallet,199950000n)))).toMatchObject({status:"verified",deliveredUnits:199950000n});
+  // A provider net amount above the locked amount is never verified.
+  expect(await decideDelivery({...row,observation:{...observation,targetAmount:"200.000001"}},deliveryCheck(chainTx(wallet,200000001n)))).toMatchObject({status:"review"});
+  // OZAV reporting a different hash than the one stored is never verified.
+  expect(await decideDelivery({...row,observation:{...observation,transactionReference:"4".repeat(88)}},deliveryCheck(chainTx(wallet,199950000n)))).toMatchObject({status:"review"});
+ });
+});
+
+describe("send hardening (Task 11, ruling 28)",()=>{
+ it("a refused send whose transfer is found by metadata raises a high-severity operator alert (GET only)",async()=>{
+  const f=await executionFixture();f.setMode("travel_rule");
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("WITHDRAWAL_SEND_REFUSED");
+  f.setMode("normal");let finds=0,transfers=0;
+  f.provider.find=async()=>{finds++;return f.sendId;};f.provider.transfer=async()=>{transfers++;return f.observed;};
+  const view=await f.execution.reconcile(f.user,f.wr.data.id);
+  expect(view).toMatchObject({state:"provider_refused",refused_transfer_found:true,manual_review_required:true});
+  expect(finds).toBe(1);expect(transfers).toBe(0);expect(f.sends()).toBe(1);
+  const stored=(await db.query<{refused_transfer_id:string;provider_send_id:string|null}>("select refused_transfer_id,provider_send_id from peragus_sandbox_withdrawal_executions where withdrawal_request_id=$1",[f.wr.data.id])).rows[0]!;
+  expect(stored).toEqual({refused_transfer_id:f.sendId,provider_send_id:null});
+  const alerts=await new OperatorAlertService(pool,new Set([f.user.id]),"test").list(f.user,{limit:"50"});
+  expect(alerts.data.filter(a=>a.purchase_intent_id===f.p.data.id)).toContainEqual(expect.objectContaining({kind:"withdrawal_refused_transfer_found",severity:"high"}));
+  // Flagged once: later reconciliations do not search again.
+  await f.execution.reconcile(f.user,f.wr.data.id);expect(finds).toBe(1);
+  expect(await operationStatus(f.p.data.id)).toBe("needs_review");
+ });
+ it("refuses to send when the reserved row does not carry the validated amount and destination",async()=>{
+  for(const change of ["null_amount","other_amount","other_wallet"]){
+   await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+   const f=await executionFixture(),reserve=f.repo.reserve.bind(f.repo);
+   f.repo.reserve=async(...args:Parameters<typeof reserve>)=>{
+    const row=await reserve(...args);
+    if(change==="null_amount")return{...row,sendAmountUsdt:null};
+    if(change==="other_amount")return{...row,sendAmountUsdt:"199.000000"};
+    return{...row,walletAddress:Keypair.generate().publicKey.toBase58()};
+   };
+   await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("WITHDRAWAL_EXECUTION_CONTEXT_MISMATCH");
+   expect(f.sends()).toBe(0);expect(await operationStatus(f.p.data.id)).toBe("approved");
+  }
+ },30_000);
+ it("DESTINATION_IDENTIFICATION_FAILED carries the provider HTTP status",async()=>{
+  const f=await executionFixture();
+  f.provider.identifyDestination=async()=>{throw new OzavClientError("private identification failure",false,422);};
+  const error=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId).catch(e=>e);
+  expect(error).toMatchObject({code:"DESTINATION_IDENTIFICATION_FAILED",providerStatus:422});
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers,payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
+  expect(r.statusCode).toBe(409);expect(r.json().error).toMatchObject({code:"DESTINATION_IDENTIFICATION_FAILED",provider_http_status:422,automatic_retry:false});
+  expect(r.body).not.toContain("private identification failure");expect(f.sends()).toBe(0);
+ });
+ it("a frozen destination token account is DESTINATION_TOKEN_ACCOUNT_FROZEN, with no POST",async()=>{
+  const f=await executionFixture();f.setTokenAccount("frozen");
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("DESTINATION_TOKEN_ACCOUNT_FROZEN");
+  expect(f.calls).toEqual([]);expect(await operationStatus(f.p.data.id)).toBe("approved");
+  expect((await new CustomerOperationHistoryService(pool,"test").get(f.s.customer.id,f.p.data.id))!.withdrawal).toMatchObject({destination_blocker:"DESTINATION_TOKEN_ACCOUNT_FROZEN"});
+ });
+});
 
 describe("owned operation detail",()=>{
  it("reads an old operation directly with write services absent and preserves the history projection",async()=>{

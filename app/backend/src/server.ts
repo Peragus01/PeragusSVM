@@ -496,6 +496,16 @@ const customerTermsService =
         moneyMode,
       )
     : undefined;
+// Read-only on-chain delivery check (getParsedTransaction) that completes a sent operation.
+// Test deployments without a configured USDT mint keep reconciling without it.
+const deliveryCheck =
+  moneyMode === "live" || env.SOLANA_USDT_MINT
+    ? {
+        usdtMint: resolveMoneyEnvironment(env).usdtMint,
+        toleranceUnits: env.USDT_DELIVERY_TOLERANCE_UNITS,
+        connection: new Connection(env.SOLANA_RPC_URL, "confirmed"),
+      }
+    : undefined;
 const app = await buildApp({
   // GET /v1/admin/operator-status answers only whether the caller is allowlisted.
   operatorUserIds: new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
@@ -568,6 +578,7 @@ const app = await buildApp({
           new PostgresSandboxExecutionRepository(pool!, moneyModeFor(env)),
           createSandboxRecoveryReader(env.OZAV_API_KEY!, moneyMode),
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          deliveryCheck,
         ),
       }
     : {}),
@@ -623,6 +634,7 @@ const app = await buildApp({
               minDelaySeconds: env.OPERATOR_EXECUTION_MIN_DELAY_SECONDS,
               fourEyes: env.OPERATOR_FOUR_EYES_ENABLED,
             },
+            deliveryCheck,
           ),
       }
     : {}),

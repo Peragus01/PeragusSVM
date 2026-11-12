@@ -69,6 +69,13 @@ const envSchema = z
       .min(0)
       .max(86_400)
       .default(900),
+    // How many USDT units (6 decimals) the on-chain delivery may fall below the locked amount
+    // and still be verified: OZAV deducts the network fee from the sent USDT. Default 0.10 USDT.
+    USDT_DELIVERY_TOLERANCE_UNITS: z
+      .string()
+      .regex(/^(0|[1-9]\d{0,8})$/)
+      .default("100000")
+      .transform((value) => BigInt(value)),
     // true: the executor must be a different operator from the approver.
     OPERATOR_FOUR_EYES_ENABLED: z
       .enum(["true", "false"])

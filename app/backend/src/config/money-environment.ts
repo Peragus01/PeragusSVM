@@ -66,6 +66,19 @@ export type MoneyNetwork = MoneyEnvironment["network"];
 export const moneyNetworkFor = (mode: MoneyMode): MoneyNetwork =>
   mode === "live" ? "solana:mainnet" : "solana:devnet";
 
+/** Solana explorer cluster for a money mode (same pairing as MoneyEnvironment.explorerCluster). */
+export const explorerClusterFor = (mode: MoneyMode): MoneyEnvironment["explorerCluster"] =>
+  mode === "live" ? "mainnet-beta" : "devnet";
+
+/**
+ * Explorer link for a transaction of this mode's cluster, or null when the value is not
+ * shaped like a Solana signature (sandbox references are not on any chain).
+ */
+export function explorerTxUrl(mode: MoneyMode, txHash: string | null | undefined): string | null {
+  if (typeof txHash !== "string" || !/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(txHash)) return null;
+  return `https://explorer.solana.com/tx/${txHash}?cluster=${explorerClusterFor(mode)}`;
+}
+
 /** True when the OZAV secret key belongs to the given money mode (ozav_sk_<mode>_...). */
 export function providerKeyMatchesMode(
   key: string | undefined | null,

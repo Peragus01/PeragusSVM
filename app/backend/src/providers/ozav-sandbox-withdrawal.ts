@@ -3,10 +3,14 @@ import {providerKeyMatchesMode,type MoneyMode} from "../config/money-environment
 import {individualDraftSchema} from "../onboarding/individual-schema.js";
 import {OzavClient, OzavClientError, httpsOzavTransport, httpsOzavWriteTransport,
  type OzavTransport, type OzavWriteTransport} from "./ozav-client.js";
-/** HTTP answers on which OZAV definitively refused the send: no transfer exists, so nothing to reconcile. */
-const DEFINITIVE_REFUSALS=new Set([400,401,403,404,422]);
+/**
+ * HTTP answers on which OZAV definitively refused the send: no transfer was created. 404 is not
+ * one of them (a route or gateway answer says nothing about the transfer): it stays `sending`
+ * and is recovered by GET.
+ */
+const DEFINITIVE_REFUSALS=new Set([400,401,403,422]);
 export class SandboxWithdrawalProviderError extends OzavClientError {
- /** True when OZAV refused the request (4xx other than 408/409/429): never re-POST, review instead. */
+ /** True when OZAV refused the request (400, 401, 403, 422): never re-POST, review instead. */
  readonly definitive:boolean;
  constructor(status:number,public readonly providerCode:string|null){
   super("Sandbox send outcome requires reconciliation",false,status);this.definitive=DEFINITIVE_REFUSALS.has(status);

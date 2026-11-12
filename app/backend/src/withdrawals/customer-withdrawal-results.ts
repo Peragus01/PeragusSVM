@@ -1,5 +1,5 @@
 import type {Pool} from "pg";
-import type {MoneyMode} from "../config/money-environment.js";
+import {explorerTxUrl,type MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {WithdrawalRequestError} from "./customer-withdrawal-requests.js";
 
@@ -7,6 +7,7 @@ interface ResultRow {
   id:string; amount_usdt:string; wallet_address:string; approved:boolean; refused:boolean;
   attempted:boolean; status:string|null; source_status:string|null;
   destination_status:string|null; target_amount:string|null; observed_at:Date|string|null;
+  operation_status:string|null; delivery_status:string|null; delivered_amount:string|null; tx_hash:string|null;
 }
 const units=(value:string)=>{
   if(!/^\d{1,15}(\.\d{1,6})?$/.test(value))return null;
@@ -26,8 +27,11 @@ export class CustomerWithdrawalResultService {
       e.observation->>'sourceLegStatus' as source_status,
       e.observation->>'destinationLegStatus' as destination_status,
       e.observation->>'targetAmount' as target_amount,
-      case when e.observation is not null then e.updated_at end as observed_at
+      case when e.observation is not null then e.updated_at end as observed_at,
+      p.status as operation_status,e.delivery_status,e.delivered_amount_usdt::text as delivered_amount,e.provider_tx_hash as tx_hash
       from peragus_customer_withdrawal_requests r
+      left join peragus_customer_purchase_intents p
+        on p.id=r.purchase_intent_id and p.customer_id=r.customer_id and p.environment='${this.e.mode}'
       left join peragus_withdrawal_operator_approvals a
         on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.environment='${this.e.mode}'
       left join peragus_sandbox_withdrawal_executions e
@@ -38,6 +42,9 @@ export class CustomerWithdrawalResultService {
     const completed=row.status==="completed" && row.source_status==="completed" && row.destination_status==="completed";
     const gross=units(row.amount_usdt),target=row.target_amount==null?null:units(row.target_amount);
     const known=completed && gross!==null && target!==null && target>0n && target<=gross;
+    const verified=row.operation_status==="delivered_verified" && row.delivery_status==="verified";
+    const delivered=verified && row.delivered_amount!==null?units(row.delivered_amount):null;
+    const simulated=row.delivery_status==="simulated";
     return {
       withdrawal_request_id:row.id,environment:this.e.mode,real_money:this.e.mode==="live",
       state:row.status?`provider_${row.status}`:row.refused?"provider_refused":row.attempted?"uncertain":row.approved?"approved":"recorded",
@@ -45,12 +52,15 @@ export class CustomerWithdrawalResultService {
       recovery_required:row.attempted && row.status===null && !row.refused,
       amounts:{currency:"USDT",gross_amount:row.amount_usdt,
         net_amount:known?format(target!):null,
+        // Credited to the wallet on chain, read from the finalized transaction (null until verified).
+        delivered_amount:delivered!==null && delivered>0n?format(delivered):null,
         deducted_amount:known?format(gross!-target!):null,
         basis:known?"recorded_provider_amounts":"not_reported",
         fee_breakdown:null},
       destination:{wallet_address:row.wallet_address,network:"solana",proof_network:this.e.network},
       observed_at:row.observed_at?new Date(row.observed_at).toISOString():null,
-      observation_freshness:"not_evaluated",onchain_delivery_verified:false,mainnet_execution:this.e.mode==="live" && row.attempted
+      delivery_simulated:simulated,explorer_url:simulated?null:explorerTxUrl(this.e.mode,row.tx_hash),
+      observation_freshness:"not_evaluated",onchain_delivery_verified:verified,mainnet_execution:this.e.mode==="live" && row.attempted
     };
   }
 }

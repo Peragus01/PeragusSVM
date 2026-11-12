@@ -8,7 +8,9 @@ import {authorizeWithdrawalOperator} from '../withdrawals/operator-approvals.js'
 // operation_review: a purchase operation in needs_review (e.g. live Pix with unknown lock outcome).
 // pix_open_after_close: the operation failed/expired but its OZAV transfer is still payable, was
 // paid or even completed (money in custody; OZAV offers no transfer cancel endpoint).
-const kind=z.enum(['reconciliation_review','reconciliation_stalled','withdrawal_uncertain','withdrawal_review','refund_pending_review','refund_approved','operation_review','pix_open_after_close']);
+// withdrawal_refused_transfer_found: OZAV answered a send as refused, yet a transfer for it exists
+// (found by metadata, GET only). Money may have moved; nothing is re-sent or bound automatically.
+const kind=z.enum(['reconciliation_review','reconciliation_stalled','withdrawal_uncertain','withdrawal_review','withdrawal_refused_transfer_found','refund_pending_review','refund_approved','operation_review','pix_open_after_close']);
 const cursorSchema=z.object({priority:z.union([z.literal(0),z.literal(1)]),at:z.iso.datetime({precision:6}),id:z.string().uuid(),kind}).strict();
 export class OperatorAlertInputError extends Error {}
 export function parseAlertQuery(query:unknown){
@@ -59,6 +61,11 @@ export class OperatorAlertService {
     or (e.observation->>'status'='completed' and (
      e.observation->>'sourceLegStatus' is distinct from 'completed'
      or e.observation->>'destinationLegStatus' is distinct from 'completed')))
+   union all
+   select e.id,'withdrawal_refused_transfer_found',0,e.updated_at,w.purchase_intent_id,e.pix_id,e.withdrawal_request_id,null::uuid
+   from peragus_sandbox_withdrawal_executions e
+   join peragus_customer_withdrawal_requests w on w.id=e.withdrawal_request_id and w.customer_id=e.customer_id and w.environment='${this.e.mode}'
+   where e.environment='${this.e.mode}' and e.refused_transfer_id is not null
    union all
    select r.id,case when d.id is null then 'refund_pending_review' else 'refund_approved' end,
     1,r.created_at,r.purchase_intent_id,r.pix_id,null::uuid,r.id

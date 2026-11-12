@@ -23,7 +23,7 @@ import {
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
 import { assertDatabaseEnvironment, runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
-import { moneyModeFor } from "./config/money-environment.js";
+import { moneyModeFor, resolveMoneyEnvironment } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import { verifyDatabaseConnection } from "./database/readiness.js";
 import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
@@ -320,7 +320,12 @@ try {
     await assertDatabaseEnvironment(pool,moneyModeFor(env));
     // GET-only reads; each observation progresses the purchase (system:reconciliation).
     const progression=createPurchaseProgression(pool,moneyModeFor(env),env,new OzavClient({apiKey:env.OZAV_API_KEY!,mode:moneyModeFor(env),attempts:1,timeoutMs:10000}));
-    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!,moneyModeFor(env),undefined,progression),moneyModeFor(env)));
+    // Read-only on-chain delivery check (getParsedTransaction) for completed sends. Test deployments
+    // without a configured USDT mint keep the previous behaviour (no delivery verification).
+    const delivery=moneyModeFor(env)==="live" || env.SOLANA_USDT_MINT
+      ?{usdtMint:resolveMoneyEnvironment(env).usdtMint,toleranceUnits:env.USDT_DELIVERY_TOLERANCE_UNITS,connection:new Connection(env.SOLANA_RPC_URL,"confirmed")}
+      :undefined;
+    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!,moneyModeFor(env),undefined,progression,delivery),moneyModeFor(env)));
     console.info(JSON.stringify({event:"customer_reconciliation_configured",enabled:true,providerReadsOnly:true}));
   }else{
     await boss.unschedule(CUSTOMER_RECONCILIATION_QUEUE);

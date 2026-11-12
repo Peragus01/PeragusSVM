@@ -44,7 +44,7 @@ export class OperatorWithdrawalAuditService {
    e.id as execution_id,e.created_at as execution_created_at,e.updated_at as execution_updated_at,e.create_attempted as attempted,
    e.observation->>'status' as execution_status,e.observation->>'sourceLegStatus' as execution_source_status,
    e.observation->>'destinationLegStatus' as execution_destination_status,e.observation->>'targetAmount' as target_amount,
-   (e.closed_at is null) as pilot_slot_held,
+   (e.closed_at is null and e.slot_released_at is null) as pilot_slot_held,
    (p.wallet_address=r.wallet_address and p.wallet_proof_network=r.proof_network) as purchase_matches,
    (x.purchase_intent_id=r.purchase_intent_id and x.provider_transfer_id=r.provider_transfer_id
     and x.provider_customer_id=r.provider_customer_id and x.provider_wallet_id=r.provider_wallet_id

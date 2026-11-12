@@ -6,9 +6,12 @@ import {moneyNetworkFor,type MoneyMode} from "../config/money-environment.js";
 import type {OperationStatus} from "../purchases/operation-status.js";
 import {requireFreshMfa,OPERATOR_MFA_MAX_AGE_SECONDS,type WithdrawalOperatorApprovalService} from "./operator-approvals.js";
 import {SandboxWithdrawalProviderError,usdtUnits,type OzavSandboxWithdrawalProvider,type WithdrawalObservation} from "../providers/ozav-sandbox-withdrawal.js";
-import type {DestinationTokenAccountReader} from "../providers/solana-token-accounts.js";
+import {OzavClientError} from "../providers/ozav-client.js";
+import type {DestinationTokenAccountReader,TokenAccountState} from "../providers/solana-token-accounts.js";
+import {verifyUsdtDelivery,type DeliveryVerification,type DeliveryVerificationInput} from "../solana/usdt-delivery-verifier.js";
 export class SandboxExecutionError extends Error {
- constructor(public readonly code:string,public readonly providerCode:string|null=null){super(code);}
+ /** providerStatus: the provider's HTTP status, when the refusal came from a provider answer. */
+ constructor(public readonly code:string,public readonly providerCode:string|null=null,public readonly providerStatus:number|null=null){super(code);}
 }
 export interface ExecutionContext {
  withdrawalId:string;customerId:string;approvalId:string;approverId:string;pixId:string;
@@ -45,6 +48,17 @@ export const defaultExecutionPolicy=(policy:Partial<ExecutionPolicy>={}):Executi
 /** The destination check before a send: the environment's USDT mint (MoneyEnvironment.usdtMint) and an RPC reader. */
 export interface DestinationTokenAccountCheck {usdtMint:string;reader:DestinationTokenAccountReader;}
 export const DESTINATION_TOKEN_ACCOUNT_MISSING="DESTINATION_TOKEN_ACCOUNT_MISSING";
+export const DESTINATION_TOKEN_ACCOUNT_FROZEN="DESTINATION_TOKEN_ACCOUNT_FROZEN";
+/** Default shortfall accepted between the locked amount and the delivered amount: 0.10 USDT (network fee). */
+export const DEFAULT_USDT_DELIVERY_TOLERANCE_UNITS=100000n;
+/**
+ * The independent on-chain check that completes an operation: the environment's USDT mint, how far
+ * the net delivery may fall below the locked amount, and a read-only RPC (getParsedTransaction).
+ */
+export interface DeliveryCheck {usdtMint:string;toleranceUnits:bigint;connection:DeliveryVerificationInput["connection"];}
+export type DeliveryStatus="verified"|"simulated"|"review";
+/** What the delivery check concluded; `reason` is stored and, for review, becomes the status event reason. */
+export type DeliveryOutcome={status:"verified";deliveredUnits:bigint;reason:string}|{status:"review"|"simulated";reason:string};
 export interface SandboxExecution extends ExecutionContext {
  id:string;operatorId:string;requestId:string;attempted:boolean;sendTransferId:string|null;observation:WithdrawalObservation|null;
  closedAt?:string|null;
@@ -54,6 +68,15 @@ export interface SandboxExecution extends ExecutionContext {
  txHash:string|null;
  /** OZAV definitively refused the send (e.g. TRAVEL_RULE_REQUIRED); never POSTed again. */
  refusalCode:string|null;
+ /** verified: finalized on chain as expected; simulated: test send absent from devnet; review: the chain disagrees. */
+ deliveryStatus?:DeliveryStatus|null;
+ deliveryReason?:string|null;
+ /** USDT credited to the wallet on chain (set only when verified). */
+ deliveredAmountUsdt?:string|null;
+ /** A transfer found by metadata for a send OZAV answered as refused (must not exist). */
+ refusedTransferId?:string|null;
+ /** Live: when the pilot slot was released by the operation reaching a final status. */
+ slotReleasedAt?:string|null;
 }
 /** Outcome of the claim transaction. */
 export type ExecutionClaim="claimed"|"taken"|"not_approved";
@@ -73,6 +96,14 @@ export interface SandboxExecutionRepository {
  refuse(row:SandboxExecution,code:string,actor:string):Promise<SandboxExecution>;
  /** Stores the latest destination check (null clears a previous blocker). */
  recordDestinationCheck(withdrawalId:string,customerId:string,blocker:string|null):Promise<void>;
+ /**
+  * One transaction under the purchase row lock, only while the operation is `sent`: stores the
+  * delivery outcome and moves sent -> delivered_verified (verified) or sent -> needs_review
+  * (review); simulated only labels the execution. Returns the row unchanged when nothing applied.
+  */
+ recordDelivery(row:SandboxExecution,outcome:DeliveryOutcome,actor:string):Promise<SandboxExecution>;
+ /** Records that a transfer exists for a refused send (raises the high-severity operator alert). */
+ flagRefusedTransfer(row:SandboxExecution,transferId:string):Promise<void>;
 }
 /** The amount that was (or will be) POSTed: the locked amount, or amount_usdt for pre-Task-10 rows. */
 export const sendAmount=(row:Pick<ExecutionContext,"sendAmountUsdt"|"amountUsdt">)=>row.sendAmountUsdt??row.amountUsdt;
@@ -91,12 +122,77 @@ export function executionView(r:SandboxExecution){
  provider_refusal_code:r.refusalCode,
  provider_completed:r.observation?.status==="completed" && r.observation.sourceLegStatus==="completed" && r.observation.destinationLegStatus==="completed",
  execution_requested:r.attempted,recovery_required:r.attempted && !r.observation && !r.refusalCode,
- manual_review_required:r.refusalCode!==null || (r.observation!=null && ["needs_review","failed","cancelled","expired"].includes(r.observation.status)),
- onchain_delivery_verified:false,mainnet_execution:live && r.attempted,delivery_costs_preflight_evaluated:false,pilot_slot_held:!r.closedAt,pilot_closed_at:r.closedAt??null,job_enqueued:false,automatic_retry:false};}
+ manual_review_required:r.refusalCode!==null || r.deliveryStatus==="review" || (r.observation!=null && ["needs_review","failed","cancelled","expired"].includes(r.observation.status)),
+ // True only when the finalized transaction credited this wallet with the expected mint and amount.
+ onchain_delivery_verified:r.deliveryStatus==="verified",delivery_status:r.deliveryStatus??null,delivery_reason:r.deliveryReason??null,
+ delivered_amount:r.deliveredAmountUsdt??null,delivery_simulated:r.deliveryStatus==="simulated",
+ refused_transfer_found:r.refusedTransferId!=null,
+ mainnet_execution:live && r.attempted,delivery_costs_preflight_evaluated:false,pilot_slot_held:!r.closedAt && !r.slotReleasedAt,pilot_closed_at:r.closedAt??null,
+ pilot_slot_released_at:r.slotReleasedAt??null,job_enqueued:false,automatic_retry:false};}
+const completedSend=(o:WithdrawalObservation|null):o is WithdrawalObservation=>o?.status==="completed" && o.sourceLegStatus==="completed" && o.destinationLegStatus==="completed";
+/**
+ * Decides the delivery of a completed send (never moves money, reads one transaction):
+ *  - OZAV deducts the network fee from the sent amount, so the wallet must have been credited
+ *    exactly the net amount OZAV reports (amounts.target.amount), and that net amount must be
+ *    at least locked - tolerance. When OZAV reports no net amount the credit is checked against
+ *    locked - tolerance only, and the reason says so.
+ *  - Anything the chain contradicts (failed tx, other mint, other recipient, other amount) is review.
+ *  - Not finalized / not found: live keeps `sent` and tries again later; test labels it simulated.
+ * Returns null when there is nothing to record yet.
+ */
+export async function decideDelivery(row:SandboxExecution,delivery:DeliveryCheck):Promise<DeliveryOutcome|null>{
+ const o=row.observation;
+ if(!completedSend(o))return null;
+ const live=row.environment==="live",sent=sendAmount(row),locked=usdtUnits(sent);
+ const tolerance=delivery.toleranceUnits<locked?delivery.toleranceUnits:0n;
+ const net=o.targetAmount===null?null:usdtUnits(o.targetAmount);
+ if(net!==null && net<locked-tolerance)return{status:"review",reason:`AMOUNT_MISMATCH: provider net ${o.targetAmount} below locked ${sent} minus tolerance`};
+ if(net!==null && net>locked)return{status:"review",reason:`AMOUNT_MISMATCH: provider net ${o.targetAmount} above locked ${sent}`};
+ if(row.txHash && o.transactionReference && row.txHash!==o.transactionReference)return{status:"review",reason:"TX_HASH_CHANGED: provider reported a different transaction"};
+ const txHash=row.txHash??o.transactionReference;
+ if(!txHash)return live?null:{status:"simulated",reason:"SIMULATED: test send without a transaction hash"};
+ let result:DeliveryVerification;
+ try{
+  result=await verifyUsdtDelivery({connection:delivery.connection,txHash,mint:delivery.usdtMint,ownerWallet:row.walletAddress,
+   expectedUnits:net??locked,toleranceUnits:net===null?tolerance:0n});
+ }catch{return null;} // RPC unavailable or unreadable: stays `sent`, the next reconciliation tries again.
+ if(result.verified)return{status:"verified",deliveredUnits:result.deliveredUnits,
+  reason:net===null?"VERIFIED_AGAINST_LOCKED_MINUS_TOLERANCE: provider reported no net amount":"VERIFIED_AGAINST_PROVIDER_NET"};
+ if(result.reason==="NOT_FINALIZED")return live?null:{status:"simulated",reason:"SIMULATED: test transaction not found on devnet"};
+ return{status:"review",reason:result.reason};
+}
+type ReconcileRepository=Pick<SandboxExecutionRepository,"bind"|"save"|"recordDelivery"|"flagRefusedTransfer">;
+type ReconcileReader=Pick<OzavSandboxWithdrawalProvider,"find"|"transfer">;
+/**
+ * GET-only reconciliation of one attempted execution (operator route and background job):
+ * finds/refreshes the OZAV transfer (sending -> sent) and, with a delivery check, verifies the
+ * delivery on chain (sent -> delivered_verified | needs_review). Never reserves, claims or sends.
+ */
+export async function reconcileExecution(repository:ReconcileRepository,provider:ReconcileReader,row:SandboxExecution,actor:string,delivery?:DeliveryCheck){
+ if(!row.attempted || row.closedAt)return executionView(row);
+ if(row.refusalCode){
+  // A refused send must have left no transfer. Look for one by metadata; if it exists the
+  // operator is alerted (it is never bound, re-sent or verified automatically).
+  if(!row.refusedTransferId){
+   const stray=await provider.find(row.providerCustomerId,row.id);
+   if(stray){await repository.flagRefusedTransfer(row,stray);row.refusedTransferId=stray;}
+  }
+  return executionView(row);
+ }
+ const found=row.sendTransferId??await provider.find(row.providerCustomerId,row.id);if(!found)return executionView(row);
+ const observed=await provider.transfer(found);validateWithdrawal(row,observed);
+ await repository.bind(row,found,null,actor);row.sendTransferId=found;
+ let saved=await repository.save(row,observed);
+ if(delivery && saved.deliveryStatus!=="verified" && saved.deliveryStatus!=="review"){
+  const outcome=await decideDelivery(saved,delivery);
+  if(outcome && !(outcome.status==="simulated" && saved.deliveryStatus==="simulated"))saved=await repository.recordDelivery(saved,outcome,actor);
+ }
+ return executionView(saved);
+}
 export class SandboxWithdrawalExecutionService {
  private readonly policy:ExecutionPolicy;
  constructor(private readonly repository:SandboxExecutionRepository,private readonly provider:OzavSandboxWithdrawalProvider,private readonly guard:WithdrawalOperatorApprovalService,
-  private readonly destination:DestinationTokenAccountCheck,policy:Partial<ExecutionPolicy>={}){
+  private readonly destination:DestinationTokenAccountCheck,policy:Partial<ExecutionPolicy>={},private readonly delivery?:DeliveryCheck){
   if(!destination?.reader || typeof destination.usdtMint!=="string")throw new Error("DESTINATION_TOKEN_ACCOUNT_CHECK_REQUIRED");
   this.policy=defaultExecutionPolicy(policy);
  }
@@ -133,17 +229,23 @@ export class SandboxWithdrawalExecutionService {
   const available=await this.provider.available(c.providerCustomerId,c.providerWalletId);
   if(usdtUnits(available)<amount)throw new SandboxExecutionError("WITHDRAWAL_BALANCE_INSUFFICIENT");
   // The destination must already hold a token account for this environment's USDT mint.
-  let hasAccount:boolean;
-  try{hasAccount=await this.destination.reader.hasTokenAccount(c.walletAddress,this.destination.usdtMint)===true;}
+  let state:TokenAccountState;
+  try{state=await this.destination.reader.tokenAccountState(c.walletAddress,this.destination.usdtMint);}
   catch{throw new SandboxExecutionError("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");}
-  await this.repository.recordDestinationCheck(c.withdrawalId,c.customerId,hasAccount?null:DESTINATION_TOKEN_ACCOUNT_MISSING);
-  if(!hasAccount)throw new SandboxExecutionError(DESTINATION_TOKEN_ACCOUNT_MISSING);
+  if(state!=="ready" && state!=="missing" && state!=="frozen")throw new SandboxExecutionError("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");
+  // A frozen account exists but cannot receive: reported apart from a missing one.
+  const blocker=state==="ready"?null:state==="frozen"?DESTINATION_TOKEN_ACCOUNT_FROZEN:DESTINATION_TOKEN_ACCOUNT_MISSING;
+  await this.repository.recordDestinationCheck(c.withdrawalId,c.customerId,blocker);
+  if(blocker)throw new SandboxExecutionError(blocker);
   // Travel Rule: identify the self-custodied destination (attested by the wallet proof) before the send.
   // It moves no money and a repeat only records the latest identification, so a failure here leaves
   // the operation approved with nothing claimed.
   try{await this.provider.identifyDestination(c.providerCustomerId,c.walletAddress,c.verifiedAt);}
-  catch{throw new SandboxExecutionError("DESTINATION_IDENTIFICATION_FAILED");}
+  catch(error){throw new SandboxExecutionError("DESTINATION_IDENTIFICATION_FAILED",null,error instanceof OzavClientError?error.statusCode??null:null);}
   const row=await this.repository.reserve(user.id,requestId,c);
+  // The stored row is what gets sent: it must carry exactly the amount and destination validated above.
+  if(row.sendAmountUsdt===null || usdtUnits(row.sendAmountUsdt)!==amount || row.walletAddress!==c.walletAddress)
+   throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_CONTEXT_MISMATCH");
   const claim=await this.repository.claim(row);
   if(claim!=="claimed"){
    const latest=await this.repository.read(withdrawalId);
@@ -172,10 +274,6 @@ export class SandboxWithdrawalExecutionService {
  }
  async reconcile(user:AuthenticatedUser,id:string){
   this.authorize(user);const row=await this.repository.read(id);if(!row)throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_NOT_FOUND");
-  if(!row.attempted || row.closedAt || row.refusalCode)return executionView(row);
-  const found=row.sendTransferId??await this.provider.find(row.providerCustomerId,row.id);if(!found)return executionView(row);
-  const observed=await this.provider.transfer(found);validateWithdrawal(row,observed);
-  await this.repository.bind(row,found,null,`operator:${user.id}`);row.sendTransferId=found;
-  return executionView(await this.repository.save(row,observed));
+  return reconcileExecution(this.repository,this.provider,row,`operator:${user.id}`,this.delivery);
  }
 }

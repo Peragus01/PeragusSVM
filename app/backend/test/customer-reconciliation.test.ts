@@ -214,5 +214,26 @@ describe("durable GET-only customer reconciliation",()=>{
   expect(await service.run()).toEqual({processed:false});
   expect((await db.query("select count(*)::int as n from peragus_sandbox_withdrawal_executions")).rows[0]).toEqual({n:1});
  });
+ it("with a delivery check keeps a completed send pending until its delivery is settled (Task 11)",async()=>{
+  // The operation is `sent` (written as stored evidence, triggers off for the fixture only).
+  const sent=async(purchase:string)=>{await db.exec("set session_replication_role=replica");
+   try{await db.query("update peragus_customer_purchase_intents set status='sent' where id=$1",[purchase]);}finally{await db.exec("set session_replication_role=origin");}};
+  const transport=(f:Awaited<ReturnType<typeof withdrawalFixture>>,body:unknown)=>async(path:string)=>({statusCode:200,body:path.includes("?")?{data:[{id:f.send,customer_id:f.provider,metadata:{peragus_execution_id:f.execution}}],has_more:false}:body});
+  // A sandbox reference that is not on devnet: labelled simulated, the checkpoint completes.
+  const f=await withdrawalFixture();await sent(f.purchase);
+  const rpc={getParsedTransaction:vi.fn(async()=>null)};
+  const safe=createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",transport(f,f.body),undefined,{usdtMint:Keypair.generate().publicKey.toBase58(),toleranceUnits:100000n,connection:rpc as any});
+  expect(await safe.withdrawal(f.customer.id,f.withdrawal)).toEqual({status:"completed",complete:true,review:false});
+  expect((await db.query<any>("select delivery_status from peragus_sandbox_withdrawal_executions where id=$1",[f.execution])).rows[0]).toEqual({delivery_status:"simulated"});
+  expect((await db.query<any>("select status from peragus_customer_purchase_intents where id=$1",[f.purchase])).rows[0]).toEqual({status:"sent"});
+  // A real signature with the RPC unavailable: not settled, checked again later.
+  await db.exec("truncate peragus_customers cascade");
+  const g=await withdrawalFixture();await sent(g.purchase);
+  const body={...g.body,settlement_references:{tx_hash:"5".repeat(88),network:"solana"}};
+  const down=createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",transport(g,body),undefined,
+   {usdtMint:Keypair.generate().publicKey.toBase58(),toleranceUnits:100000n,connection:{getParsedTransaction:async()=>{throw new Error("rpc down");}} as any});
+  expect(await down.withdrawal(g.customer.id,g.withdrawal)).toEqual({status:"completed",complete:false,review:false});
+  expect((await db.query<any>("select status from peragus_customer_purchase_intents where id=$1",[g.purchase])).rows[0]).toEqual({status:"sent"});
+ });
 
 });

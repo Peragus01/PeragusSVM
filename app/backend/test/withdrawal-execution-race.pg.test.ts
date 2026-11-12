@@ -91,7 +91,7 @@ describe.skipIf(!realUrl)("ruling 23 on real PostgreSQL: concurrent withdrawal e
     sourceAmount:"200.000000",targetAmount:"199.500000",sourceLegStatus:"completed",destinationLegStatus:"completed",transactionReference:"synthetic-reference"}),
    find:async()=>null} as any;
   const execution=new SandboxWithdrawalExecutionService(new PostgresSandboxExecutionRepository(pool,"test"),fake,approvals,
-   {usdtMint:Keypair.generate().publicKey.toBase58(),reader:{hasTokenAccount:async()=>true}},{minDelaySeconds:0});
+   {usdtMint:Keypair.generate().publicKey.toBase58(),reader:{tokenAccountState:async()=>"ready" as const}},{minDelaySeconds:0});
   return{purchaseId:purchase.data.id,withdrawalId:withdrawal.data.id,operator,second,execution,sends:()=>sends,
    refunds:new ManualRefundService(pool,new Set([operator.id,second.id]),true,"test",true)};
  }

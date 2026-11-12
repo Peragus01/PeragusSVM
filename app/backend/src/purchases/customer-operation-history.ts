@@ -1,5 +1,5 @@
 import type {Pool} from "pg";
-import type {MoneyMode} from "../config/money-environment.js";
+import {explorerTxUrl,type MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {z} from "zod";
 
@@ -31,7 +31,9 @@ interface Row {
   withdrawal_id:string|null; approved:boolean; execution_id:string|null; attempted:boolean;
   execution_status:string|null; execution_source_status:string|null; execution_destination_status:string|null;
   execution_refused:boolean; destination_blocker:string|null;
+  operation_status:string; delivery_status:string|null; delivered_amount:string|null; tx_hash:string|null;
 }
+const DESTINATION_BLOCKERS=new Set(["DESTINATION_TOKEN_ACCOUNT_MISSING","DESTINATION_TOKEN_ACCOUNT_FROZEN"]);
 const providerStatus=z.enum(["awaiting_payment","payment_confirmed","converting","payout_initiated",
   "completed","failed","cancelled","expired","needs_review","awaiting_approval"]);
 function status(value:string|null){const parsed=providerStatus.safeParse(value);return parsed.success?parsed.data:null;}
@@ -74,7 +76,8 @@ export class CustomerOperationHistoryService {
       coalesce(e.create_attempted,false) as attempted,e.observation->>'status' as execution_status,
       e.observation->>'sourceLegStatus' as execution_source_status,
       e.observation->>'destinationLegStatus' as execution_destination_status,
-      (e.provider_refusal_code is not null) as execution_refused,dc.blocker as destination_blocker
+      (e.provider_refusal_code is not null) as execution_refused,dc.blocker as destination_blocker,
+      p.status as operation_status,e.delivery_status,e.delivered_amount_usdt::text as delivered_amount,e.provider_tx_hash as tx_hash
       from page p
       left join peragus_customer_sandbox_pix x on x.purchase_intent_id=p.id and x.customer_id=p.customer_id and x.environment='${this.e.mode}'
       left join peragus_customer_withdrawal_requests r on r.purchase_intent_id=p.id and r.customer_id=p.customer_id and r.environment='${this.e.mode}'
@@ -91,6 +94,9 @@ export class CustomerOperationHistoryService {
     return {data:rows.map(row=>{
       const pixStatus=status(row.pix_status),sendStatus=status(row.execution_status);
       const converted=pixStatus==="completed" && row.pix_source_status==="completed" && row.pix_destination_status==="completed";
+      // Real: the operation is delivered_verified and the finalized transaction matched (Task 11).
+      const verified=row.operation_status==="delivered_verified" && row.delivery_status==="verified";
+      const simulated=row.delivery_status==="simulated";
       return {
         id:row.id,quote_id:row.quote_id,created_at:row.created_at,environment:this.e.mode,real_money:this.e.mode==="live",
         refund_request:row.refund_id?{id:row.refund_id,state:row.refund_state,request_path:`/v1/me/operations/${row.id}/refund-request`}:null,
@@ -106,11 +112,16 @@ export class CustomerOperationHistoryService {
           withdrawal_started:row.attempted,
           provider_completed:sendStatus==="completed" && row.execution_source_status==="completed" && row.execution_destination_status==="completed",
           recovery_required:row.attempted && sendStatus===null && !row.execution_refused,
-          // e.g. DESTINATION_TOKEN_ACCOUNT_MISSING: the wallet must hold a USDT token account before the send.
-          destination_blocker:row.destination_blocker==="DESTINATION_TOKEN_ACCOUNT_MISSING"?row.destination_blocker:null,
+          // DESTINATION_TOKEN_ACCOUNT_MISSING / _FROZEN: the wallet must hold a usable USDT token account before the send.
+          destination_blocker:row.destination_blocker!==null && DESTINATION_BLOCKERS.has(row.destination_blocker)?row.destination_blocker:null,
           result_path:`/v1/me/withdrawal-requests/${row.withdrawal_id}/result`
         }:null,
-        observation_freshness:"not_evaluated",onchain_delivery_verified:false,mainnet_execution:this.e.mode==="live" && row.attempted
+        // Net USDT credited to the wallet on chain (after the network fee); only once verified.
+        delivered_target:verified && positiveAmount(row.delivered_amount)?{currency:"USDT",amount:positiveAmount(row.delivered_amount)}:null,
+        // Test sends that are not on devnet are labelled simulated and never count as delivered.
+        delivery_simulated:simulated,
+        explorer_url:simulated?null:explorerTxUrl(this.e.mode,row.tx_hash),
+        observation_freshness:"not_evaluated",onchain_delivery_verified:verified,mainnet_execution:this.e.mode==="live" && row.attempted
       };
     }),meta:{has_more:hasMore,next_cursor:hasMore && last?Buffer.from(JSON.stringify({created_at:last.created_at,id:last.id})).toString("base64url"):null}};
   }

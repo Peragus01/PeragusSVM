@@ -80,8 +80,8 @@ describe("live send boundary: destination identification and send outcomes (Task
    await expect(p.identifyDestination(...args)).rejects.toThrow();
   expect(write).not.toHaveBeenCalled();
  });
- it("classifies TRAVEL_RULE_REQUIRED and other 4xx refusals as definitive, and ambiguous answers as not",async()=>{
-  for(const [statusCode,code,definitive] of [[422,"TRAVEL_RULE_REQUIRED",true],[400,"VALIDATION_ERROR",true],[403,"FORBIDDEN",true],[404,"NOT_FOUND",true],[409,"IDEMPOTENCY_CONFLICT",false],[429,"RATE_LIMITED",false],[500,"INTERNAL",false],[202,null,false]] as const){
+ it("classifies TRAVEL_RULE_REQUIRED and 400/401/403/422 as definitive, and ambiguous answers (404 included) as not",async()=>{
+  for(const [statusCode,code,definitive] of [[422,"TRAVEL_RULE_REQUIRED",true],[400,"VALIDATION_ERROR",true],[403,"FORBIDDEN",true],[404,"NOT_FOUND",false],[401,"UNAUTHORIZED",true],[409,"IDEMPOTENCY_CONFLICT",false],[429,"RATE_LIMITED",false],[500,"INTERNAL",false],[202,null,false]] as const){
    const write=vi.fn(async()=>({statusCode,body:code?{error:{code}}:{}})),p=new OzavSandboxWithdrawalProvider("ozav_sk_test_example",{mode:"test",write});
    const error=await p.send(input).catch(e=>e);
    expect(error).toBeInstanceOf(SandboxWithdrawalProviderError);

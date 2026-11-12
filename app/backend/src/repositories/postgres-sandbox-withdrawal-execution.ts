@@ -4,7 +4,7 @@ import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
 import {transitionOperationInTransaction} from "./postgres-customer-purchase-intents.js";
 import type {OperationStatus} from "../purchases/operation-status.js";
-import {SandboxExecutionError,validateWithdrawal,type ExecutionClaim,type ExecutionContext,type SandboxExecution,type SandboxExecutionRepository} from "../withdrawals/sandbox-execution.js";
+import {SandboxExecutionError,validateWithdrawal,type DeliveryOutcome,type DeliveryStatus,type ExecutionClaim,type ExecutionContext,type SandboxExecution,type SandboxExecutionRepository} from "../withdrawals/sandbox-execution.js";
 import type {WithdrawalObservation} from "../providers/ozav-sandbox-withdrawal.js";
 const eligible=(env:RowEnvironment)=>`select r.id as withdrawal_request_id,r.customer_id,a.id as approval_id,a.operator_user_id as approver_id,x.id as pix_id,
  x.provider_customer_id,x.provider_wallet_id,x.provider_quote_id,x.provider_transfer_id as funding_transfer_id,
@@ -63,7 +63,9 @@ const eligible=(env:RowEnvironment)=>`select r.id as withdrawal_request_id,r.cus
 interface ContextRow {withdrawal_request_id:string;customer_id:string;approval_id:string;approver_id:string;pix_id:string;purchase_id:string;
  provider_customer_id:string;provider_wallet_id:string;provider_quote_id:string;funding_transfer_id:string;amount_brl:string;amount_usdt:string;send_amount_usdt:string|null;wallet_address:string;verified_at:Date|string;approved_at?:Date|string|null;approval_age_seconds?:number|string|null;operation_status?:OperationStatus;}
 interface Row extends ContextRow {id:string;operator_id:string;request_id:string;create_attempted:boolean;provider_send_id:string|null;observation:WithdrawalObservation|null;closed_at:Date|string|null;
- environment:MoneyMode;provider_tx_hash:string|null;provider_refusal_code:string|null;}
+ environment:MoneyMode;provider_tx_hash:string|null;provider_refusal_code:string|null;
+ delivery_status?:DeliveryStatus|null;delivery_reason?:string|null;delivered_amount_usdt?:string|null;refused_transfer_id?:string|null;slot_released_at?:Date|string|null;}
+const formatUnits=(units:bigint)=>`${units/1000000n}.${String(units%1000000n).padStart(6,"0")}`;
 const contextMap=(r:ContextRow):ExecutionContext=>({withdrawalId:r.withdrawal_request_id,customerId:r.customer_id,approvalId:r.approval_id,approverId:r.approver_id,pixId:r.pix_id,purchaseId:r.purchase_id,
  providerCustomerId:r.provider_customer_id,providerWalletId:r.provider_wallet_id,providerQuoteId:r.provider_quote_id,transferId:r.funding_transfer_id,
  amountBrl:r.amount_brl,amountUsdt:r.amount_usdt,sendAmountUsdt:r.send_amount_usdt==null?null:String(r.send_amount_usdt),walletAddress:r.wallet_address,verifiedAt:new Date(r.verified_at).toISOString(),
@@ -71,8 +73,11 @@ const contextMap=(r:ContextRow):ExecutionContext=>({withdrawalId:r.withdrawal_re
  ...(r.approval_age_seconds!=null?{approvalAgeSeconds:Number(r.approval_age_seconds)}:{}),
  ...(r.operation_status?{operationStatus:r.operation_status}:{})});
 const map=(r:Row):SandboxExecution=>({...contextMap(r),id:r.id,operatorId:r.operator_id,requestId:r.request_id,attempted:r.create_attempted,sendTransferId:r.provider_send_id,observation:r.observation,closedAt:r.closed_at?new Date(r.closed_at).toISOString():null,
- environment:r.environment,txHash:r.provider_tx_hash,refusalCode:r.provider_refusal_code});
+ environment:r.environment,txHash:r.provider_tx_hash,refusalCode:r.provider_refusal_code,
+ deliveryStatus:r.delivery_status??null,deliveryReason:r.delivery_reason??null,deliveredAmountUsdt:r.delivered_amount_usdt==null?null:String(r.delivered_amount_usdt),
+ refusedTransferId:r.refused_transfer_id??null,slotReleasedAt:r.slot_released_at?new Date(r.slot_released_at).toISOString():null});
 const SEND_CLAIMED="WITHDRAWAL_SEND_CLAIMED",SEND_ACCEPTED="OZAV_SEND_ACCEPTED",SEND_REFUSED="WITHDRAWAL_SEND_REFUSED";
+const DELIVERY_VERIFIED="DELIVERY_VERIFIED",DELIVERY_FAILED="DELIVERY_VERIFICATION_FAILED";
 export class PostgresSandboxExecutionRepository implements SandboxExecutionRepository {
  private readonly e:RowEnvironment;
  constructor(private readonly pool:Pool,mode:MoneyMode){this.e=rowEnvironment(mode);}
@@ -148,6 +153,34 @@ export class PostgresSandboxExecutionRepository implements SandboxExecutionRepos
    await transitionOperationInTransaction(client,this.e.mode,row.purchaseId,"needs_review",actor.slice(0,200),`${SEND_REFUSED}: ${code}`,{from:"sending"});
    return{commit:true,value:map({...r.rows[0],purchase_id:row.purchaseId})};
   });
+ }
+ /**
+  * Completion of the operation. Under the purchase row lock and only from `sent`
+  * (transition with {from:"sent"}): verified -> delivered_verified, review -> needs_review,
+  * simulated -> label only. In live the status trigger (050) releases the pilot slot in the
+  * same transaction. Anything that no longer applies returns the row unchanged.
+  */
+ async recordDelivery(row:SandboxExecution,outcome:DeliveryOutcome,actor:string){
+  if(outcome.status==="simulated" && this.e.mode!=="test")throw new SandboxExecutionError("WITHDRAWAL_DELIVERY_SIMULATION_NOT_ALLOWED");
+  const reason=outcome.reason.replace(/[\u0000-\u001f\u007f]/g," ").slice(0,200);
+  const delivered=outcome.status==="verified"?formatUnits(outcome.deliveredUnits):null;
+  return this.transaction(async client=>{
+   if(await this.lockOperation(client,row.purchaseId)!=="sent")return{commit:false,value:row};
+   if(outcome.status==="verified")await transitionOperationInTransaction(client,this.e.mode,row.purchaseId,"delivered_verified",actor.slice(0,200),
+    `${DELIVERY_VERIFIED}: tx=${row.txHash??row.observation?.transactionReference} delivered=${delivered} ${reason}`.slice(0,500),{from:"sent"});
+   if(outcome.status==="review")await transitionOperationInTransaction(client,this.e.mode,row.purchaseId,"needs_review",actor.slice(0,200),
+    `${DELIVERY_FAILED}: ${reason}`.slice(0,500),{from:"sent"});
+   const r=await client.query<Row>(`update peragus_sandbox_withdrawal_executions set delivery_status=$2,delivery_reason=$3,delivered_amount_usdt=$4::numeric,
+    delivery_checked_at=now(),updated_at=now()
+    where id=$1 and environment='${this.e.mode}' and closed_at is null and create_attempted and provider_send_id is not null and observation is not null
+     and provider_refusal_code is null and (delivery_status is null or delivery_status='simulated') returning *`,[row.id,outcome.status,reason,delivered]);
+   if(!r.rows[0])return{commit:false,value:row};
+   return{commit:true,value:map({...r.rows[0],purchase_id:row.purchaseId})};
+  });
+ }
+ async flagRefusedTransfer(row:SandboxExecution,transferId:string){
+  await this.pool.query(`update peragus_sandbox_withdrawal_executions set refused_transfer_id=$2,updated_at=now()
+   where id=$1 and environment='${this.e.mode}' and closed_at is null and provider_refusal_code is not null and refused_transfer_id is null`,[row.id,transferId]);
  }
  async recordDestinationCheck(withdrawalId:string,customerId:string,blocker:string|null){
   await this.pool.query(`insert into peragus_withdrawal_destination_checks(withdrawal_request_id,customer_id,blocker,checked_at,environment)

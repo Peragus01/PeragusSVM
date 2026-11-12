@@ -5,13 +5,14 @@ import {OzavSandboxWithdrawalProvider} from "../providers/ozav-sandbox-withdrawa
 import {PostgresCustomerPixRepository} from "../repositories/postgres-customer-sandbox-pix.js";
 import {PostgresSandboxExecutionRepository} from "../repositories/postgres-sandbox-withdrawal-execution.js";
 import {recoverSandboxWithdrawal} from "../withdrawals/sandbox-recovery.js";
+import type {DeliveryCheck} from "../withdrawals/sandbox-execution.js";
 import {reconcileCustomerPix} from "./customer-sandbox-pix.js";
 import type {CustomerReconciliationReader} from "../jobs/customer-reconciliation.js";
 import {refreshPixAndProgress,type PurchaseProgression} from "./purchase-progression.js";
 
 /** Returns two GET-only functions. There is no send, reserve, claim or simulation capability. */
 export function createCustomerReconciliationReader(pool:Pool,key:string,mode:MoneyMode,read?:OzavTransport,
- progression?:Pick<PurchaseProgression,"applyTransferObservation">):CustomerReconciliationReader{
+ progression?:Pick<PurchaseProgression,"applyTransferObservation">,delivery?:DeliveryCheck):CustomerReconciliationReader{
  // The key, provider clients and repositories all belong to the configured money mode.
  if(!providerKeyMatchesMode(key,mode))throw Error("Provider key for the money mode required");
  const client=new OzavClient({apiKey:key,mode,attempts:1,timeoutMs:10000,...(read?{transport:read}:{})});
@@ -29,9 +30,13 @@ export function createCustomerReconciliationReader(pool:Pool,key:string,mode:Mon
     review:view.state==="needs_review" || (view.state==="completed" && !view.custody_conversion_completed) || (failed && view.source_leg_status==="completed")};
   },
   withdrawal:async(customerId:string,id:string)=>{
-   const view=await recoverSandboxWithdrawal(withdrawalRepository,withdrawalProvider,id,customerId);
+   // With a delivery check the same GET-only pass verifies the delivery on chain
+   // (sent -> delivered_verified | needs_review), acting as system:reconciliation.
+   const view=await recoverSandboxWithdrawal(withdrawalRepository,withdrawalProvider,id,customerId,delivery,"system:reconciliation");
    const status=view.state.startsWith("provider_")?view.state.slice(9):view.state;
-   return {status,complete:view.provider_completed,review:view.manual_review_required || (status==="completed" && !view.provider_completed)};
+   // A completed send keeps being checked until its delivery is settled (verified, or simulated in test).
+   const settled=!delivery || view.onchain_delivery_verified || view.delivery_simulated;
+   return {status,complete:view.provider_completed && settled,review:view.manual_review_required || (status==="completed" && !view.provider_completed)};
   }
  });
 }
