@@ -102,6 +102,55 @@ export function statusStyle(operation: CustomerOperation) {
       ? "customer-chip-green"
       : "customer-chip-warning";
 }
+/**
+ * On-chain delivery evidence of an operation: the net USDT credited once the backend verified
+ * the finalized transaction, and the backend's explorer link (cluster of the reported mode).
+ */
+export function DeliveryEvidence({
+  operation,
+}: {
+  operation: Pick<
+    CustomerOperation,
+    | "environment"
+    | "onchain_delivery_verified"
+    | "delivered_target"
+    | "delivery_simulated"
+    | "explorer_url"
+  >;
+}) {
+  return (
+    <>
+      <div className="customer-row">
+        <span>Entrega on-chain verificada</span>
+        <b>{operation.onchain_delivery_verified ? "Sim" : "Não"}</b>
+      </div>
+      {operation.onchain_delivery_verified && operation.delivered_target && (
+        <div className="customer-row">
+          <span>Valor entregue na carteira (líquido)</span>
+          <b>{formatAmount(operation.delivered_target.amount, "USDT")}</b>
+        </div>
+      )}
+      {operation.environment === "test" && operation.delivery_simulated && (
+        <p className="customer-muted">
+          Envio simulado no ambiente de testes: a transação não existe na Solana Devnet e não
+          comprova entrega.
+        </p>
+      )}
+      {operation.explorer_url ? (
+        <p className="customer-muted">
+          <a href={operation.explorer_url} target="_blank" rel="noreferrer">
+            Ver transação no explorador Solana
+          </a>
+        </p>
+      ) : (
+        <p className="customer-muted">
+          ID da transação na Solana: não disponível. Nenhum link de explorador é gerado sem uma
+          confirmação verificável.
+        </p>
+      )}
+    </>
+  );
+}
 export function displayDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())

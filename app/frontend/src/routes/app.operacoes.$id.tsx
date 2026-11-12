@@ -9,6 +9,7 @@ import {
   SectionTitle,
 } from "@/components/peragus/customer-ui";
 import {
+  DeliveryEvidence,
   displayDate,
   formatAmount,
   operationLabel,
@@ -175,6 +176,7 @@ function OperationDetail() {
                 <span>Ambiente</span>
                 <b>{operation.environment === "test" ? "Testes · Solana Devnet" : "Solana"}</b>
               </div>
+              <DeliveryEvidence operation={operation} />
               <details className="premium-technical-details">
                 <summary>Detalhes técnicos e suporte</summary>{" "}
                 <div className="customer-row">
@@ -195,14 +197,6 @@ function OperationDetail() {
                       : "Não"}
                   </b>
                 </div>
-                <div className="customer-row">
-                  <span>Entrega on-chain verificada</span>
-                  <b>{operation.onchain_delivery_verified ? "Sim" : "Não"}</b>
-                </div>
-                <p className="customer-muted">
-                  ID da transação na Solana: não disponível. Nenhum link de explorador é gerado sem
-                  uma confirmação verificável.
-                </p>
               </details>
               {result && (
                 <>

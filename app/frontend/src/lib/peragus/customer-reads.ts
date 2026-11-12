@@ -1,5 +1,5 @@
 /** Customer session tokens come from the login layer; this module stores no session. */
-import { moneyMode, type MoneyMode, type MoneyNetwork } from "./config";
+import { isExplorerTxUrl, moneyMode, type MoneyMode, type MoneyNetwork } from "./config";
 export interface CustomerOperation {
   id: string;
   quote_id: string;
@@ -27,8 +27,16 @@ export interface CustomerOperation {
     request_path: string;
   } | null;
   observation_freshness: "not_evaluated";
-  onchain_delivery_verified: false;
-  mainnet_execution: false;
+  /** True only once the finalized transaction credited the wallet as expected (backend check). */
+  onchain_delivery_verified: boolean;
+  /** Live only: a send was attempted on Solana mainnet. Always false in test. */
+  mainnet_execution: boolean;
+  /** Net USDT credited on chain (after the network fee); null until verified. */
+  delivered_target?: { currency: "USDT"; amount: string } | null;
+  /** Test only: the sandbox send is not on devnet; never counts as delivered. */
+  delivery_simulated?: boolean;
+  /** Explorer link of the backend-reported cluster; null when there is nothing to show. */
+  explorer_url?: string | null;
 }
 
 export interface CustomerOperationsPage {
@@ -49,6 +57,8 @@ export interface CustomerWithdrawalResult {
     currency: "USDT";
     gross_amount: string;
     net_amount: string | null;
+    /** Credited to the wallet on chain; null until verified. */
+    delivered_amount?: string | null;
     deducted_amount: string | null;
     basis: "recorded_provider_amounts" | "not_reported";
     fee_breakdown: null;
@@ -56,8 +66,10 @@ export interface CustomerWithdrawalResult {
   destination: CustomerOperation["destination"];
   observed_at: string | null;
   observation_freshness: "not_evaluated";
-  onchain_delivery_verified: false;
-  mainnet_execution: false;
+  onchain_delivery_verified: boolean;
+  mainnet_execution: boolean;
+  delivery_simulated?: boolean;
+  explorer_url?: string | null;
 }
 
 export class CustomerReadError extends Error {
@@ -71,12 +83,23 @@ export class CustomerReadError extends Error {
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
-// Responses must belong to this deployment's money mode; real money only in live.
-const sandbox = (value: Record<string, unknown>) =>
-  value["environment"] === moneyMode() &&
-  value["real_money"] === (moneyMode() === "live") &&
-  value["onchain_delivery_verified"] === false &&
-  value["mainnet_execution"] === false;
+// Responses must belong to this deployment's money mode; real money and mainnet only in live.
+// An explorer link must be exactly the one for this mode's cluster, and a verified delivery
+// always carries one (fail closed on anything else).
+const sandbox = (value: Record<string, unknown>) => {
+  const mode = moneyMode(),
+    url = value["explorer_url"] ?? null,
+    verified = value["onchain_delivery_verified"];
+  return (
+    value["environment"] === mode &&
+    value["real_money"] === (mode === "live") &&
+    typeof verified === "boolean" &&
+    typeof value["mainnet_execution"] === "boolean" &&
+    (mode === "live" || value["mainnet_execution"] === false) &&
+    (url === null || isExplorerTxUrl(url, mode)) &&
+    (!verified || url !== null)
+  );
+};
 
 export async function read(path: string, token: string, signal?: AbortSignal): Promise<unknown> {
   if (!token || token.length > 8185 || !/^[A-Za-z0-9._-]+$/.test(token))

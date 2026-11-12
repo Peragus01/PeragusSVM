@@ -9,8 +9,17 @@ import { Route as DashboardRoute } from "@/routes/app.index";
 import { PublicHome } from "@/routes/index";
 import { CustomerPublicLayout } from "@/components/peragus/customer-ui";
 import { environmentNotice } from "@/lib/peragus/customer-copy";
-import { moneyMode, moneyNetwork, walletProofDomain } from "@/lib/peragus/config";
 import {
+  defaultSolanaRpcUrl,
+  explorerAddress,
+  explorerCluster,
+  explorerTx,
+  moneyMode,
+  moneyNetwork,
+  walletProofDomain,
+} from "@/lib/peragus/config";
+import {
+  DeliveryEvidence,
   formatAmount,
   operationLabel,
   statusStyle,
@@ -82,6 +91,57 @@ describe("financial evidence presentation", () => {
   it("does not print unknown net fees as zero", () => {
     expect(formatAmount(null, "USDT")).toBe("Não informado");
     expect(formatAmount(undefined, "BRL")).toBe("Não informado");
+  });
+});
+
+describe("explorer links follow the money mode (Task 11)", () => {
+  const signature = "5".repeat(88);
+  it("uses mainnet-beta in live and devnet in test", () => {
+    expect(explorerCluster("live")).toBe("mainnet-beta");
+    expect(explorerCluster("test")).toBe("devnet");
+    expect(explorerTx(signature, "live")).toBe(
+      `https://explorer.solana.com/tx/${signature}?cluster=mainnet-beta`,
+    );
+    expect(explorerAddress("Addr", "test")).toBe(
+      "https://explorer.solana.com/address/Addr?cluster=devnet",
+    );
+    expect(defaultSolanaRpcUrl("live")).toBe("https://api.mainnet-beta.solana.com");
+    expect(defaultSolanaRpcUrl("test")).toBe("https://api.devnet.solana.com");
+  });
+  it("shows the net delivered amount and the backend explorer link once verified", () => {
+    const url = `https://explorer.solana.com/tx/${signature}?cluster=mainnet-beta`;
+    render(
+      <DeliveryEvidence
+        operation={
+          {
+            environment: "live",
+            onchain_delivery_verified: true,
+            delivered_target: { currency: "USDT", amount: "199.950000" },
+            delivery_simulated: false,
+            explorer_url: url,
+          } as CustomerOperation
+        }
+      />,
+    );
+    expect(screen.getByText("199,95 USDT")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /explorador/i }).getAttribute("href")).toBe(url);
+  });
+  it("labels a simulated test send and shows no explorer link", () => {
+    const { container } = render(
+      <DeliveryEvidence
+        operation={
+          {
+            environment: "test",
+            onchain_delivery_verified: false,
+            delivered_target: null,
+            delivery_simulated: true,
+            explorer_url: null,
+          } as CustomerOperation
+        }
+      />,
+    );
+    expect(container.textContent).toMatch(/simulad/i);
+    expect(screen.queryByRole("link")).toBeNull();
   });
 });
 
