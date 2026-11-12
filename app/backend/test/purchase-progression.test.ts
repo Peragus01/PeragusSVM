@@ -28,7 +28,8 @@ const pool={query,connect:async()=>{
 }} as unknown as Pool;
 const wide={maxOpenGlobal:1000,limits:{minCents:1n,maxCents:1000000n}};
 const customers=new PostgresCustomerRepository(pool),purchases=new PostgresCustomerPurchaseIntentRepository(pool,"live",wide);
-const operator={id:randomUUID(),assuranceLevel:"aal2" as const},operators=new Set([operator.id]);
+// A TOTP verified "just now" on every read (money-moving operator actions need a fresh one).
+const operator={id:randomUUID(),assuranceLevel:"aal2" as const,get mfaVerifiedAt(){return Math.floor(Date.now()/1000);}},operators=new Set([operator.id]);
 const refunds=new ManualRefundService(pool,operators,true,"live",true);
 const alerts=new OperatorAlertService(pool,operators,"live");
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
@@ -299,7 +300,8 @@ describe("operator refund decision (POST /v1/admin/operations/:purchaseId/refund
   // Production wiring: the same service the server builds (settleOperations=true).
   const service=new ManualRefundService(pool,operators,true,"live",true);
   const app=await buildApp({customerAccess:{customers,authenticate:async(token:string)=>{
-   if(token==="operator")return operator;if(token==="customer")return{id:owner};if(token==="aal1")return{id:operator.id};throw new AuthenticationError("INVALID_TOKEN");}},manualRefundService:service});
+   if(token==="operator")return operator;if(token==="customer")return{id:owner};
+   if(token==="stale")return{id:operator.id,assuranceLevel:"aal2",mfaVerifiedAt:Math.floor(Date.now()/1000)-301};if(token==="aal1")return{id:operator.id};throw new AuthenticationError("INVALID_TOKEN");}},manualRefundService:service});
   apps.push(app);return app;
  };
  const decide=(app:Awaited<ReturnType<typeof buildApp>>,purchaseId:string,body:Record<string,unknown>,token="operator")=>
@@ -347,6 +349,12 @@ describe("operator refund decision (POST /v1/admin/operations/:purchaseId/refund
   expect((await decide(app,f.p.id,{request_id:randomUUID(),reason:"x".repeat(501)})).statusCode).toBe(400);
   expect((await decide(app,f.p.id,{request_id:randomUUID()})).statusCode).toBe(400);
   expect(await statusOf(f.p.id)).toBe("pix_confirmed");
+ });
+ it("requires a fresh TOTP for the refund decision and changes nothing with a stale one",async()=>{
+  const f=await paidAt("pix_confirmed"),app=await appWith(f.s.owner);
+  const r=await decide(app,f.p.id,{request_id:randomUUID(),reason:reasonText},"stale");
+  expect(r.statusCode).toBe(403);expect(r.json().error.code).toBe("OPERATOR_MFA_STALE");
+  expect(await statusOf(f.p.id)).toBe("pix_confirmed");expect(await count("peragus_customer_refund_requests",f.p.id)).toBe(0);
  });
  it("end to end: customer request -> operator decision -> completion -> refunded, clearing the alert",async()=>{
   const deadline=new Date(Date.now()+60000).toISOString(),f=await fixture({facility:{...LOCKED,deadlineAt:deadline}});

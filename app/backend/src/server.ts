@@ -129,6 +129,8 @@ import type { SettlementRepository } from "./repositories/settlement-repository.
 console.info(JSON.stringify(deploymentConfigurationAudit()));
 const env = getEnv();
 const moneyMode = moneyModeFor(env);
+// Fresh-TOTP window for money-moving operator actions (OPERATOR_MFA_MAX_AGE_SECONDS, <= 300 s).
+const operatorMfaPolicy = { mfaMaxAgeSeconds: env.OPERATOR_MFA_MAX_AGE_SECONDS };
 const onboardingEmailConfig = notificationConfig();
 if (process.env.RAILWAY_ENVIRONMENT_NAME === "production" || env.PERAGUS_DEPLOYMENT_ENV === "production") {
   assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV});
@@ -494,6 +496,8 @@ const customerTermsService =
       )
     : undefined;
 const app = await buildApp({
+  // GET /v1/admin/operator-status answers only whether the caller is allowlisted.
+  operatorUserIds: new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
   moneyMode,
   ...(pool
     ? {
@@ -553,6 +557,7 @@ const app = await buildApp({
           moneyModeFor(env),
           // Recording a refund requires and closes a refund_pending operation (atomically).
           true,
+          operatorMfaPolicy,
         ),
       }
     : {}),
@@ -605,7 +610,13 @@ const app = await buildApp({
               new PostgresWithdrawalOperatorApprovalRepository(pool!, moneyModeFor(env)),
               new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
               moneyMode,
+              operatorMfaPolicy,
             ),
+            {
+              mfaMaxAgeSeconds: env.OPERATOR_MFA_MAX_AGE_SECONDS,
+              minDelaySeconds: env.OPERATOR_EXECUTION_MIN_DELAY_SECONDS,
+              fourEyes: env.OPERATOR_FOUR_EYES_ENABLED,
+            },
           ),
       }
     : {}),
@@ -616,6 +627,7 @@ const app = await buildApp({
             new PostgresWithdrawalOperatorApprovalRepository(pool!, moneyModeFor(env)),
             new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
             moneyMode,
+            operatorMfaPolicy,
           ),
       }
     : {}),

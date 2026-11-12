@@ -6,6 +6,11 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   assuranceLevel?: "aal2";
+  /**
+   * Epoch seconds of the TOTP verification (the `totp` entry of the verified token's
+   * `amr` claim). Only set after the Auth server accepted that exact token.
+   */
+  mfaVerifiedAt?: number;
 }
 export interface Customer {
   id: string;
@@ -138,7 +143,10 @@ export function registerCustomerAccess(
     if (
       path === "/v1/me" ||
       path === "/v1/me/customer" ||
-      path === "/v1/me/pilot-invite/redeem"
+      path === "/v1/me/pilot-invite/redeem" ||
+      // Any authenticated user (AAL1) may ask whether it is an operator; the
+      // handler answers only that boolean.
+      path === "/v1/admin/operator-status"
     )
       return;
     // Exact operator resource: authentication still runs above. Its own handler

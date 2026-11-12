@@ -11,6 +11,7 @@ import {
   supabaseAuth,
   parseTokens,
   fetchIdentity,
+  fetchOperatorStatus,
   CustomerSessionError,
 } from "./customer-session-auth";
 
@@ -98,6 +99,12 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
   const enrollOperatorMfa = useCallback(async (): Promise<OperatorMfaEnrollment> => {
     const current = tokensRef.current;
     if (!current) throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
+    // MFA enrollment exists only for allowlisted operators (the backend decides).
+    if (!(await fetchOperatorStatus(current.access_token)))
+      throw new CustomerSessionError(
+        "OPERATOR_REQUIRED",
+        "Esta conta não é de operador; o cadastro de autenticador não está disponível.",
+      );
 
     // Supabase keeps an enrollment as an unverified factor when the page is
     // closed or the client rejects the one-time QR response. Starting over is

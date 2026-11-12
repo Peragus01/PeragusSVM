@@ -1,11 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   CustomerNotice,
   CustomerPanel,
   CustomerPublicLayout,
 } from "@/components/peragus/customer-ui";
-import { CustomerSessionError, useCustomerSession } from "@/lib/peragus/customer-session";
+import {
+  CustomerSessionError,
+  fetchOperatorStatus,
+  useCustomerSession,
+} from "@/lib/peragus/customer-session";
 import type { OperatorMfaEnrollment } from "@/lib/peragus/customer-session-context";
 import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
 
@@ -112,7 +116,7 @@ function OperatorInvitesPage() {
                 Esta área exige uma conta separada de operador, sem perfil de cliente.
               </CustomerNotice>
             ) : (
-              <InviteConsole
+              <OperatorInviteArea
                 token={session.accessToken}
                 verifyMfa={session.verifyOperatorMfa}
                 enrollMfa={session.enrollOperatorMfa}
@@ -128,6 +132,42 @@ function OperatorInvitesPage() {
         </p>
       </div>
     </CustomerPublicLayout>
+  );
+}
+
+/** true/false once GET /v1/admin/operator-status answered; null while asking. Fails closed. */
+function useOperatorStatus(token: string): boolean | null {
+  const [state, setState] = useState<{ token: string; operator: boolean } | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchOperatorStatus(token, controller.signal).then((operator) => {
+      if (!controller.signal.aborted) setState({ token, operator });
+    });
+    return () => controller.abort();
+  }, [token]);
+  return state?.token === token ? state.operator : null;
+}
+
+/** Offers TOTP enrollment only when the backend says this account is an operator. */
+export function OperatorInviteArea({
+  token,
+  verifyMfa,
+  enrollMfa,
+  verifyMfaEnrollment,
+}: {
+  token: string;
+  verifyMfa: (code: string) => Promise<void>;
+  enrollMfa?: () => Promise<OperatorMfaEnrollment>;
+  verifyMfaEnrollment?: (factorId: string, code: string) => Promise<void>;
+}) {
+  const operator = useOperatorStatus(token);
+  return (
+    <InviteConsole
+      token={token}
+      verifyMfa={verifyMfa}
+      {...(operator === true && enrollMfa ? { enrollMfa } : {})}
+      {...(verifyMfaEnrollment ? { verifyMfaEnrollment } : {})}
+    />
   );
 }
 

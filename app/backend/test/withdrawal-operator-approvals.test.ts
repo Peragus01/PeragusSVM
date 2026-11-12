@@ -96,8 +96,12 @@ const withdrawalPath="/v1/me/withdrawal-requests";
 import {PostgresWithdrawalOperatorApprovalRepository} from "../src/repositories/postgres-withdrawal-operator-approvals.js";
 import {WithdrawalOperatorApprovalService,parseWithdrawalOperators} from "../src/withdrawals/operator-approvals.js";
 const approvalRepo=new PostgresWithdrawalOperatorApprovalRepository(pool,"test");
-async function approvalFixture(){
- const f=await completedFixture(),wr=await withdrawals.record(f.s.customer.id,f.withdrawalRequestId,f.pixId),operatorId=randomUUID(),user={id:operatorId,email:"operator@example.test",assuranceLevel:"aal2" as const};
+const nowSeconds=()=>Math.floor(Date.now()/1000);
+// The progression moves a converted operation to awaiting_approval; fixtures replay those moves.
+async function awaitingApproval(purchaseId:string){for(const to of ["awaiting_pix","converted","awaiting_approval"] as const)await repo.transitionOperation(purchaseId,to,"system:test","test_fixture");}
+async function approvalFixture(ready=true){
+ const f=await completedFixture(),wr=await withdrawals.record(f.s.customer.id,f.withdrawalRequestId,f.pixId),operatorId=randomUUID(),user={id:operatorId,email:"operator@example.test",assuranceLevel:"aal2" as const,mfaVerifiedAt:nowSeconds()};
+ if(ready)await awaitingApproval(f.p.data.id);
  const approvals=new WithdrawalOperatorApprovalService(approvalRepo,new Set([operatorId]));
  return{...f,wr,user,approvals,approvalRequestId:randomUUID(),reason:"Reviewed the completed sandbox conversion and verified destination."};
 }
@@ -151,4 +155,107 @@ describe("withdrawal operator approval audit",()=>{
   await expect(db.query("delete from peragus_withdrawal_operator_approvals where id=$1",[one.data.id])).rejects.toThrow("append-only");
   const r=await db.query("select relrowsecurity,has_table_privilege('anon','peragus_withdrawal_operator_approvals','SELECT') as anon_select,has_table_privilege('authenticated','peragus_withdrawal_operator_approvals','INSERT') as auth_insert from pg_class where relname='peragus_withdrawal_operator_approvals'");expect(r.rows[0]).toEqual({relrowsecurity:true,anon_select:false,auth_insert:false});
  });
+});
+
+import {requireFreshMfa,OperatorApprovalError} from "../src/withdrawals/operator-approvals.js";
+import {ManualRefundService} from "../src/refunds/manual-refunds.js";
+const statusOf=async(purchaseId:string)=>(await db.query<{status:string}>("select status from peragus_customer_purchase_intents where id=$1",[purchaseId])).rows[0]!.status;
+describe("fresh operator MFA",()=>{
+ const now=1_800_000_000,operator={id:randomUUID(),email:"operator@example.test",assuranceLevel:"aal2" as const};
+ it("amr totp older than 300s is stale",()=>{
+  expect(()=>requireFreshMfa({...operator,mfaVerifiedAt:now-301},300,now)).toThrow("OPERATOR_MFA_STALE");
+ });
+ it("amr without totp is stale",()=>{
+  expect(()=>requireFreshMfa(operator,300,now)).toThrow(OperatorApprovalError);
+  expect(()=>requireFreshMfa(operator,300,now)).toThrow("OPERATOR_MFA_STALE");
+  expect(()=>requireFreshMfa({...operator,assuranceLevel:undefined,mfaVerifiedAt:now},300,now)).toThrow("OPERATOR_MFA_STALE");
+ });
+ it("fresh totp passes",()=>{
+  expect(()=>requireFreshMfa({...operator,mfaVerifiedAt:now-300},300,now)).not.toThrow();
+  expect(()=>requireFreshMfa({...operator,mfaVerifiedAt:now},300,now)).not.toThrow();
+ });
+ it("a totp timestamp from the future is not fresh",()=>{
+  expect(()=>requireFreshMfa({...operator,mfaVerifiedAt:now+120},300,now)).toThrow("OPERATOR_MFA_STALE");
+ });
+ it("approval requires fresh MFA (403) and records nothing with a stale one",async()=>{
+  const f=await approvalFixture(),stale={...f.user,mfaVerifiedAt:nowSeconds()-301};
+  await expect(f.approvals.approve(stale,f.wr.data.id,f.approvalRequestId,f.reason)).rejects.toThrow("OPERATOR_MFA_STALE");
+  const app=await approvalApp(f,stale),r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/approval`,headers,payload:{request_id:f.approvalRequestId,reason:f.reason}});
+  expect(r.statusCode).toBe(403);expect(r.json().error.code).toBe("OPERATOR_MFA_STALE");
+  expect(await approvalRepo.read(f.wr.data.id)).toBeNull();expect(await statusOf(f.p.data.id)).toBe("awaiting_approval");
+ });
+});
+
+describe("GET /v1/admin/operator-status",()=>{
+ const url="/v1/admin/operator-status";
+ const statusApp=async(identity:{id:string;assuranceLevel?:"aal2"},operators:string[])=>{
+  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},operatorUserIds:new Set(operators)});apps.push(app);return app;
+ };
+ it("operator-status is false for a non-allowlisted user and reveals nothing else",async()=>{
+  const operator=randomUUID(),app=await statusApp({id:randomUUID()},[operator]);
+  const r=await app.inject({method:"GET",url,headers});
+  expect(r.statusCode).toBe(200);expect(r.headers["cache-control"]).toBe("no-store");
+  expect(r.json()).toEqual({data:{operator:false,mfa_enrolled_required:true}});
+ });
+ it("is true for an allowlisted user at AAL1 (before MFA), false for one with a customer profile, and requires authentication",async()=>{
+  const operator=randomUUID();
+  expect((await(await statusApp({id:operator},[operator])).inject({method:"GET",url,headers})).json()).toEqual({data:{operator:true,mfa_enrolled_required:true}});
+  const s=await setup();
+  const customerOperator=await(await statusApp({id:s.owner},[s.owner])).inject({method:"GET",url,headers});
+  expect(customerOperator.statusCode).toBe(200);expect(customerOperator.json()).toEqual({data:{operator:false,mfa_enrolled_required:true}});
+  const anonymous=await(await statusApp({id:operator},[operator])).inject({method:"GET",url});
+  expect(anonymous.statusCode).toBe(401);
+  expect((await(await statusApp({id:operator},[operator])).inject({method:"GET",url:`${url}?x=1`,headers})).statusCode).toBe(400);
+ });
+});
+
+describe("withdrawal approval vs operator refund decision (ruling 23)",()=>{
+ const refundReason="Operator decided to return the Pix payment.";
+ const refundsFor=(f:Awaited<ReturnType<typeof approvalFixture>>)=>new ManualRefundService(pool,new Set([f.user.id]),true,"test",true);
+ it("moves the operation awaiting_approval -> approved with an audited event in the same transaction",async()=>{
+  const f=await approvalFixture();await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
+  expect(await statusOf(f.p.data.id)).toBe("approved");
+  const events=(await db.query<{from_status:string;to_status:string;actor:string;reason:string}>("select from_status,to_status,actor,reason from peragus_operation_status_events where purchase_id=$1 order by id",[f.p.data.id])).rows;
+  expect(events.at(-1)).toEqual({from_status:"awaiting_approval",to_status:"approved",actor:`operator:${f.user.id}`,reason:`OPERATOR_WITHDRAWAL_APPROVAL: ${f.reason}`});
+  // A replay changes nothing more.
+  await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
+  expect((await db.query("select count(*)::int n from peragus_operation_status_events where purchase_id=$1 and to_status='approved'",[f.p.data.id])).rows[0]).toEqual({n:1});
+ });
+ it("refuses approval unless the operation is awaiting_approval",async()=>{
+  const f=await approvalFixture(false);
+  await expect(f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason)).rejects.toThrow("WITHDRAWAL_OPERATION_NOT_AWAITING_APPROVAL");
+  expect(await approvalRepo.read(f.wr.data.id)).toBeNull();expect(await statusOf(f.p.data.id)).toBe("accepted");
+ });
+ it("decide-refund-then-approve is refused",async()=>{
+  const f=await approvalFixture();
+  await refundsFor(f).operationDecision(f.user,f.p.data.id,randomUUID(),refundReason);
+  expect(await statusOf(f.p.data.id)).toBe("refund_pending");
+  await expect(f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason)).rejects.toThrow("WITHDRAWAL_REFUND_IN_PROGRESS");
+  expect(await approvalRepo.read(f.wr.data.id)).toBeNull();expect(await statusOf(f.p.data.id)).toBe("refund_pending");
+ });
+ it("approve-then-decide-refund is refused with REFUND_WITHDRAWAL_IN_PROGRESS",async()=>{
+  const f=await approvalFixture();await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
+  await expect(refundsFor(f).operationDecision(f.user,f.p.data.id,randomUUID(),refundReason)).rejects.toThrow("REFUND_WITHDRAWAL_IN_PROGRESS");
+  expect(await statusOf(f.p.data.id)).toBe("approved");
+  expect((await db.query("select count(*)::int n from peragus_operator_refund_decisions where purchase_id=$1",[f.p.data.id])).rows[0]).toEqual({n:0});
+ });
+ it("refuses a refund decision even after the approved operation went to review",async()=>{
+  const f=await approvalFixture();await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
+  await repo.transitionOperation(f.p.data.id,"needs_review","system:test","synthetic review after approval");
+  await expect(refundsFor(f).operationDecision(f.user,f.p.data.id,randomUUID(),refundReason)).rejects.toThrow("REFUND_WITHDRAWAL_IN_PROGRESS");
+  expect(await statusOf(f.p.data.id)).toBe("needs_review");
+ });
+ it("concurrent approve vs decide: exactly one wins and the state matches the winner",async()=>{
+  for(let i=0;i<4;i++){
+   const f=await approvalFixture(),refunds=refundsFor(f);
+   // Alternate which call starts first.
+   const approve=()=>f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason),decide=()=>refunds.operationDecision(f.user,f.p.data.id,randomUUID(),refundReason);
+   const results:Promise<unknown>[]=i%2?[decide(),approve()]:[approve(),decide()];
+   expect((await Promise.allSettled(results)).filter(r=>r.status==="fulfilled")).toHaveLength(1);
+   const approvals=(await db.query<{n:number}>("select count(*)::int n from peragus_withdrawal_operator_approvals where withdrawal_request_id=$1",[f.wr.data.id])).rows[0]!.n;
+   const decisions=(await db.query<{n:number}>("select count(*)::int n from peragus_operator_refund_decisions where purchase_id=$1",[f.p.data.id])).rows[0]!.n;
+   expect(approvals+decisions).toBe(1);
+   expect(await statusOf(f.p.data.id)).toBe(approvals?"approved":"refund_pending");
+  }
+ },30_000); // four full fixtures
 });

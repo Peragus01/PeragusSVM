@@ -101,8 +101,11 @@ const withdrawalPath="/v1/me/withdrawal-requests";
 import {PostgresWithdrawalOperatorApprovalRepository} from "../src/repositories/postgres-withdrawal-operator-approvals.js";
 import {WithdrawalOperatorApprovalService,parseWithdrawalOperators} from "../src/withdrawals/operator-approvals.js";
 const approvalRepo=new PostgresWithdrawalOperatorApprovalRepository(pool,"test");
+// The progression moves a converted operation to awaiting_approval; fixtures replay those moves.
+async function awaitingApproval(purchaseId:string){for(const to of ["awaiting_pix","converted","awaiting_approval"] as const)await repo.transitionOperation(purchaseId,to,"system:test","test_fixture");}
 async function approvalFixture(){
- const f=await completedFixture(),wr=await withdrawals.record(f.s.customer.id,f.withdrawalRequestId,f.pixId),operatorId=randomUUID(),user={id:operatorId,email:"operator@example.test",assuranceLevel:"aal2" as const};
+ const f=await completedFixture(),wr=await withdrawals.record(f.s.customer.id,f.withdrawalRequestId,f.pixId),operatorId=randomUUID(),user={id:operatorId,email:"operator@example.test",assuranceLevel:"aal2" as const,mfaVerifiedAt:Math.floor(Date.now()/1000)};
+ await awaitingApproval(f.p.data.id);
  const approvals=new WithdrawalOperatorApprovalService(approvalRepo,new Set([operatorId]));
  return{...f,wr,user,approvals,approvalRequestId:randomUUID(),reason:"Reviewed the completed sandbox conversion and verified destination."};
 }
@@ -111,9 +114,10 @@ async function approvalApp(f:Awaited<ReturnType<typeof approvalFixture>>,identit
 }
 
 import {PostgresSandboxExecutionRepository} from "../src/repositories/postgres-sandbox-withdrawal-execution.js";
-import {SandboxWithdrawalExecutionService} from "../src/withdrawals/sandbox-execution.js";
+import {SandboxWithdrawalExecutionService,type ExecutionPolicy} from "../src/withdrawals/sandbox-execution.js";
 beforeEach(async()=>{await db.query("truncate peragus_sandbox_withdrawal_executions cascade");});
-async function executionFixture(){
+// Most tests exercise execution itself: no approval->execution delay unless a test asks for one.
+async function executionFixture(policy:Partial<ExecutionPolicy>={minDelaySeconds:0}){
  const f=await approvalFixture();await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
  let sends=0,identityReads=0,mode="normal",found:string|null=null;
  const sendId=`ozav_tr_${randomUUID().replaceAll('-','')}`;
@@ -122,9 +126,50 @@ async function executionFixture(){
  const provider={funding:{getTransfer:async()=>f.transfer},capabilities:async()=>{},identity:async()=>{identityReads++;return identity;},available:async()=>"10200.00",
   send:async(input:any)=>{sends++;expect(input.amount).toBe("200.000000");expect(input.address).toBe(f.s.wallet);expect(input.identity).toBe(identity);if(mode==="timeout")throw new Error("secret provider payload");return sendId;},
   transfer:async()=>observed,find:async()=>found} as any;
- const repo=new PostgresSandboxExecutionRepository(pool,"test"),execution=new SandboxWithdrawalExecutionService(repo,provider,f.approvals);
- return{...f,provider,repo,execution,observed,sendId,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;}};
+ const repo=new PostgresSandboxExecutionRepository(pool,"test"),execution=new SandboxWithdrawalExecutionService(repo,provider,f.approvals,policy);
+ return{...f,provider,repo,execution,policy,observed,sendId,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;}};
 }
+describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
+ const approvedAtMs=async(withdrawalId:string)=>Date.parse((await approvalRepo.read(withdrawalId))!.createdAt);
+ it("execution 899s after approval is refused; 900s passes",async()=>{
+  let clock=0;const f=await executionFixture({minDelaySeconds:900,now:()=>clock});
+  const approved=await approvedAtMs(f.wr.data.id),at=(ms:number)=>{clock=ms;return{...f.user,mfaVerifiedAt:Math.floor(ms/1000)};};
+  await expect(f.execution.execute(at(approved+899_000),f.wr.data.id,f.executionRequestId)).rejects.toThrow("EXECUTION_TOO_EARLY");
+  expect(f.sends()).toBe(0);expect(await f.repo.read(f.wr.data.id)).toBeNull();
+  const r=await f.execution.execute(at(approved+900_000),f.wr.data.id,f.executionRequestId);
+  expect(r.replayed).toBe(false);expect(f.sends()).toBe(1);
+ });
+ it("measures the delay from the persisted approval, not from the request",async()=>{
+  const f=await executionFixture({minDelaySeconds:900});
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("EXECUTION_TOO_EARLY");
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"},payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
+  expect(r.statusCode).toBe(409);expect(r.json().error.code).toBe("EXECUTION_TOO_EARLY");expect(f.sends()).toBe(0);
+ });
+ it("four-eyes enabled refuses same operator; disabled allows",async()=>{
+  const f=await executionFixture({minDelaySeconds:0,fourEyes:true});
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("EXECUTION_REQUIRES_SECOND_OPERATOR");
+  expect(f.sends()).toBe(0);
+  const second={id:randomUUID(),email:"second@example.test",assuranceLevel:"aal2" as const,mfaVerifiedAt:Math.floor(Date.now()/1000)};
+  const guard=new WithdrawalOperatorApprovalService(approvalRepo,new Set([f.user.id,second.id]));
+  const other=new SandboxWithdrawalExecutionService(f.repo,f.provider,guard,{minDelaySeconds:0,fourEyes:true});
+  expect((await other.execute(second,f.wr.data.id,randomUUID())).replayed).toBe(false);expect(f.sends()).toBe(1);
+ });
+ it("four-eyes disabled (default) allows the approver to execute",async()=>{
+  // One pilot slot per database: a separate test, after the per-test truncate.
+  const g=await executionFixture({minDelaySeconds:0,fourEyes:false});
+  expect((await g.execution.execute(g.user,g.wr.data.id,g.executionRequestId)).replayed).toBe(false);expect(g.sends()).toBe(1);
+ });
+ it("execution requires a fresh TOTP (403) and sends nothing with a stale one",async()=>{
+  const f=await executionFixture(),stale={...f.user,mfaVerifiedAt:Math.floor(Date.now()/1000)-301};
+  await expect(f.execution.execute(stale,f.wr.data.id,f.executionRequestId)).rejects.toThrow("OPERATOR_MFA_STALE");
+  const app=await buildApp({customerAccess:{customers,authenticate:async()=>stale},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+  const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"},payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
+  expect(r.statusCode).toBe(403);expect(r.json().error.code).toBe("OPERATOR_MFA_STALE");expect(f.sends()).toBe(0);
+  // Reads stay available at AAL2 without a fresh TOTP.
+  expect((await app.inject({method:"GET",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"}})).statusCode).toBe(404);
+ });
+});
 describe("approved sandbox withdrawal execution",()=>{
  it("recovers through GET-only provider capability while execution remains disabled",async()=>{
   const f=await executionFixture();f.setMode("timeout");
@@ -417,7 +462,7 @@ describe("approved sandbox withdrawal execution",()=>{
    if(change==="approver")f.approvals.isAllowed=()=>false;
    await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow();expect(f.sends()).toBe(0);
   }
- });
+ },30_000); // six full fixtures (each replays the operation up to awaiting_approval)
  it("requires allowlisted MFA operators and an existing approval",async()=>{
   const f=await executionFixture();await expect(f.execution.execute({...f.user,assuranceLevel:undefined},f.wr.data.id,f.executionRequestId)).rejects.toThrow("WITHDRAWAL_OPERATOR_MFA_REQUIRED");
   await expect(f.execution.execute({...f.user,id:randomUUID()},f.wr.data.id,f.executionRequestId)).rejects.toThrow("WITHDRAWAL_OPERATOR_REQUIRED");

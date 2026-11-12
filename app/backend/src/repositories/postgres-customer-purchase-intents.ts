@@ -129,33 +129,43 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
   * The database trigger re-validates the transition.
   */
  async transitionOperation(purchaseId:string,to:OperationStatus,actor:string,reason:string,expected?:TransitionExpectation):Promise<OperationTransition>{
-  if(!isOperationStatus(to))throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
-  if(typeof actor!=="string" || actor.length<1 || actor.length>200 || typeof reason!=="string" || reason.length<1 || reason.length>500)
-   throw new Error("OPERATION_TRANSITION_INPUT_INVALID");
-  try{return await this.inTransaction("begin isolation level read committed",async client=>{
-   const current=await client.query<{status:OperationStatus;customer_id:string;status_changed_at:Date|string}>(
-    `select status,customer_id,status_changed_at from peragus_customer_purchase_intents where id=$1 and environment='${this.e.mode}' for update`,[purchaseId]);
-   const row=current.rows[0];
-   if(!row)throw new PurchaseIntentError("PURCHASE_INTENT_NOT_FOUND");
-   // Stale decisions fail under the lock instead of acting on a status that moved meanwhile.
-   if(expected?.from!==undefined && !([] as OperationStatus[]).concat(expected.from).includes(row.status))
-    throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
-   if(expected?.lastReason!==undefined){
-    const last=await client.query<{reason:string}>("select reason from peragus_operation_status_events where purchase_id=$1 order by id desc limit 1",[purchaseId]);
-    if(last.rows[0]?.reason!==expected.lastReason)throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
-   }
-   if(row.status===to)return{from:to,to,changed:false,changedAt:new Date(row.status_changed_at).toISOString()};
-   if(!canTransition(row.status,to))throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
-   const updated=await client.query<{status_changed_at:Date|string}>(
-    `update peragus_customer_purchase_intents set status=$2 where id=$1 and environment='${this.e.mode}' returning status_changed_at`,[purchaseId,to]);
-   await client.query(`insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
-    values($1,$2,$3,$4,$5,$6,'${this.e.mode}')`,[purchaseId,row.customer_id,row.status,to,actor,reason]);
-   return{from:row.status,to,changed:true,changedAt:new Date(updated.rows[0]!.status_changed_at).toISOString()};
-  });}catch(error){
+  try{return await this.inTransaction("begin isolation level read committed",
+   client=>transitionOperationInTransaction(client,this.e.mode,purchaseId,to,actor,reason,expected));}
+  catch(error){
    if(error instanceof Error && !(error instanceof PurchaseIntentError) && error.message.includes("OPERATION_INVALID_TRANSITION"))
     throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
    throw error;
   }
  }
+}
+/**
+ * The body of transitionOperation for a caller that already holds an open transaction
+ * on `client` (it locks the purchase row `for update`, re-checks `expected`, updates the
+ * status and appends one status event). The caller commits or rolls back.
+ */
+export async function transitionOperationInTransaction(client:Pick<PoolClient,"query">,mode:MoneyMode,purchaseId:string,to:OperationStatus,
+ actor:string,reason:string,expected?:TransitionExpectation):Promise<OperationTransition>{
+ const e=rowEnvironment(mode);
+ if(!isOperationStatus(to))throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
+ if(typeof actor!=="string" || actor.length<1 || actor.length>200 || typeof reason!=="string" || reason.length<1 || reason.length>500)
+  throw new Error("OPERATION_TRANSITION_INPUT_INVALID");
+ const current=await client.query<{status:OperationStatus;customer_id:string;status_changed_at:Date|string}>(
+  `select status,customer_id,status_changed_at from peragus_customer_purchase_intents where id=$1 and environment='${e.mode}' for update`,[purchaseId]);
+ const row=current.rows[0];
+ if(!row)throw new PurchaseIntentError("PURCHASE_INTENT_NOT_FOUND");
+ // Stale decisions fail under the lock instead of acting on a status that moved meanwhile.
+ if(expected?.from!==undefined && !([] as OperationStatus[]).concat(expected.from).includes(row.status))
+  throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
+ if(expected?.lastReason!==undefined){
+  const last=await client.query<{reason:string}>("select reason from peragus_operation_status_events where purchase_id=$1 order by id desc limit 1",[purchaseId]);
+  if(last.rows[0]?.reason!==expected.lastReason)throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
+ }
+ if(row.status===to)return{from:to,to,changed:false,changedAt:new Date(row.status_changed_at).toISOString()};
+ if(!canTransition(row.status,to))throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
+ const updated=await client.query<{status_changed_at:Date|string}>(
+  `update peragus_customer_purchase_intents set status=$2 where id=$1 and environment='${e.mode}' returning status_changed_at`,[purchaseId,to]);
+ await client.query(`insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
+  values($1,$2,$3,$4,$5,$6,'${e.mode}')`,[purchaseId,row.customer_id,row.status,to,actor,reason]);
+ return{from:row.status,to,changed:true,changedAt:new Date(updated.rows[0]!.status_changed_at).toISOString()};
 }
 class Replay extends Error{constructor(readonly record:PurchaseIntent){super("PURCHASE_REPLAY");}}

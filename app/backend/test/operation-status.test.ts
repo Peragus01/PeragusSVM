@@ -90,6 +90,25 @@ describe("purchase limits",()=>{
  });
 });
 
+describe("operator action policy configuration",()=>{
+ const keys=["OPERATOR_MFA_MAX_AGE_SECONDS","OPERATOR_EXECUTION_MIN_DELAY_SECONDS","OPERATOR_FOUR_EYES_ENABLED"];
+ it("defaults to fresh MFA within 300 s, a 900 s execution delay and four eyes off; refuses MFA older than 300 s",async()=>{
+  try{
+   vi.stubEnv("PERAGUS_DEPLOYMENT_ENV","staging");
+   for(const k of keys)vi.stubEnv(k,undefined);
+   vi.resetModules();
+   const env=(await import("../src/config/env.js")).getEnv();
+   expect({mfa:env.OPERATOR_MFA_MAX_AGE_SECONDS,delay:env.OPERATOR_EXECUTION_MIN_DELAY_SECONDS,fourEyes:env.OPERATOR_FOUR_EYES_ENABLED}).toEqual({mfa:300,delay:900,fourEyes:false});
+   for(const [key,value] of [["OPERATOR_MFA_MAX_AGE_SECONDS","301"],["OPERATOR_MFA_MAX_AGE_SECONDS","0"],["OPERATOR_EXECUTION_MIN_DELAY_SECONDS","-1"],["OPERATOR_FOUR_EYES_ENABLED","yes"]] as const){
+    for(const k of keys)vi.stubEnv(k,undefined);
+    vi.stubEnv(key,value);vi.resetModules();
+    const fresh=(await import("../src/config/env.js")).getEnv;
+    expect(()=>fresh()).toThrow(expect.objectContaining({code:"ENVIRONMENT_CONFIGURATION_INVALID",fields:[key]}));
+   }
+  }finally{vi.unstubAllEnvs();vi.resetModules();}
+ });
+});
+
 describe("operation status in SQL (migration 045)",()=>{
  it("peragus_operation_can_transition mirrors canTransition for every pair",async()=>{
   const db=await migrated();

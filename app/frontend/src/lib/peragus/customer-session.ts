@@ -9,4 +9,5 @@ export {
   signUpCustomer,
   requestPasswordRecovery,
   completePasswordRecovery,
+  fetchOperatorStatus,
 } from "./customer-session-auth";

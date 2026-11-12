@@ -60,6 +60,20 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    // Money-moving operator actions need a TOTP verified at most this long ago (<= 300 s).
+    OPERATOR_MFA_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(300).default(300),
+    // Minimum seconds between a withdrawal approval and its execution.
+    OPERATOR_EXECUTION_MIN_DELAY_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(86_400)
+      .default(900),
+    // true: the executor must be a different operator from the approver.
+    OPERATOR_FOUR_EYES_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
     WITHDRAWAL_OPERATOR_USER_IDS: z
       .string()
       .default("")

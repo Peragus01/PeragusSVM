@@ -23,7 +23,7 @@ afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();})
 const reason="Cliente solicita analise manual da devolucao.";
 const reviewReason="Operador conferiu o caso e a localizacao dos fundos.";
 async function fixture(){
- const owner=randomUUID(),operator={id:randomUUID(),assuranceLevel:"aal2" as const};
+ const owner=randomUUID(),operator={id:randomUUID(),assuranceLevel:"aal2" as const,mfaVerifiedAt:Math.floor(Date.now()/1000)};
  const customer=(await customers.createOrGet({ownerUserId:owner,type:"pf",displayName:"Synthetic customer"})).customer;
  const provider="ozav_cus_"+randomUUID().replaceAll("-",""),terms=randomUUID(),quote=randomUUID(),purchase=randomUUID(),pix=randomUUID(),wallet=Keypair.generate().publicKey.toBase58();
  await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance,environment)
@@ -86,6 +86,16 @@ describe("manual refund case tracking",()=>{
   for(const secret of [f.operator.id,reviewReason,"SYNTHETIC_MANUAL_REFERENCE",f.provider,"PRIVATE_PROVIDER_DETAILS"])expect(safe).not.toContain(secret);
   await expect(f.service.complete(f.operator,request.data.id,completionId,"900.00","SYNTHETIC_MANUAL_REFERENCE")).rejects.toThrow("REFUND_IDEMPOTENCY_CONFLICT");
   await expect(f.service.complete(f.operator,request.data.id,randomUUID(),"950.00","SYNTHETIC_MANUAL_REFERENCE")).rejects.toThrow("REFUND_ALREADY_RECORDED");
+ });
+ it("refund completion requires a fresh TOTP and records nothing with a stale one",async()=>{
+  const f=await fixture(),request=await f.service.request(f.customer.id,f.purchase,f.requestId,reason);
+  await f.service.decide(f.operator,request.data.id,randomUUID(),"approved",reviewReason);
+  const stale={...f.operator,mfaVerifiedAt:Math.floor(Date.now()/1000)-301},none={id:f.operator.id,assuranceLevel:"aal2" as const};
+  for(const identity of [stale,none])await expect(f.service.complete(identity,request.data.id,randomUUID(),"1000.00","SYNTHETIC_REFERENCE")).rejects.toThrow("OPERATOR_MFA_STALE");
+  const app=await f.appFor(stale);
+  const r=await app.inject({method:"POST",url:`/v1/admin/refund-requests/${request.data.id}/completion`,headers,payload:{request_id:randomUUID(),amount_brl:"1000.00",reference:"SYNTHETIC_REFERENCE",confirmation:"MANUAL_REFUND_EXECUTED_EXTERNALLY"}});
+  expect(r.statusCode).toBe(403);expect(r.json().error.code).toBe("OPERATOR_MFA_STALE");
+  expect((await db.query("select count(*)::int n from peragus_manual_refund_completions where refund_request_id=$1",[request.data.id])).rows[0]).toEqual({n:0});
  });
  it("refuses completion without approval and preserves a rejection",async()=>{
   const f=await fixture(),request=await f.service.request(f.customer.id,f.purchase,f.requestId,reason),key=randomUUID();

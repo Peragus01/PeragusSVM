@@ -99,6 +99,8 @@ export interface BuildAppOptions {
   customerWithdrawalResultService?: CustomerWithdrawalResultService;
   sandboxWithdrawalExecutionService?: SandboxWithdrawalExecutionService;
   withdrawalOperatorApprovalService?: WithdrawalOperatorApprovalService;
+  /** WITHDRAWAL_OPERATOR_USER_IDS, for GET /v1/admin/operator-status only. */
+  operatorUserIds?: ReadonlySet<string>;
   customerWithdrawalRequestService?: CustomerWithdrawalRequestService;
   customerSandboxPixService?: CustomerPixService;
   customerSandboxPixSimulationEnabled?: boolean;
@@ -162,6 +164,25 @@ export async function buildApp(
       Boolean(options.pilotInviteService),
       options.apiRateLimiter,
     );
+
+  if (options.customerAccess) {
+    const access = options.customerAccess;
+    const operators = options.operatorUserIds ?? new Set<string>();
+    // Any authenticated user (AAL1 is enough: it runs before MFA enrollment) learns only
+    // whether it is an operator, so the frontend offers MFA enrollment to operators only.
+    app.get("/v1/admin/operator-status", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      const user = request.authenticatedUser;
+      if (!user) return reply.code(401).send({ error: { code: "AUTH_REQUIRED" } });
+      if (Object.keys(request.query as object).length)
+        return reply.code(400).send({ error: { code: "VALIDATION_ERROR" } });
+      // A customer account is never an operator (account separation).
+      const operator =
+        operators.has(user.id.toLowerCase()) &&
+        !(await access.customers.findByOwner(user.id));
+      return { data: { operator, mfa_enrolled_required: true as const } };
+    });
+  }
 
   app.get("/v1/me/purchase-capabilities", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
