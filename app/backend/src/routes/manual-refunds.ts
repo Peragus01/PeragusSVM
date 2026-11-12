@@ -12,7 +12,9 @@ export async function registerManualRefundRoutes(app:FastifyInstance,service?:Ma
   for(const [action,method,url] of [
    ["customer_read","GET",customerPath],["request","POST",customerPath],
    ["list","GET",adminPath],["operator_read","GET",adminPath+"/:id"],
-   ["decision","POST",adminPath+"/:id/decision"],["completion","POST",adminPath+"/:id/completion"]
+   ["decision","POST",adminPath+"/:id/decision"],["completion","POST",adminPath+"/:id/completion"],
+   // Operator refund decision on a purchase operation (:id is the purchase id).
+   ["operation_decision","POST","/v1/admin/operations/:id/refund-decision"]
   ] as const)scoped.route({method,url,bodyLimit:4096,handler:async(request,reply)=>{
    reply.header("Cache-Control","no-store");const user=request.authenticatedUser;
    if(!user)return reply.code(401).send({error:{code:"AUTH_REQUIRED"}});
@@ -43,6 +45,10 @@ export async function registerManualRefundRoutes(app:FastifyInstance,service?:Ma
       confirmation:z.literal("MANUAL_REVIEW_COMPLETED")}).strict().safeParse(body);
      if(!parsed.success)return reply.code(400).send({error:{code:"VALIDATION_ERROR"}});
      result=await service.decide(user,params.data.id,parsed.data.request_id,parsed.data.decision,parsed.data.reason);
+    }else if(action==="operation_decision"){
+     const parsed=z.object({request_id:z.string().uuid(),reason:refundReason}).strict().safeParse(body);
+     if(!parsed.success)return reply.code(400).send({error:{code:"VALIDATION_ERROR"}});
+     result=await service.operationDecision(user,params.data.id,parsed.data.request_id,parsed.data.reason);
     }else{
      const parsed=z.object({request_id:z.string().uuid(),amount_brl:refundAmount,reference:refundReference,
       confirmation:z.literal("MANUAL_REFUND_EXECUTED_EXTERNALLY")}).strict().safeParse(body);
@@ -53,7 +59,8 @@ export async function registerManualRefundRoutes(app:FastifyInstance,service?:Ma
    }catch(error){
     if(error instanceof OperatorApprovalError)return reply.code(403).send({error:{code:error.code}});
     if(error instanceof OperationHistoryInputError)return reply.code(400).send({error:{code:"VALIDATION_ERROR"}});
-    if(error instanceof ManualRefundError)return reply.code(error.code.endsWith("NOT_FOUND")?404:error.code.endsWith("DISABLED")?503:409).send({error:{code:error.code}});
+    if(error instanceof ManualRefundError)return reply.code(error.code.endsWith("NOT_FOUND")?404:error.code.endsWith("DISABLED") || error.code.endsWith("UNAVAILABLE")?503
+     :error.code==="OPERATOR_ACCOUNT_SEPARATION_REQUIRED"?403:409).send({error:{code:error.code}});
     request.log.warn({event:"manual_refund_unavailable"});return reply.code(503).send({error:{code:"MANUAL_REFUNDS_UNAVAILABLE"}});
    }
   }});

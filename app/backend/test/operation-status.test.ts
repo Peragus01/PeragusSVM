@@ -45,7 +45,9 @@ describe("canTransition",()=>{
  it("refuses going back, leaving a terminal state and entering quoted",()=>{
   expect(canTransition("sending","awaiting_pix")).toBe(false);
   for(const to of OPERATION_STATUSES){
-   for(const terminal of ["delivered_verified","expired","failed","refunded"] as const)expect(canTransition(terminal,to)).toBe(false);
+   // expired/failed reopen only as refund_pending (operator decision, paid Pix; see 048).
+   for(const terminal of ["delivered_verified","expired","failed","refunded"] as const)
+    expect(canTransition(terminal,to)).toBe((terminal==="expired" || terminal==="failed") && to==="refund_pending");
    expect(canTransition(to,"quoted")).toBe(false);
    expect(canTransition(to,to)).toBe(false);
   }
@@ -56,6 +58,11 @@ describe("canTransition",()=>{
   expect(canTransition("accepted","needs_review")).toBe(true);
   expect(canTransition("accepted","refund_pending")).toBe(false);
   expect(canTransition("needs_review","awaiting_pix")).toBe(false);
+ });
+ it("lets an operator refund decision reopen closed or in-flight paid operations as refund_pending",()=>{
+  for(const from of ["needs_review","pix_confirmed","converted","awaiting_approval","expired","failed"] as const)
+   expect(canTransition(from,"refund_pending"),from).toBe(true);
+  for(const from of ["delivered_verified","refunded","approved","sending","sent"] as const)expect(canTransition(from,"refund_pending"),from).toBe(false);
  });
  it("treats everything but delivered_verified, expired, failed and refunded as open",()=>{
   expect([...OPEN_STATUSES].sort()).toEqual(OPERATION_STATUSES.filter(s=>!["delivered_verified","expired","failed","refunded"].includes(s)).sort());

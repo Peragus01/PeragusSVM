@@ -8,6 +8,12 @@ export interface PurchaseIntent {
   status:OperationStatus;statusChangedAt:string;
 }
 export interface OperationTransition {from:OperationStatus;to:OperationStatus;changed:boolean;changedAt:string}
+/**
+ * Optimistic guard checked under the purchase row lock: the status the caller decided
+ * from, and optionally the reason of the last status event. A mismatch (a concurrent
+ * move happened) fails with OPERATION_INVALID_TRANSITION.
+ */
+export interface TransitionExpectation {from?:OperationStatus|readonly OperationStatus[];lastReason?:string}
 export class PurchaseIntentError extends Error {
   constructor(public readonly code:"PURCHASE_INTENT_NOT_FOUND"|"PURCHASE_QUOTE_NOT_FOUND"|"PURCHASE_IDEMPOTENCY_CONFLICT"|"PURCHASE_QUOTE_ALREADY_RECORDED"|"PURCHASE_PREREQUISITES_NOT_RECORDED"
     |"PURCHASE_CUSTOMER_HAS_OPEN_OPERATION"|"PURCHASE_GLOBAL_CAPACITY_REACHED"|"QUOTE_AMOUNT_OUT_OF_RANGE"|"OPERATION_INVALID_TRANSITION"){super(code);}
@@ -15,7 +21,7 @@ export class PurchaseIntentError extends Error {
 export interface PurchaseIntentRepository {
   read(customerId:string,id:string):Promise<PurchaseIntent|null>;
   record(customerId:string,requestId:string,quoteId:string):Promise<{record:PurchaseIntent;replayed:boolean}>;
-  transitionOperation(purchaseId:string,to:OperationStatus,actor:string,reason:string):Promise<OperationTransition>;
+  transitionOperation(purchaseId:string,to:OperationStatus,actor:string,reason:string,expected?:TransitionExpectation):Promise<OperationTransition>;
 }
 const renderView=(r:PurchaseIntent,mode:MoneyMode)=>({id:r.id,request_id:r.requestId,quote_id:r.quoteId,state:"recorded",record_only:true,
   status:r.status,status_changed_at:r.statusChangedAt,
@@ -30,5 +36,5 @@ export class CustomerPurchaseIntentService {
   async read(customerId:string,id:string){const record=await this.repository.read(customerId,id);if(!record)throw new PurchaseIntentError("PURCHASE_INTENT_NOT_FOUND");return this.view(record);}
   async record(customerId:string,requestId:string,quoteId:string){const result=await this.repository.record(customerId,requestId,quoteId);return{data:this.view(result.record),replayed:result.replayed};}
   /** Moves the operation to `to` (validated by canTransition in the database) and appends a status event. */
-  transitionOperation(purchaseId:string,to:OperationStatus,actor:string,reason:string){return this.repository.transitionOperation(purchaseId,to,actor,reason);}
+  transitionOperation(purchaseId:string,to:OperationStatus,actor:string,reason:string,expected?:TransitionExpectation){return this.repository.transitionOperation(purchaseId,to,actor,reason,expected);}
 }

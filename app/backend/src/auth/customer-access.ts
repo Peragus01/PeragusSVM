@@ -155,6 +155,7 @@ export function registerCustomerAccess(
         "/v1/admin/refund-requests/:id",
         "/v1/admin/refund-requests/:id/decision",
         "/v1/admin/refund-requests/:id/completion",
+        "/v1/admin/operations/:id/refund-decision",
         "/v1/admin/withdrawal-requests/:id/audit",
         "/v1/admin/withdrawal-requests",
         "/v1/admin/withdrawal-requests/:id/approval",

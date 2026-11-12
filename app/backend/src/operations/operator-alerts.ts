@@ -79,6 +79,7 @@ export class OperatorAlertService {
     and (x.observation->>'status' in ('awaiting_payment','payment_confirmed','converting','payout_initiated','needs_review','completed')
      or x.observation->>'sourceLegStatus'='completed')
     and not exists(select 1 from peragus_operation_status_events m where m.purchase_id=p.id and m.actor='system:migration_045')
+    and not exists(select 1 from peragus_operator_refund_decisions o where o.purchase_id=p.id)
   ) select id,kind,priority,
    to_char(recorded_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as recorded_at,
    purchase_intent_id,pix_id,withdrawal_request_id,refund_request_id

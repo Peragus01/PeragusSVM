@@ -1,5 +1,5 @@
-import {createHash} from "node:crypto";
 import type {Pool} from "pg";
+import {SYSTEM_REFUND_REASON,systemRequestId} from "./system-request-id.js";
 import type {MoneyMode} from "../config/money-environment.js";
 import type {OzavClient} from "../providers/ozav-client.js";
 import {usdtMicroUnits} from "../quotes/customer-quotes.js";
@@ -34,16 +34,8 @@ export interface PurchaseProgressionDeps {
   ambiguousGraceMs?: number;
 }
 
-// RFC 4122 name-based (SHA-1, v5) UUID in a fixed Peragus namespace: request_id
-// columns are uuid, so `system-<purchaseId>` is stored as its deterministic UUID.
-const NAMESPACE = Buffer.from("8f0d5a4e2c7b4e1f9a63d1b07c5e2f48", "hex");
-export function systemRequestId(name: string): string {
-  const h = createHash("sha1").update(NAMESPACE).update(name, "utf8").digest().subarray(0, 16);
-  h[6] = (h[6]! & 0x0f) | 0x50; h[8] = (h[8]! & 0x3f) | 0x80;
-  const x = h.toString("hex");
-  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
-}
-const REFUND_REASON = "Automatic request: the Pix payment was received but the OZAV transfer did not complete.";
+export {systemRequestId};
+const REFUND_REASON = SYSTEM_REFUND_REASON;
 // OZAV terminal endings. Its needs_review is deliberately absent: it is not terminal.
 const CLOSED = new Set(["failed", "cancelled", "expired"]);
 /** The only needs_review reason progression may resume from (OZAV may still finish the transfer). */
@@ -91,8 +83,15 @@ export class PurchaseProgression {
     if (!ctx) throw new Error("PURCHASE_INTENT_NOT_FOUND");
     let status = ctx.status;
     let rank = RANK[status];
+    // Every move states the status it was decided from (checked under the row lock, so a
+    // stale concurrent decision fails with OPERATION_INVALID_TRANSITION); the first move out
+    // of a resumed review also re-checks, in the same locked transaction, that the review
+    // is still OZAV's.
+    let resumeGuard = false;
     const move = async (to: OperationStatus, reason: string) => {
-      await this.deps.operations.transitionOperation(purchaseId, to, actor, reason);
+      const expected = {from: status, ...(resumeGuard ? {lastReason: OZAV_REVIEW} : {})};
+      resumeGuard = false;
+      await this.deps.operations.transitionOperation(purchaseId, to, actor, reason, expected);
       status = to;
       rank = RANK[to] ?? rank;
     };
@@ -106,9 +105,12 @@ export class PurchaseProgression {
         "select from_status,reason from peragus_operation_status_events where purchase_id=$1 order by id desc limit 1", [purchaseId]);
       const event = last.rows[0];
       if (event?.reason !== OZAV_REVIEW || s === "needs_review") return status;
-      const prior = (event.from_status && RANK[event.from_status]) ?? 1;
+      // Never move backwards: resume relative to the stage the review was entered from.
+      // (prior - 0.5) lets the operation return to that same stage but not to an earlier one.
+      const prior = (event.from_status ? RANK[event.from_status] : undefined) ?? 1;
       paid = observed.sourceLegStatus === "completed" || prior >= 2;
-      rank = 1;
+      rank = prior - 0.5;
+      resumeGuard = true;
     } else {
       if (rank === undefined || TERMINAL_STATUSES.has(status)) return status;
       paid = observed.sourceLegStatus === "completed" || rank >= 2;
@@ -195,7 +197,7 @@ export class PurchaseProgression {
     } catch (error) {
       if (!(error instanceof ManualRefundError)) throw error;
       if (error.code !== "REFUND_ALREADY_REQUESTED") {
-        await this.deps.operations.transitionOperation(purchaseId, "needs_review", actor, `REFUND_REQUEST_NOT_RECORDED: ${error.code}`);
+        await this.deps.operations.transitionOperation(purchaseId, "needs_review", actor, `REFUND_REQUEST_NOT_RECORDED: ${error.code}`, {from: "refund_pending"});
         return "needs_review";
       }
     }

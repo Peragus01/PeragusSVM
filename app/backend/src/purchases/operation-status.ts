@@ -64,8 +64,11 @@ const TRANSITIONS: Readonly<Record<OperationStatus, readonly OperationStatus[]>>
   needs_review: ["pix_confirmed", "converted", "awaiting_approval", "refund_pending", "failed"],
   refund_pending: ["refunded", "needs_review"],
   delivered_verified: [],
-  expired: [],
-  failed: [],
+  // Only by an operator refund decision, and only when the Pix source leg is confirmed
+  // paid: the service checks it under the row lock and the SQL status guard (048)
+  // refuses the move otherwise. Nothing else leaves expired/failed.
+  expired: ["refund_pending"],
+  failed: ["refund_pending"],
   refunded: [],
 };
 

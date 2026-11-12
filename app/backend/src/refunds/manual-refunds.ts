@@ -6,6 +6,7 @@ import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {authorizeWithdrawalOperator} from "../withdrawals/operator-approvals.js";
 import {OperationHistoryInputError,parseHistoryQuery} from "../purchases/customer-operation-history.js";
+import {SYSTEM_REFUND_REASON,systemRequestId} from "../purchases/system-request-id.js";
 export class ManualRefundError extends Error {constructor(public readonly code:string){super(code);}}
 function fail(code:string):never{throw new ManualRefundError(code);}
 const iso=(date:Date|string|null)=>date?new Date(date).toISOString():null;
@@ -58,6 +59,77 @@ export class ManualRefundService {
  }
  async request(customerId:string,purchaseId:string,requestId:string,reason:string){
   this.writable();
+  return this.record(customerId,purchaseId,requestId,reason);
+ }
+ /**
+  * Operator refund decision on an operation (controller ruling 22): moves it to
+  * refund_pending from needs_review, pix_confirmed, converted or awaiting_approval, or
+  * from expired/failed, always requiring the Pix source leg recorded as completed (the
+  * refund request needs that payment evidence; for expired/failed the SQL status guard
+  * enforces it too). The lock, checks, decision record, status change and audit event
+  * are ONE statement. Idempotent per operator + request_id; creates (or reuses) the
+  * manual refund request, recorded even when MANUAL_REFUNDS_ENABLED is off.
+  */
+ async operationDecision(user:AuthenticatedUser,purchaseId:string,requestId:string,reason:string){
+  this.authorize(user);
+  if(!this.settleOperations)fail("REFUND_DECISION_UNAVAILABLE");
+  const parsed=refundReason.safeParse(reason);if(!parsed.success)fail("REFUND_DECISION_INVALID");reason=parsed.data;
+  type Result={inserted:number;prior_purchase:string|null;prior_reason:string|null;status:string|null;customer_id:string|null;paid:boolean|null};
+  let r:Result;
+  try{
+   r=(await this.pool.query<Result>(`with prior as (
+     select purchase_id,reason from peragus_operator_refund_decisions where operator_user_id=$2 and request_id=$3
+    ), p as (
+     select pi.id,pi.customer_id,pi.status from peragus_customer_purchase_intents pi
+     where pi.id=$1 and pi.environment='${this.e.mode}' for update
+    ), paid as (
+     select exists(select 1 from peragus_customer_sandbox_pix x join p on x.purchase_intent_id=p.id and x.customer_id=p.customer_id
+      where x.environment='${this.e.mode}' and x.observation->>'sourceLegStatus'='completed') as ok
+    ), d as (
+     insert into peragus_operator_refund_decisions(id,purchase_id,customer_id,operator_user_id,request_id,reason,from_status,environment)
+     select $4,p.id,p.customer_id,$2,$3,$5,p.status,'${this.e.mode}' from p,paid
+     where not exists(select 1 from prior) and paid.ok
+      and p.status in ('needs_review','pix_confirmed','converted','awaiting_approval','expired','failed')
+      and not exists(select 1 from peragus_customers where owner_user_id=$2)
+     returning purchase_id,customer_id,from_status
+    ), u as (
+     update peragus_customer_purchase_intents set status='refund_pending' where id in (select purchase_id from d) returning id,customer_id
+    ), ev as (
+     insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
+     select u.id,u.customer_id,d.from_status,'refund_pending',$6,left('OPERATOR_REFUND_DECISION: '||$5,500),'${this.e.mode}'
+     from u join d on d.purchase_id=u.id
+    ) select (select count(*) from d)::int as inserted,(select purchase_id from prior) as prior_purchase,(select reason from prior) as prior_reason,
+      (select status from p) as status,(select customer_id from p) as customer_id,(select ok from paid) as paid`,
+    [purchaseId,user.id,requestId,randomUUID(),reason,`operator:${user.id}`])).rows[0]!;
+  }catch(error){
+   const constraint=error && typeof error==="object" && "constraint" in error?String((error as {constraint:unknown}).constraint):"";
+   const message=error instanceof Error?error.message:"";
+   if(constraint==="peragus_purchase_one_open_per_customer" || message.includes("peragus_purchase_one_open_per_customer"))fail("REFUND_CUSTOMER_HAS_OPEN_OPERATION");
+   if(message.includes("OPERATION_INVALID_TRANSITION"))fail("REFUND_PAYMENT_NOT_CONFIRMED");
+   // A concurrent identical request inserted first: answer as a replay below.
+   if(!(constraint.includes("operator_user_id") || message.includes("operator_user_id_request_id")))throw error;
+   const again=await this.pool.query<{purchase_id:string;reason:string}>("select purchase_id,reason from peragus_operator_refund_decisions where operator_user_id=$1 and request_id=$2",[user.id,requestId]);
+   if(!again.rows[0])throw error;
+   r={inserted:0,prior_purchase:again.rows[0].purchase_id,prior_reason:again.rows[0].reason,status:"refund_pending",customer_id:null,paid:true};
+  }
+  let replayed=false;
+  if(r.prior_purchase){
+   if(r.prior_purchase!==purchaseId || r.prior_reason!==reason)fail("REFUND_IDEMPOTENCY_CONFLICT");
+   replayed=true;
+  }else if(r.inserted!==1){
+   if(!r.status)fail("REFUND_OPERATION_NOT_FOUND");
+   if(r.status==="refund_pending")fail("REFUND_ALREADY_PENDING");
+   if(!r.paid)fail("REFUND_PAYMENT_NOT_CONFIRMED");
+   fail(["needs_review","pix_confirmed","converted","awaiting_approval","expired","failed"].includes(r.status)?"OPERATOR_ACCOUNT_SEPARATION_REQUIRED":"REFUND_DECISION_NOT_ALLOWED");
+  }
+  const owner=await this.pool.query<{customer_id:string}>(`select customer_id from peragus_customer_purchase_intents where id=$1 and environment='${this.e.mode}'`,[purchaseId]);
+  const customerId=owner.rows[0]!.customer_id;
+  try{await this.record(customerId,purchaseId,systemRequestId(`system-refund-${purchaseId}`),SYSTEM_REFUND_REASON);}
+  catch(error){if(!(error instanceof ManualRefundError && error.code==="REFUND_ALREADY_REQUESTED"))throw error;}
+  const row=(await this.one("r.customer_id=$1 and r.purchase_intent_id=$2",[customerId,purchaseId]))!;
+  return {data:{purchase_intent_id:purchaseId,status:"refund_pending" as const,refund_request:view(row,this.e,true)},replayed};
+ }
+ private async record(customerId:string,purchaseId:string,requestId:string,reason:string){
   const prior=await this.one("r.customer_id=$1 and r.request_id=$2",[customerId,requestId]);
   if(prior){if(prior.purchase_intent_id!==purchaseId || prior.reason!==reason)fail("REFUND_IDEMPOTENCY_CONFLICT");return {data:view(prior,this.e),replayed:true};}
   const inserted=await this.pool.query(`insert into peragus_customer_refund_requests(id,customer_id,purchase_intent_id,pix_id,request_id,reason,amount_brl,environment)

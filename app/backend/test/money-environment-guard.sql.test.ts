@@ -18,7 +18,9 @@ const GUARDED=["peragus_customer_wallet_challenges","peragus_customer_wallets","
  "peragus_customer_screenings","peragus_pilot_invites","peragus_onboarding_email_outbox",
  "peragus_customer_document_uploads","peragus_invite_email_outbox",
  // purchase operation status log (045)
- "peragus_operation_status_events"];
+ "peragus_operation_status_events",
+ // operator refund decisions (048)
+ "peragus_operator_refund_decisions"];
 const NETWORK_COLUMNS:Record<string,string>={peragus_customer_wallets:"network",
  peragus_customer_purchase_intents:"wallet_proof_network",peragus_customer_withdrawal_requests:"proof_network"};
 vi.setConfig({testTimeout:60000});

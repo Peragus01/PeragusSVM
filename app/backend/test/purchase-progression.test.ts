@@ -7,6 +7,7 @@ import {PGlite} from "@electric-sql/pglite";
 import type {Pool} from "pg";
 import {beforeAll,afterAll,afterEach,describe,it,expect,vi} from "vitest";
 import {buildApp} from "../src/app.js";
+import {AuthenticationError} from "../src/auth/customer-access.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerPurchaseIntentRepository} from "../src/repositories/postgres-customer-purchase-intents.js";
 import {PostgresCustomerPixRepository} from "../src/repositories/postgres-customer-sandbox-pix.js";
@@ -255,6 +256,121 @@ describe("ambiguous live Pix create recovered by GET",()=>{
   expect(listed.data.find(a=>a.purchase_intent_id===f.p.id)).toMatchObject({severity:"high",pix_id:f.pixId});
   f.set({status:"expired",source:{type:"fiat_payment",currency:"BRL",rail:"pix"}});await f.refresh();
   expect((await alerts.list(operator,{kind:"pix_open_after_close",limit:"50"})).data.some(a=>a.purchase_intent_id===f.p.id)).toBe(false);
+ });
+});
+
+describe("stale concurrent moves and resume without going backwards",()=>{
+ it("transitionOperation refuses a move decided from a status that changed meanwhile",async()=>{
+  const f=await fixture();
+  await expect(purchases.transitionOperation(f.p.id,"pix_confirmed","system:test","stale",{from:"accepted"})).rejects.toMatchObject({code:"OPERATION_INVALID_TRANSITION"});
+  await expect(purchases.transitionOperation(f.p.id,"needs_review","system:test","stale",{from:"awaiting_pix",lastReason:"something else"})).rejects.toMatchObject({code:"OPERATION_INVALID_TRANSITION"});
+  expect(await statusOf(f.p.id)).toBe("awaiting_pix");
+ });
+ it("a stale progression never moves a needs_review (WITHDRAWAL_REQUEST_NOT_RECORDED) to converted",async()=>{
+  const f=await fixture();f.paid("payment_confirmed");await f.refresh();f.paid("needs_review");await f.refresh();
+  expect((await eventsOf(f.p.id)).at(-1)!.reason).toBe("OZAV_TRANSFER_NEEDS_REVIEW");
+  let raced=false;
+  const racing={transitionOperation:async(id:string,to:any,actor:string,reason:string,expected?:any)=>{
+   if(!raced){raced=true; // A concurrent worker resumes and ends in a non-resumable review first.
+    await purchases.transitionOperation(id,"converted","system:other","transfer_completed",{from:"needs_review",lastReason:"OZAV_TRANSFER_NEEDS_REVIEW"});
+    await purchases.transitionOperation(id,"needs_review","system:other","WITHDRAWAL_REQUEST_NOT_RECORDED: WITHDRAWAL_PREREQUISITES_NOT_RECORDED",{from:"converted"});}
+   return purchases.transitionOperation(id,to,actor,reason,expected);}};
+  const stale=new PurchaseProgression({pool,mode:"live",operations:racing,withdrawals:new PostgresCustomerWithdrawalRequestRepository(pool,"live"),refunds});
+  await expect(stale.applyTransferObservation(f.p.id,{status:"completed",amountUsdt:"200.000000",sourceLegStatus:"completed"})).rejects.toMatchObject({code:"OPERATION_INVALID_TRANSITION"});
+  expect(await statusOf(f.p.id)).toBe("needs_review");
+  expect((await eventsOf(f.p.id)).at(-1)!.reason).toMatch(/^WITHDRAWAL_REQUEST_NOT_RECORDED/);
+  expect(await count("peragus_customer_withdrawal_requests",f.p.id)).toBe(0);
+ });
+ it("resumes relative to the stage the OZAV review was entered from, never backwards",async()=>{
+  const f=await fixture();f.paid("payment_confirmed");await f.refresh();
+  await purchases.transitionOperation(f.p.id,"converted","system:test","synthetic converted stage");
+  expect(await f.progression.applyTransferObservation(f.p.id,{status:"needs_review",amountUsdt:"200.000000",sourceLegStatus:"completed"})).toBe("needs_review");
+  expect((await eventsOf(f.p.id)).at(-1)).toMatchObject({from_status:"converted",reason:"OZAV_TRANSFER_NEEDS_REVIEW"});
+  expect(await f.progression.applyTransferObservation(f.p.id,{status:"payment_confirmed",amountUsdt:"200.000000",sourceLegStatus:"completed"})).toBe("needs_review");
+  f.paid("completed",{destinationLegStatus:"completed"});await f.refresh();
+  expect(await statusOf(f.p.id)).toBe("awaiting_approval");
+  expect((await eventsOf(f.p.id)).slice(-2).map(e=>[e.from_status,e.to_status])).toEqual([["needs_review","converted"],["converted","awaiting_approval"]]);
+ });
+});
+
+describe("operator refund decision (POST /v1/admin/operations/:purchaseId/refund-decision)",()=>{
+ const reasonText="Operator decided to return the Pix payment.";
+ const appWith=async(owner:string)=>{
+  // Production wiring: the same service the server builds (settleOperations=true).
+  const service=new ManualRefundService(pool,operators,true,"live",true);
+  const app=await buildApp({customerAccess:{customers,authenticate:async(token:string)=>{
+   if(token==="operator")return operator;if(token==="customer")return{id:owner};if(token==="aal1")return{id:operator.id};throw new AuthenticationError("INVALID_TOKEN");}},manualRefundService:service});
+  apps.push(app);return app;
+ };
+ const decide=(app:Awaited<ReturnType<typeof buildApp>>,purchaseId:string,body:Record<string,unknown>,token="operator")=>
+  app.inject({method:"POST",url:`/v1/admin/operations/${purchaseId}/refund-decision`,headers:{authorization:`Bearer ${token}`},payload:body});
+ const paidAt=async(stage:"needs_review"|"pix_confirmed"|"converted"|"awaiting_approval"|"expired"|"failed")=>{
+  const f=await fixture();f.paid("payment_confirmed");await f.refresh();
+  if(stage==="needs_review"){f.paid("needs_review");await f.refresh();}
+  if(stage==="converted")await purchases.transitionOperation(f.p.id,"converted","system:test","synthetic stage");
+  if(stage==="awaiting_approval"){f.paid("completed",{destinationLegStatus:"completed"});await f.refresh();}
+  if(stage==="expired" || stage==="failed"){
+   // A closed operation whose Pix was nevertheless paid (e.g. paid after the lock deadline).
+   await db.exec("alter table peragus_customer_purchase_intents disable trigger peragus_purchase_status_guard");
+   try{await db.query("update peragus_customer_purchase_intents set status=$2 where id=$1",[f.p.id,stage]);}
+   finally{await db.exec("alter table peragus_customer_purchase_intents enable trigger peragus_purchase_status_guard");}
+  }
+  expect(await statusOf(f.p.id)).toBe(stage);return f;
+ };
+ it.each(["needs_review","pix_confirmed","converted","awaiting_approval","expired","failed"] as const)("moves a paid %s operation to refund_pending, audited and idempotent",async stage=>{
+  const f=await paidAt(stage),app=await appWith(f.s.owner),requestId=randomUUID();
+  const first=await decide(app,f.p.id,{request_id:requestId,reason:reasonText});
+  expect(first.statusCode,first.body).toBe(201);
+  expect(first.json().data).toMatchObject({purchase_intent_id:f.p.id,status:"refund_pending",refund_request:{state:"pending_review",requested_amount:{amount:"1000.00"}}});
+  expect(await statusOf(f.p.id)).toBe("refund_pending");
+  expect((await eventsOf(f.p.id)).at(-1)).toEqual({from_status:stage,to_status:"refund_pending",actor:`operator:${operator.id}`,reason:`OPERATOR_REFUND_DECISION: ${reasonText}`});
+  const again=await decide(app,f.p.id,{request_id:requestId,reason:reasonText});
+  expect(again.statusCode).toBe(200);expect(again.json().meta.idempotent_replay).toBe(true);
+  expect(await count("peragus_customer_refund_requests",f.p.id)).toBe(1);
+  expect((await db.query("select count(*)::int n from peragus_operator_refund_decisions where purchase_id=$1",[f.p.id])).rows[0]).toEqual({n:1});
+  expect((await decide(app,f.p.id,{request_id:requestId,reason:"A different reason for the same request."})).json().error.code).toBe("REFUND_IDEMPOTENCY_CONFLICT");
+ });
+ it("refuses unpaid expired or failed operations (service and SQL guard) and changes nothing",async()=>{
+  for(const status of ["expired","failed"] as const){
+   const f=await fixture();f.set({status,source:{type:"fiat_payment",currency:"BRL",rail:"pix"}});await f.refresh();
+   expect(await statusOf(f.p.id)).toBe(status);
+   const app=await appWith(f.s.owner),r=await decide(app,f.p.id,{request_id:randomUUID(),reason:reasonText});
+   expect(r.statusCode).toBe(409);expect(r.json().error.code).toBe("REFUND_PAYMENT_NOT_CONFIRMED");
+   expect(await statusOf(f.p.id)).toBe(status);expect(await count("peragus_customer_refund_requests",f.p.id)).toBe(0);
+   await expect(purchases.transitionOperation(f.p.id,"refund_pending","system:test","bypass the service")).rejects.toMatchObject({code:"OPERATION_INVALID_TRANSITION"});
+  }
+ });
+ it("requires an allowlisted AAL2 operator and a valid body",async()=>{
+  const f=await paidAt("pix_confirmed"),app=await appWith(f.s.owner);
+  expect((await decide(app,f.p.id,{request_id:randomUUID(),reason:reasonText},"aal1")).statusCode).toBe(403);
+  expect((await decide(app,f.p.id,{request_id:randomUUID(),reason:reasonText},"customer")).statusCode).toBe(403);
+  expect((await decide(app,f.p.id,{request_id:randomUUID(),reason:"x".repeat(501)})).statusCode).toBe(400);
+  expect((await decide(app,f.p.id,{request_id:randomUUID()})).statusCode).toBe(400);
+  expect(await statusOf(f.p.id)).toBe("pix_confirmed");
+ });
+ it("end to end: customer request -> operator decision -> completion -> refunded, clearing the alert",async()=>{
+  const deadline=new Date(Date.now()+60000).toISOString(),f=await fixture({facility:{...LOCKED,deadlineAt:deadline}});
+  vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(Date.parse(deadline)+1);await f.refresh();vi.useRealTimers();
+  expect(await statusOf(f.p.id)).toBe("expired");
+  f.paid("completed",{destinationLegStatus:"completed"});await f.refresh();
+  expect((await alerts.list(operator,{kind:"pix_open_after_close",limit:"50"})).data.some(a=>a.purchase_intent_id===f.p.id)).toBe(true);
+  const app=await appWith(f.s.owner),customerHeaders={authorization:"Bearer customer"},operatorHeaders={authorization:"Bearer operator"};
+  const asked=await app.inject({method:"POST",url:`/v1/me/operations/${f.p.id}/refund-request`,headers:customerHeaders,payload:{request_id:randomUUID(),reason:"I want my Pix payment back, please."}});
+  expect(asked.statusCode).toBe(201);
+  const decided=await decide(app,f.p.id,{request_id:randomUUID(),reason:reasonText});
+  expect(decided.statusCode).toBe(201);expect(decided.json().data.refund_request.id).toBe(asked.json().data.id);
+  expect(await count("peragus_customer_refund_requests",f.p.id)).toBe(1);
+  expect((await alerts.list(operator,{kind:"pix_open_after_close",limit:"50"})).data.some(a=>a.purchase_intent_id===f.p.id)).toBe(false);
+  const refundId=asked.json().data.id;
+  expect((await app.inject({method:"POST",url:`/v1/admin/refund-requests/${refundId}/decision`,headers:operatorHeaders,
+   payload:{request_id:randomUUID(),decision:"approved",reason:"Approved after manual review.",confirmation:"MANUAL_REVIEW_COMPLETED"}})).statusCode).toBe(201);
+  const done=await app.inject({method:"POST",url:`/v1/admin/refund-requests/${refundId}/completion`,headers:operatorHeaders,
+   payload:{request_id:randomUUID(),amount_brl:"1000.00",reference:"pix-return-e2e-0001",confirmation:"MANUAL_REFUND_EXECUTED_EXTERNALLY"}});
+  expect(done.statusCode).toBe(201);
+  expect(await statusOf(f.p.id)).toBe("refunded");
+  expect((await eventsOf(f.p.id)).slice(-2).map(e=>[e.from_status,e.to_status,e.actor])).toEqual([
+   ["expired","refund_pending",`operator:${operator.id}`],["refund_pending","refunded",`operator:${operator.id}`]]);
+  expect((await alerts.list(operator,{kind:"all",limit:"50"})).data.some(a=>a.purchase_intent_id===f.p.id)).toBe(false);
  });
 });
 

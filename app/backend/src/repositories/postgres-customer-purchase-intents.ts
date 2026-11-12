@@ -2,7 +2,7 @@ import {randomUUID} from "node:crypto";
 import type {Pool,PoolClient} from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
-import {PurchaseIntentError,type OperationTransition,type PurchaseIntent,type PurchaseIntentRepository} from "../purchases/customer-purchase-intents.js";
+import {PurchaseIntentError,type OperationTransition,type TransitionExpectation,type PurchaseIntent,type PurchaseIntentRepository} from "../purchases/customer-purchase-intents.js";
 import {canTransition,isOperationStatus,TERMINAL_STATUSES,type OperationStatus,type PurchaseLimits} from "../purchases/operation-status.js";
 interface Row {id:string;customer_id:string;request_id:string;quote_id:string;source_amount_brl:string;
  estimated_target_amount_usdt:string;quote_snapshot:PurchaseIntent["quoteSnapshot"];wallet_address:string;wallet_verified_at:Date|string;created_at:Date|string;
@@ -128,7 +128,7 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
   * atomically. Re-applying the current status is a no-op (changed:false, no event).
   * The database trigger re-validates the transition.
   */
- async transitionOperation(purchaseId:string,to:OperationStatus,actor:string,reason:string):Promise<OperationTransition>{
+ async transitionOperation(purchaseId:string,to:OperationStatus,actor:string,reason:string,expected?:TransitionExpectation):Promise<OperationTransition>{
   if(!isOperationStatus(to))throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
   if(typeof actor!=="string" || actor.length<1 || actor.length>200 || typeof reason!=="string" || reason.length<1 || reason.length>500)
    throw new Error("OPERATION_TRANSITION_INPUT_INVALID");
@@ -137,6 +137,13 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
     `select status,customer_id,status_changed_at from peragus_customer_purchase_intents where id=$1 and environment='${this.e.mode}' for update`,[purchaseId]);
    const row=current.rows[0];
    if(!row)throw new PurchaseIntentError("PURCHASE_INTENT_NOT_FOUND");
+   // Stale decisions fail under the lock instead of acting on a status that moved meanwhile.
+   if(expected?.from!==undefined && !([] as OperationStatus[]).concat(expected.from).includes(row.status))
+    throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
+   if(expected?.lastReason!==undefined){
+    const last=await client.query<{reason:string}>("select reason from peragus_operation_status_events where purchase_id=$1 order by id desc limit 1",[purchaseId]);
+    if(last.rows[0]?.reason!==expected.lastReason)throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
+   }
    if(row.status===to)return{from:to,to,changed:false,changedAt:new Date(row.status_changed_at).toISOString()};
    if(!canTransition(row.status,to))throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
    const updated=await client.query<{status_changed_at:Date|string}>(
