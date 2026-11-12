@@ -21,6 +21,8 @@ export interface CustomerPixRecord extends PixContext {
   operationStatus?: OperationStatus;
   /** Live: FX rate lock deadline (facility.deadline_at), ISO; instructions are not payable after it. */
   lockDeadlineAt?: string | null;
+  /** Customer cancel request (policy 7.1): instructions are never shown afterwards. */
+  cancelRequestedAt?: string | null;
 }
 /** Moves the purchase operation; validated again by the database. */
 export type PixOperations = Pick<PurchaseIntentRepository, "transitionOperation">;
@@ -71,14 +73,15 @@ export function pixView(row: CustomerPixRecord, mode: MoneyMode = "test") {
   const deadline = row.lockDeadlineAt ? Date.parse(row.lockDeadlineAt) : null;
   const locked = mode === "test" || (status === "awaiting_pix" && deadline !== null && !Number.isNaN(deadline));
   const until = instructions ? Math.min(Date.parse(instructions.expiresAt), deadline ?? Infinity) : NaN;
-  const payable = !closed && locked && !row.simulationAttempted && t?.status === "awaiting_payment" && instructions && until > Date.now();
+  const cancelRequestedAt = row.cancelRequestedAt ?? null;
+  const payable = !closed && locked && !cancelRequestedAt && !row.simulationAttempted && t?.status === "awaiting_payment" && instructions && until > Date.now();
   return {id: row.id, purchase_intent_id: row.purchaseId, request_id: row.requestId,
     state: t?.status ?? (closed ? status : row.attempted ? "uncertain" : "reserved"), status, environment: mode,
     source: {currency: "BRL", amount: row.amountBrl},
     funding_destination: {type: "provider_managed_wallet"},
     subsequent_delivery: {wallet_address: row.walletAddress, proof_network: moneyNetworkFor(mode), started: false},
     payment_instructions: payable ? {br_code: instructions.brCode, qr_code_image: instructions.qrCodeImage, expires_at: new Date(until).toISOString()} : null,
-    simulation_attempted: row.simulationAttempted,
+    simulation_attempted: row.simulationAttempted, cancel_requested_at: cancelRequestedAt,
     source_leg_status: t?.sourceLegStatus ?? null, destination_leg_status: t?.destinationLegStatus ?? null,
     payment_confirmed: t?.sourceLegStatus === "completed" && ["payment_confirmed", "converting", "payout_initiated", "completed"].includes(t.status),
     custody_conversion_completed: t?.status === "completed" && t.sourceLegStatus === "completed" && t.destinationLegStatus === "completed",
@@ -191,6 +194,8 @@ export class CustomerPixService {
     let row = await this.repo.read(customerId, id);
     if (!row) throw new CustomerPixError("PIX_NOT_FOUND");
     if (!row.attempted || !row.transferId) throw new CustomerPixError("PIX_SIMULATION_NOT_READY");
+    // A cancelled order hides its instructions: there is nothing to pay in the sandbox either.
+    if (row.cancelRequestedAt) throw new CustomerPixError("PIX_SIMULATION_NOT_READY");
     // Refresh and verify the actual bound transfer before making any mutation.
     // A repetition always reads first; it never resets the persisted one-shot claim.
     const current = await this.provider.getTransfer(row.transferId);

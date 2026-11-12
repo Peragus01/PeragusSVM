@@ -157,7 +157,8 @@ export async function transitionOperationInTransaction(client:Pick<PoolClient,"q
  if(expected?.from!==undefined && !([] as OperationStatus[]).concat(expected.from).includes(row.status))
   throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
  if(expected?.lastReason!==undefined){
-  const last=await client.query<{reason:string}>("select reason from peragus_operation_status_events where purchase_id=$1 order by id desc limit 1",[purchaseId]);
+  // Note events (from_status = to_status, e.g. a customer cancel request) are not transitions.
+  const last=await client.query<{reason:string}>("select reason from peragus_operation_status_events where purchase_id=$1 and from_status is distinct from to_status order by id desc limit 1",[purchaseId]);
   if(last.rows[0]?.reason!==expected.lastReason)throw new PurchaseIntentError("OPERATION_INVALID_TRANSITION");
  }
  if(row.status===to)return{from:to,to,changed:false,changedAt:new Date(row.status_changed_at).toISOString()};

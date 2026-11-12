@@ -39,16 +39,17 @@ const eligible = (env:RowEnvironment,statuses:readonly OperationStatus[]) => `se
  and p.environment='${env.mode}' and p.status in (${statuses.map(v=>`'${v}'`).join(",")})
  ${env.mode==="live"?"and p.facility_terms_version is not null and p.locked_usdt_amount is not null":""}`;
 // Each Pix row with the status and lock fields of the operation it funds.
-const WITH_OPERATION=(source:string)=>`select x.*,p.status as operation_status,p.facility_terms_version,p.locked_usdt_amount
+const WITH_OPERATION=(source:string)=>`select x.*,p.status as operation_status,p.facility_terms_version,p.locked_usdt_amount,p.cancel_requested_at
  from ${source} x join peragus_customer_purchase_intents p on p.id=x.purchase_intent_id and p.customer_id=x.customer_id`;
 interface Row {id:string;customer_id:string;request_id:string;purchase_intent_id:string;provider_customer_id:string;provider_quote_id:string;
  source_amount_brl:string;wallet_address:string;provider_wallet_id:string;create_attempted:boolean;simulation_attempted:boolean;provider_transfer_id:string|null;observation:OzavTransfer|null;
- operation_status:OperationStatus;facility_terms_version:string|null;locked_usdt_amount:string|null;lock_deadline_at?:Date|string|null;}
+ operation_status:OperationStatus;facility_terms_version:string|null;locked_usdt_amount:string|null;lock_deadline_at?:Date|string|null;cancel_requested_at?:Date|string|null;}
 const map=(r:Row):CustomerPixRecord=>({id:r.id,customerId:r.customer_id,requestId:r.request_id,purchaseId:r.purchase_intent_id,
  providerCustomerId:r.provider_customer_id,providerQuoteId:r.provider_quote_id,amountBrl:r.source_amount_brl,walletAddress:r.wallet_address,
  providerWalletId:r.provider_wallet_id,attempted:r.create_attempted,simulationAttempted:r.simulation_attempted,transferId:r.provider_transfer_id,observation:r.observation,
  operationStatus:r.operation_status,facilityTermsVersion:r.facility_terms_version,
- lockDeadlineAt:r.lock_deadline_at==null?null:new Date(r.lock_deadline_at).toISOString(),...(r.locked_usdt_amount===null?{}:{lockedUsdtAmount:r.locked_usdt_amount})});
+ lockDeadlineAt:r.lock_deadline_at==null?null:new Date(r.lock_deadline_at).toISOString(),
+ cancelRequestedAt:r.cancel_requested_at==null?null:new Date(r.cancel_requested_at).toISOString(),...(r.locked_usdt_amount===null?{}:{lockedUsdtAmount:r.locked_usdt_amount})});
 export class PostgresCustomerPixRepository implements CustomerPixRepository {
  private readonly e:RowEnvironment;
  constructor(private readonly pool:Pool,mode:MoneyMode){this.e=rowEnvironment(mode);}
@@ -72,8 +73,16 @@ export class PostgresCustomerPixRepository implements CustomerPixRepository {
  }
  async claim(id:string){
   const row=await this.pool.query<Row>("select * from peragus_customer_sandbox_pix where id=$1",[id]);const r=row.rows[0];if(!r)return false;
-  const result=await this.pool.query(`update peragus_customer_sandbox_pix set create_attempted=true,updated_at=now()
-   where id=$3 and not create_attempted and exists(${eligible(this.e,CREATE)}) returning id`,[r.customer_id,r.purchase_intent_id,id]);return Boolean(result.rows[0]);
+  // Takes the purchase row lock (as a customer cancel does) and re-reads the status under it:
+  // a cancel that expired the accepted operation first makes the claim fail, and a claim
+  // committed first is seen by the cancel, so both can never succeed (policy 7.1).
+  // One statement on its own connection (its own transaction): the lock is held until it commits.
+  const client=await this.pool.connect();let result:{rows:unknown[]};
+  try{result=await client.query(`with locked as (select id from peragus_customer_purchase_intents
+    where id=$2 and customer_id=$1 and environment='${this.e.mode}' and status='accepted' and cancel_requested_at is null for update)
+   update peragus_customer_sandbox_pix set create_attempted=true,updated_at=now()
+   where id=$3 and not create_attempted and exists(select 1 from locked) and exists(${eligible(this.e,CREATE)}) returning id`,[r.customer_id,r.purchase_intent_id,id]);}finally{client.release();}
+  return Boolean(result.rows[0]);
  }
  async claimSimulation(row:CustomerPixRecord){
   const r=await this.pool.query(`update peragus_customer_sandbox_pix set simulation_attempted=true,simulation_attempted_at=now(),updated_at=now()

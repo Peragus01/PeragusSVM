@@ -26,6 +26,7 @@ import { registerCustomerSandboxPixRoutes } from "./routes/customer-sandbox-pix.
 import type { CustomerPixService } from "./purchases/customer-sandbox-pix.js";
 import { registerCustomerPurchaseIntentRoutes } from "./routes/customer-purchase-intents.js";
 import type { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
+import type { CustomerPurchaseCancelService } from "./purchases/customer-purchase-cancel.js";
 import { registerCustomerQuoteRoutes } from "./routes/customer-quotes.js";
 import type { CustomerQuoteService } from "./quotes/customer-quotes.js";
 import { registerCustomerWalletRoutes } from "./routes/customer-wallet.js";
@@ -105,6 +106,8 @@ export interface BuildAppOptions {
   customerSandboxPixService?: CustomerPixService;
   customerSandboxPixSimulationEnabled?: boolean;
   customerPurchaseIntentService?: CustomerPurchaseIntentService;
+  /** POST /v1/me/purchase-intents/:id/cancel (refund policy 7.1). */
+  customerPurchaseCancelService?: CustomerPurchaseCancelService;
   customerQuoteService?: CustomerQuoteService;
   customerWalletService?: CustomerWalletService;
   customerOnboardingOverview?: CustomerOnboardingOverview;
@@ -280,6 +283,7 @@ export async function buildApp(
   await registerCustomerPurchaseIntentRoutes(
     app,
     options.customerAccess ? options.customerPurchaseIntentService : undefined,
+    options.customerAccess ? options.customerPurchaseCancelService : undefined,
   );
   await registerCustomerQuoteRoutes(
     app,

@@ -29,6 +29,8 @@ import { PostgresCustomerWithdrawalRequestRepository } from "./repositories/post
 import { CustomerPixService } from "./purchases/customer-sandbox-pix.js";
 import { PostgresCustomerPixRepository } from "./repositories/postgres-customer-sandbox-pix.js";
 import { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
+import { CustomerPurchaseCancelService } from "./purchases/customer-purchase-cancel.js";
+import { PostgresPurchaseCancelRepository } from "./repositories/postgres-customer-purchase-cancel.js";
 import { PostgresCustomerPurchaseIntentRepository } from "./repositories/postgres-customer-purchase-intents.js";
 import { purchaseLimits } from "./purchases/operation-status.js";
 import { createPurchaseProgression } from "./purchases/purchase-progression-factory.js";
@@ -688,6 +690,20 @@ const app = await buildApp({
             limits: purchaseLimits(env),
           }),
           moneyMode,
+        ),
+      }
+    : {}),
+  // Customer cancel before Pix (policy 7.1): GET-only OZAV reads, then progression.
+  ...(env.CUSTOMER_PURCHASE_INTENTS_ENABLED && env.CUSTOMER_SANDBOX_PIX_ENABLED
+    ? {
+        customerPurchaseCancelService: new CustomerPurchaseCancelService(
+          new PostgresPurchaseCancelRepository(pool!, moneyModeFor(env)),
+          createPurchaseProgression(pool!, moneyModeFor(env), env, new OzavClient({
+            apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
+            attempts: 1,
+            timeoutMs: 5000,
+          })),
         ),
       }
     : {}),

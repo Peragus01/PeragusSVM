@@ -94,3 +94,118 @@ describe("live customer Pix", () => {
     expect(screen.queryByLabelText("Pix copia e cola")).toBeNull();
   });
 });
+describe("customer cancel before Pix (policy 7.1)", () => {
+  const cancelledAt = "2026-11-12T10:00:00.000Z";
+  function mockApi(pixExtra: Record<string, unknown> = {}, cancel?: () => Response) {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ url: String(url), method: init?.method ?? "GET", body });
+      if (String(url).endsWith(`/purchase-intents/${purchaseId}/cancel`))
+        return cancel
+          ? cancel()
+          : Response.json({
+              data: {
+                purchase_id: purchaseId,
+                status: "awaiting_pix",
+                cancel_requested_at: cancelledAt,
+              },
+              meta: { idempotent_replay: false },
+            });
+      return Response.json({ data: pix(body?.request_id ?? "", pixExtra) }, { status: 201 });
+    });
+    return calls;
+  }
+  async function confirmCancel() {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancelar pedido" }));
+    });
+    expect(screen.getByRole("dialog")).toHaveTextContent(/7\.1/);
+    expect(screen.getByRole("dialog")).toHaveTextContent(/7\.2/);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Confirmar cancelamento" }));
+    });
+  }
+  it("cancels while awaiting payment, hides the QR and explains that a payment still proceeds", async () => {
+    const calls = mockApi();
+    await open();
+    expect(screen.getByLabelText("Pix copia e cola")).toBeInTheDocument();
+    await confirmCancel();
+    const cancel = calls.find((c) => c.url.endsWith("/cancel"))!;
+    expect(cancel.url).toBe(`/api/v1/me/purchase-intents/${purchaseId}/cancel`);
+    expect(cancel.method).toBe("POST");
+    expect(cancel.body).toEqual({ request_id: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+    expect(screen.queryByLabelText("Pix copia e cola")).toBeNull();
+    expect(
+      screen.getByText("Pedido cancelado — se você já pagou, a compra seguirá normalmente."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancelar pedido" })).toBeNull();
+  });
+  it("can go back from the confirmation without cancelling", async () => {
+    const calls = mockApi();
+    await open();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancelar pedido" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Voltar" }));
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(calls.some((c) => c.url.endsWith("/cancel"))).toBe(false);
+    expect(screen.getByLabelText("Pix copia e cola")).toBeInTheDocument();
+  });
+  it("hides the button once the payment is confirmed", async () => {
+    mockApi({
+      payment_confirmed: true,
+      state: "payment_confirmed",
+      status: "pix_confirmed",
+      payment_instructions: null,
+    });
+    await open();
+    expect(screen.queryByRole("button", { name: "Cancelar pedido" })).toBeNull();
+  });
+  it("shows a cancel already recorded by the server and no QR", async () => {
+    mockApi({ cancel_requested_at: cancelledAt, payment_instructions: null });
+    await open();
+    expect(screen.queryByLabelText("Pix copia e cola")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancelar pedido" })).toBeNull();
+    expect(screen.getByText(/^Pedido cancelado/)).toBeInTheDocument();
+  });
+  it("after a cancel withdrawn by payment shows the confirmed payment, not the cancel", async () => {
+    mockApi({
+      cancel_requested_at: cancelledAt,
+      payment_confirmed: true,
+      state: "payment_confirmed",
+      status: "pix_confirmed",
+      payment_instructions: null,
+    });
+    await open();
+    expect(screen.queryByText(/^Pedido cancelado/)).toBeNull();
+    expect(screen.getByText(/^Pagamento confirmado/)).toBeInTheDocument();
+  });
+  it("explains a cancel refused because the Pix was already received", async () => {
+    mockApi({}, () =>
+      Response.json({ error: { code: "CANCEL_TOO_LATE_PAYMENT_RECEIVED" } }, { status: 409 }),
+    );
+    await open();
+    await confirmCancel();
+    expect(screen.getByRole("alert")).toHaveTextContent(/já foi recebido/);
+    expect(screen.queryByText(/^Pedido cancelado/)).toBeNull();
+  });
+  it("offers the cancel before any Pix exists and expires the order", async () => {
+    const calls = mockApi({}, () =>
+      Response.json({
+        data: { purchase_id: purchaseId, status: "expired", cancel_requested_at: cancelledAt },
+      }),
+    );
+    await act(async () => {
+      render(
+        <CustomerPix token="synthetic.token" purchaseId={purchaseId} amount="1000.00" enabled />,
+      );
+    });
+    await confirmCancel();
+    expect(calls.filter((c) => !c.url.endsWith("/cancel"))).toHaveLength(0);
+    expect(screen.getByText(/^Pedido cancelado/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Gerar ou recuperar Pix" })).toBeDisabled();
+  });
+});

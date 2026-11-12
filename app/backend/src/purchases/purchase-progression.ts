@@ -9,6 +9,7 @@ import {WithdrawalRequestError,type WithdrawalRequestRepository} from "../withdr
 import type {PurchaseIntentRepository} from "./customer-purchase-intents.js";
 import {pixView,reconcileCustomerPix,type CustomerPixRepository} from "./customer-sandbox-pix.js";
 import {TERMINAL_STATUSES,type OperationStatus} from "./operation-status.js";
+import {CUSTOMER_CANCEL_REQUESTED,CUSTOMER_CANCEL_WITHDRAWN_BY_PAYMENT} from "./customer-purchase-cancel.js";
 
 /** OZAV TransferStatus (awaiting_approval is documented as never returned). */
 export type OzavTransferStatus = "awaiting_payment" | "payment_confirmed" | "converting" | "payout_initiated"
@@ -46,7 +47,10 @@ const RANK: Partial<Record<OperationStatus, number>> = {accepted: 0, awaiting_pi
 interface Context {
   status: OperationStatus; customer_id: string; locked_usdt_amount: string | null;
   pix_id: string | null; pix_created_at: Date | string | null; lock_deadline_at: Date | string | null; pix_expires_at: string | null;
+  cancel_requested_at: Date | string | null; cancel_withdrawn_at: Date | string | null;
 }
+// After a payment the operation proceeded (it is neither still funding nor closed).
+const NOT_PROCEEDED: ReadonlySet<OperationStatus> = new Set(["accepted", "awaiting_pix", "expired", "failed", "refund_pending", "refunded"]);
 
 /**
  * Moves a purchase operation forward from the OZAV transfer state read by GET.
@@ -59,7 +63,7 @@ export class PurchaseProgression {
 
   private async context(purchaseId: string) {
     const r = await this.deps.pool.query<Context>(`select p.status,p.customer_id,p.locked_usdt_amount::text as locked_usdt_amount,
-      x.id as pix_id,x.created_at as pix_created_at,x.lock_deadline_at,
+      x.id as pix_id,x.created_at as pix_created_at,x.lock_deadline_at,p.cancel_requested_at,p.cancel_withdrawn_at,
       x.observation->'source'->'paymentInstructions'->>'expiresAt' as pix_expires_at
      from peragus_customer_purchase_intents p
      left join peragus_customer_sandbox_pix x on x.purchase_intent_id=p.id and x.customer_id=p.customer_id and x.environment=p.environment
@@ -81,6 +85,23 @@ export class PurchaseProgression {
     actor: ProgressionActor = "system:reconciliation"): Promise<OperationStatus> {
     const ctx = await this.context(purchaseId);
     if (!ctx) throw new Error("PURCHASE_INTENT_NOT_FOUND");
+    const status = await this.progress(purchaseId, ctx, observed, actor);
+    // Partner rule (policy 7.1): a payment confirmed by GET while a customer cancel request is
+    // open, and before the operation closed, withdraws the request. Recorded once, as a note
+    // event (from_status = to_status) that never counts as the last transition.
+    const paidObserved = observed.sourceLegStatus === "completed" || PAID_PROGRESS.has(observed.status) || observed.status === "completed";
+    if (paidObserved && ctx.cancel_requested_at && !ctx.cancel_withdrawn_at && !NOT_PROCEEDED.has(status)) {
+      await this.deps.pool.query(`with u as (update peragus_customer_purchase_intents set cancel_withdrawn_at=now()
+         where id=$1 and environment='${this.e.mode}' and cancel_requested_at is not null and cancel_withdrawn_at is null
+         returning id,customer_id,status)
+        insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
+        select id,customer_id,status,status,$2,$3,'${this.e.mode}' from u`, [purchaseId, actor, CUSTOMER_CANCEL_WITHDRAWN_BY_PAYMENT]);
+    }
+    return status;
+  }
+
+  private async progress(purchaseId: string, ctx: Context, observed: TransferObservation,
+    actor: ProgressionActor): Promise<OperationStatus> {
     let status = ctx.status;
     let rank = RANK[status];
     // Every move states the status it was decided from (checked under the row lock, so a
@@ -102,7 +123,8 @@ export class PurchaseProgression {
       // Resume ONLY a review that OZAV itself caused (its needs_review is non-terminal);
       // every other review reason (lock unknown, amount below lock, ...) is the operator's.
       const last = await this.deps.pool.query<{from_status: OperationStatus | null; reason: string}>(
-        "select from_status,reason from peragus_operation_status_events where purchase_id=$1 order by id desc limit 1", [purchaseId]);
+        // Note events (from_status = to_status, e.g. a customer cancel request) are not transitions.
+        "select from_status,reason from peragus_operation_status_events where purchase_id=$1 and from_status is distinct from to_status order by id desc limit 1", [purchaseId]);
       const event = last.rows[0];
       if (event?.reason !== OZAV_REVIEW || s === "needs_review") return status;
       // Never move backwards: resume relative to the stage the review was entered from.
@@ -156,7 +178,9 @@ export class PurchaseProgression {
         ctx.lock_deadline_at ? new Date(ctx.lock_deadline_at).getTime() : NaN].filter(v => !Number.isNaN(v));
       if (!limits.length) return status;
       const deadline = Math.min(...limits);
-      if (deadline <= Date.now()) await move("expired", `PIX_EXPIRED_UNPAID: deadline=${new Date(deadline).toISOString()}`);
+      if (deadline <= Date.now()) {
+        await move("expired", `PIX_EXPIRED_UNPAID: deadline=${new Date(deadline).toISOString()}${ctx.cancel_requested_at ? `; ${CUSTOMER_CANCEL_REQUESTED}` : ""}`);
+      }
       return status;
     }
     if (PAID_PROGRESS.has(s)) {
