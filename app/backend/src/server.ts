@@ -59,6 +59,8 @@ import { verifyDatabaseConnection } from "./database/readiness.js";
 import { randomUUID } from "node:crypto";
 import { INVITE_STAGING_ORIGIN } from "./invites/invite-email-template.js";
 import { createSupabaseAuthenticator } from "./auth/supabase-authenticator.js";
+import { LegalAcceptanceService, parseLegalRequiredDocuments } from "./legal/legal-acceptance.js";
+import { PostgresLegalAcceptanceRepository } from "./repositories/postgres-customer-legal-acceptances.js";
 import { PostgresCustomerRepository } from "./repositories/postgres-customer-repository.js";
 import { Connection, PublicKey } from "@solana/web3.js";
 import type { Pool } from "pg";
@@ -824,6 +826,15 @@ const app = await buildApp({
   customerAccess: {
     authenticate,
     customers: new PostgresCustomerRepository(pool!),
+    // Fail closed: customer routes never start without the required legal documents.
+    legal: (() => {
+      if (!env.LEGAL_REQUIRED_DOCUMENTS)
+        throw new Error("LEGAL_REQUIRED_DOCUMENTS is required");
+      return new LegalAcceptanceService(
+        parseLegalRequiredDocuments(env.LEGAL_REQUIRED_DOCUMENTS),
+        new PostgresLegalAcceptanceRepository(pool!, moneyModeFor(env)),
+      );
+    })(),
   },
   ...(env.OZAV_SANDBOX_CUSTOMERS_ENABLED
     ? {

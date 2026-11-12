@@ -4,6 +4,7 @@ import { moneyPathsNotLiveReady, providerKeyMatchesMode } from "./money-environm
 import { purchaseLimits } from "../purchases/operation-status.js";
 
 import { z } from "zod";
+import { parseLegalRequiredDocuments } from "../legal/legal-acceptance.js";
 
 const envSchema = z
   .object({
@@ -224,6 +225,9 @@ const envSchema = z
       .regex(/^ozav_sk_(test|live)_[A-Za-z0-9_-]+$/)
       .optional(),
     SOLANA_USDT_MINT: z.string().min(32).max(44).optional(),
+    // JSON {"terms":{"version","sha256"},"privacy":{...},"refund":{...}}; shape is
+    // validated below, and the server refuses to start customer access without it.
+    LEGAL_REQUIRED_DOCUMENTS: z.string().min(1).optional(),
     OZAV_ONRAMP_WRITES_ENABLED: z
       .enum(["true", "false"])
       .default("false")
@@ -287,6 +291,17 @@ const envSchema = z
     SOLANA_FEE_PAYER_KEYPAIR_BASE64: z.string().min(1).optional(),
   })
   .superRefine((env, context) => {
+    if (env.LEGAL_REQUIRED_DOCUMENTS !== undefined) {
+      try {
+        parseLegalRequiredDocuments(env.LEGAL_REQUIRED_DOCUMENTS);
+      } catch {
+        context.addIssue({
+          code: "custom",
+          path: ["LEGAL_REQUIRED_DOCUMENTS"],
+          message: "LEGAL_REQUIRED_DOCUMENTS_INVALID",
+        });
+      }
+    }
     const expected =
       env.PERAGUS_DEPLOYMENT_ENV === "production" ? "live" : "test";
     // Sandbox money executors stay off in live until their live paths exist

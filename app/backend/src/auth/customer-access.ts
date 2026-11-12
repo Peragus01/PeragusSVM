@@ -1,6 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ApiRateLimiter } from "./api-rate-limits.js";
+import {
+  LEGAL_DOCUMENTS,
+  LegalAcceptanceError,
+  sanitizeIp,
+  sanitizeUserAgent,
+  type LegalAcceptanceService,
+} from "../legal/legal-acceptance.js";
 
 export interface AuthenticatedUser {
   id: string;
@@ -51,6 +58,11 @@ export class AuthenticationError extends Error {
 export interface CustomerAccess {
   authenticate(token: string): Promise<AuthenticatedUser>;
   customers: CustomerRepository;
+  /**
+   * When set, every customer route (except the exempt list below) answers 403
+   * LEGAL_ACCEPTANCE_REQUIRED until the current required documents are accepted.
+   */
+  legal?: LegalAcceptanceService;
 }
 
 declare module "fastify" {
@@ -74,6 +86,29 @@ const serialize = (c: Customer) => ({
   suspended: c.suspended,
   operations_enabled: false,
 });
+// Routes a customer without the required acceptance may still call: the acceptance
+// endpoints themselves and the static capability flags the frontend needs to render
+// the acceptance step. (/v1/me, /v1/me/customer and the pilot-invite redeem return
+// earlier in the hook, before customer lookup, and are exempt as well.)
+const LEGAL_EXEMPT_PATHS = new Set([
+  "/v1/me/legal-acceptances",
+  "/v1/me/purchase-capabilities",
+]);
+const acceptanceSchema = z
+  .object({
+    documents: z
+      .array(
+        z
+          .object({
+            document: z.enum(LEGAL_DOCUMENTS),
+            version: z.string().min(1).max(100),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(LEGAL_DOCUMENTS.length),
+  })
+  .strict();
 const isVersioned = (path: string) => path === "/v1" || path.startsWith("/v1/");
 
 export function registerCustomerAccess(
@@ -197,6 +232,25 @@ export function registerCustomerAccess(
         },
       });
 
+    if (access.legal && !LEGAL_EXEMPT_PATHS.has(path)) {
+      let missing: unknown[];
+      try {
+        missing = await access.legal.missing(customer.id);
+      } catch {
+        request.log.warn({ event: "legal_acceptance_check_unavailable" });
+        return reply
+          .code(503)
+          .send({ error: { code: "LEGAL_ACCEPTANCE_UNAVAILABLE" } });
+      }
+      if (missing.length)
+        return reply.code(403).send({
+          error: {
+            code: "LEGAL_ACCEPTANCE_REQUIRED",
+            message: "Accept the current legal documents to continue",
+          },
+        });
+    }
+
     // This gate protects every settlement subresource before any provider or repository handler runs.
     if (path === "/v1/settlements" || path.startsWith("/v1/settlements/")) {
       const id = (request.params as { id?: string }).id;
@@ -239,6 +293,49 @@ export function registerCustomerAccess(
   app.get("/v1/me/customer", async (request) => ({
     data: await profileFor(request, access),
   }));
+  const legal = access.legal;
+  if (legal) {
+    app.get("/v1/me/legal-acceptances", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      if (Object.keys(request.query as object).length)
+        return reply.code(400).send({ error: { code: "VALIDATION_ERROR" } });
+      try {
+        return { data: await legal.status(request.authenticatedCustomer!.id) };
+      } catch {
+        return reply
+          .code(503)
+          .send({ error: { code: "LEGAL_ACCEPTANCE_UNAVAILABLE" } });
+      }
+    });
+    app.post("/v1/me/legal-acceptances", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      const parsed = acceptanceSchema.safeParse(request.body);
+      if (!parsed.success || Object.keys(request.query as object).length)
+        return reply.code(400).send({ error: { code: "VALIDATION_ERROR" } });
+      try {
+        const data = await legal.accept(
+          {
+            userId: request.authenticatedUser!.id,
+            customerId: request.authenticatedCustomer!.id,
+            // request.ip is what Fastify resolved from its own trust-proxy setting.
+            ip: sanitizeIp(request.ip),
+            userAgent: sanitizeUserAgent(request.headers["user-agent"]),
+          },
+          parsed.data.documents,
+        );
+        return reply.code(201).send({ data });
+      } catch (error) {
+        if (error instanceof LegalAcceptanceError)
+          return reply
+            .code(409)
+            .send({ error: { code: "LEGAL_VERSION_MISMATCH" } });
+        request.log.warn({ event: "legal_acceptance_unavailable" });
+        return reply
+          .code(503)
+          .send({ error: { code: "LEGAL_ACCEPTANCE_UNAVAILABLE" } });
+      }
+    });
+  }
   app.register(async (scoped) => {
     scoped.removeContentTypeParser("application/json");
     scoped.addContentTypeParser(
