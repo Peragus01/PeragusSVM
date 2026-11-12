@@ -661,9 +661,9 @@ import {decideDelivery,type DeliveryCheck} from "../src/withdrawals/sandbox-exec
 const SIGNATURE="5".repeat(88);
 const CUSTODY=Keypair.generate().publicKey.toBase58();
 /** Parsed transaction fixture: custody pays, `to` is credited `credited` units of `mint`. */
-function chainTx(to:string,credited:bigint,mint=TEST_USDT_MINT,err:unknown=null){
+function chainTx(to:string,credited:bigint,mint=TEST_USDT_MINT,err:unknown=null,blockTime:number|null=Math.floor(Date.now()/1000)){
  const balance=(accountIndex:number,owner:string,amount:bigint)=>({accountIndex,mint,owner,uiTokenAmount:{amount:amount.toString(),decimals:6,uiAmount:null,uiAmountString:""}});
- return{slot:1,blockTime:1,transaction:{},meta:{err,fee:5000,
+ return{slot:1,blockTime,transaction:{},meta:{err,fee:5000,
   preTokenBalances:[balance(1,CUSTODY,900000000n),balance(2,to,0n)],
   postTokenBalances:[balance(1,CUSTODY,900000000n-credited),balance(2,to,credited)]}};
 }
@@ -683,11 +683,11 @@ describe("on-chain delivery verification and completion (Task 11)",()=>{
   const f=await sentAndReconciled(wallet=>chainTx(wallet,199950000n));
   expect(f.delivery.connection.getParsedTransaction).toHaveBeenCalledWith(SIGNATURE,{commitment:"finalized",maxSupportedTransactionVersion:0});
   expect(await operationStatus(f.p.data.id)).toBe("delivered_verified");
-  expect(f.view).toMatchObject({onchain_delivery_verified:true,delivery_status:"verified",delivered_amount:"199.950000",manual_review_required:false});
+  expect(f.view).toMatchObject({onchain_delivery_verified:true,delivery_status:"verified",delivered_amount:"199.950000",manual_review_required:false,delivery_pending_reason:null});
   const last=(await statusEvents(f.p.data.id)).at(-1)!;
   expect(last).toMatchObject({from_status:"sent",to_status:"delivered_verified",actor:`operator:${f.user.id}`});
-  expect(last.reason).toContain("DELIVERY_VERIFIED");expect(last.reason).toContain("VERIFIED_AGAINST_PROVIDER_NET");
-  // Customer views: the net amount delivered on chain and the explorer link of this mode's cluster.
+  expect(last.reason).toContain("DELIVERY_VERIFIED");expect(last.reason).toContain("VERIFIED_ONCHAIN");expect(last.reason).toContain("equals settled target 199.950000");
+  // Customer views: the amount credited on chain and the explorer link of this mode's cluster.
   const detail=(await new CustomerOperationHistoryService(pool,"test").get(f.s.customer.id,f.p.data.id))!;
   expect(detail).toMatchObject({onchain_delivery_verified:true,delivered_target:{currency:"USDT",amount:"199.950000"},delivery_simulated:false,
    explorer_url:`https://explorer.solana.com/tx/${SIGNATURE}?cluster=devnet`});
@@ -696,7 +696,7 @@ describe("on-chain delivery verification and completion (Task 11)",()=>{
   // Settled: further reconciliations read nothing more on chain and never send.
   await f.checked.reconcile(f.user,f.wr.data.id);
   expect(f.delivery.connection.getParsedTransaction).toHaveBeenCalledTimes(1);expect(f.sends()).toBe(1);
-  // The same send with a credit that disagrees goes to review instead.
+  // The same send with a credit below locked - tolerance goes to review instead.
   await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
   const g=await sentAndReconciled(wallet=>chainTx(wallet,199000000n));
   expect(await operationStatus(g.p.data.id)).toBe("needs_review");
@@ -707,7 +707,8 @@ describe("on-chain delivery verification and completion (Task 11)",()=>{
  it("less than the locked amount, another mint, another recipient or a failed tx is needs_review, never delivered_verified (Review Focus 5)",async()=>{
   const stranger=Keypair.generate().publicKey.toBase58(),otherMint=Keypair.generate().publicKey.toBase58();
   const cases:[string,(wallet:string)=>unknown][]=[
-   ["AMOUNT_MISMATCH",wallet=>chainTx(wallet,199949999n)],
+   // One unit below locked (200) minus tolerance (0.10).
+   ["AMOUNT_MISMATCH",wallet=>chainTx(wallet,199899999n)],
    ["MINT_MISMATCH",wallet=>chainTx(wallet,199950000n,otherMint)],
    ["RECIPIENT_MISMATCH",()=>chainTx(stranger,199950000n)],
    ["TX_FAILED",wallet=>chainTx(wallet,199950000n,TEST_USDT_MINT,{InstructionError:[0,"Custom"]})]];
@@ -723,25 +724,55 @@ describe("on-chain delivery verification and completion (Task 11)",()=>{
    expect(await operationStatus(f.p.data.id)).toBe("needs_review");expect(f.sends()).toBe(1);
   }
  },60_000);
- it("needs review when the OZAV net amount falls below locked minus tolerance, before any RPC read",async()=>{
-  const f=await sentAndReconciled(wallet=>chainTx(wallet,199899999n),"199.899999");
-  expect(f.delivery.connection.getParsedTransaction).not.toHaveBeenCalled();
+ it("a credit above the locked amount is needs_review",async()=>{
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,200000001n),"200.000000");
   expect(await operationStatus(f.p.data.id)).toBe("needs_review");
-  expect(f.view.delivery_reason).toContain("AMOUNT_MISMATCH");
+  expect(f.view).toMatchObject({delivery_status:"review",delivery_reason:"AMOUNT_MISMATCH"});
  });
- it("the credit must equal the OZAV net amount exactly",async()=>{
-  // Within locked - tolerance, but not what OZAV reports as delivered.
-  const f=await sentAndReconciled(wallet=>chainTx(wallet,199960000n));
+ it("ruling 30: a credit within range that differs from OZAV's settled target is needs_review",async()=>{
+  // Within locked - tolerance (199.90..200), but not the settled amount OZAV reports (199.95).
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,199960000n),"199.950000");
+  expect(f.delivery.connection.getParsedTransaction).toHaveBeenCalledTimes(1);
   expect(await operationStatus(f.p.data.id)).toBe("needs_review");
-  expect(f.view.delivery_reason).toBe("AMOUNT_MISMATCH");
- });
- it("verifies against locked minus tolerance when OZAV reports no net amount, and says so",async()=>{
-  const f=await sentAndReconciled(wallet=>chainTx(wallet,199900000n),null);
-  expect(await operationStatus(f.p.data.id)).toBe("delivered_verified");
-  expect(f.view).toMatchObject({delivered_amount:"199.900000",delivery_reason:"VERIFIED_AGAINST_LOCKED_MINUS_TOLERANCE: provider reported no net amount"});
+  expect(f.view).toMatchObject({delivery_status:"review",delivery_reason:"ONCHAIN_CREDIT_DIFFERS_FROM_SETTLED",delivered_amount:null});
+  // A settled target below the range does not lower the floor: the credit must satisfy both.
   await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
-  const g=await sentAndReconciled(wallet=>chainTx(wallet,199899999n),null);
+  const g=await sentAndReconciled(wallet=>chainTx(wallet,199899999n),"199.899999");
   expect(await operationStatus(g.p.data.id)).toBe("needs_review");
+  expect(g.view.delivery_reason).toBe("AMOUNT_MISMATCH");
+ },30_000);
+ it("without a settled OZAV target the operation stays sent and pending, never verified on the range alone",async()=>{
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,199950000n),null);
+  expect(await operationStatus(f.p.data.id)).toBe("sent");
+  expect(f.view).toMatchObject({onchain_delivery_verified:false,delivery_status:null,delivery_pending_reason:"SETTLED_TARGET_NOT_REPORTED"});
+  // Once OZAV reports the settled amount, the next reconciliation verifies it.
+  f.observed.targetAmount="199.950000";
+  const later=await f.checked.reconcile(f.user,f.wr.data.id);
+  expect(await operationStatus(f.p.data.id)).toBe("delivered_verified");
+  expect(later).toMatchObject({delivered_amount:"199.950000",delivery_pending_reason:null});
+ },30_000);
+ it("a transaction older than the send (minus 120 s) is needs_review TX_PREDATES_SEND",async()=>{
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,199950000n,TEST_USDT_MINT,null,Math.floor(Date.now()/1000)-3600));
+  expect(await operationStatus(f.p.data.id)).toBe("needs_review");
+  expect(f.view).toMatchObject({delivery_status:"review",delivery_reason:"TX_PREDATES_SEND"});
+  // Within the clock allowance it is still accepted.
+  await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+  const g=await sentAndReconciled(wallet=>chainTx(wallet,199950000n,TEST_USDT_MINT,null,Math.floor(Date.now()/1000)-60));
+  expect(await operationStatus(g.p.data.id)).toBe("delivered_verified");
+ },30_000);
+ it("one on-chain transaction never verifies two operations (TX_ALREADY_USED)",async()=>{
+  const f=await sentAndReconciled(wallet=>chainTx(wallet,199950000n));
+  expect(await operationStatus(f.p.data.id)).toBe("delivered_verified");
+  // Free the single test pilot slot without the closure flow (synthetic, triggers off for this row only).
+  await db.exec("set session_replication_role=replica");
+  try{await db.query("update peragus_sandbox_withdrawal_executions set closed_at=now() where id=$1",[f.view.id]);}finally{await db.exec("set session_replication_role=origin");}
+  // A second operation whose send reports the same transaction, crediting its own wallet.
+  const g=await sentAndReconciled(wallet=>chainTx(wallet,199950000n));
+  expect(await operationStatus(g.p.data.id)).toBe("needs_review");
+  expect(g.view).toMatchObject({delivery_status:"review",delivery_reason:"TX_ALREADY_USED",onchain_delivery_verified:false});
+  // The database refuses a second verified row for the same transaction as well.
+  await expect(db.query("update peragus_sandbox_withdrawal_executions set delivery_status='verified',delivered_amount_usdt=199.95 where id=$1",[g.view.id]))
+   .rejects.toThrow(/peragus_execution_verified_tx_unique|unique/i);
  },30_000);
  it("test mode with a sandbox hash not found on devnet stays sent and is labelled simulated, never delivered_verified",async()=>{
   // A sandbox reference that is not a Solana signature: no RPC read at all.
@@ -759,27 +790,38 @@ describe("on-chain delivery verification and completion (Task 11)",()=>{
   expect(g.view).toMatchObject({onchain_delivery_verified:false,delivery_simulated:true});
   expect((await statusEvents(g.p.data.id)).map(e=>e.to_status)).not.toContain("delivered_verified");
  },30_000);
- it("an unavailable RPC leaves the operation sent with nothing recorded",async()=>{
+ it("an unavailable RPC leaves the operation sent, records why it is pending and logs only an error code",async()=>{
   const f=await executionFixture();f.observed.targetAmount="199.950000";f.observed.transactionReference=SIGNATURE;
   await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
-  const delivery:DeliveryCheck={usdtMint:TEST_USDT_MINT,toleranceUnits:100000n,connection:{getParsedTransaction:async()=>{throw new Error("private rpc failure");}} as any};
-  const view=await new SandboxWithdrawalRecoveryService(f.repo,{find:f.provider.find,transfer:f.provider.transfer},new Set([f.user.id]),delivery).reconcile(f.user,f.wr.data.id);
-  expect(view).toMatchObject({onchain_delivery_verified:false,delivery_status:null,delivery_simulated:false});
-  expect(await operationStatus(f.p.data.id)).toBe("sent");
+  const warn=vi.spyOn(console,"warn").mockImplementation(()=>{});
+  try{
+   const delivery:DeliveryCheck={usdtMint:TEST_USDT_MINT,toleranceUnits:100000n,connection:{getParsedTransaction:async()=>{throw new Error("private rpc failure https://rpc.example/?api-key=SECRET");}} as any};
+   const view=await new SandboxWithdrawalRecoveryService(f.repo,{find:f.provider.find,transfer:f.provider.transfer},new Set([f.user.id]),delivery).reconcile(f.user,f.wr.data.id);
+   expect(view).toMatchObject({onchain_delivery_verified:false,delivery_status:null,delivery_simulated:false,delivery_pending_reason:"RPC_UNAVAILABLE"});
+   expect(await operationStatus(f.p.data.id)).toBe("sent");
+   const logged=warn.mock.calls.map(c=>c.join(" ")).join("\n");
+   expect(logged).toContain("usdt_delivery_check_failed");expect(logged).toContain("RPC_UNAVAILABLE");
+   expect(logged).not.toMatch(/SECRET|private rpc failure|api-key/);
+   expect((await f.repo.read(f.wr.data.id))!.deliveryPendingReason).toBe("RPC_UNAVAILABLE");
+  }finally{warn.mockRestore();}
  });
- it("live: a transaction not finalized yet keeps the operation sent (never simulated)",async()=>{
+ it("live: a transaction not finalized yet stays pending; an invalid hash is needs_review",async()=>{
   const wallet=Keypair.generate().publicKey.toBase58();
   const observation={id:"ozav_tr_send",customerId:"ozav_cus_x",status:"completed",sourceWalletId:"ozav_wal_x",sourceCurrency:"USDT",destinationAddress:wallet,network:"solana",
    sourceAmount:"200.000000",targetAmount:"199.950000",sourceLegStatus:"completed",destinationLegStatus:"completed",transactionReference:SIGNATURE} as any;
   const row={id:randomUUID(),withdrawalId:randomUUID(),customerId:randomUUID(),approvalId:randomUUID(),approverId:randomUUID(),pixId:randomUUID(),purchaseId:randomUUID(),
    providerCustomerId:"ozav_cus_x",providerWalletId:"ozav_wal_x",providerQuoteId:"ozav_q_x",transferId:"ozav_tr_x",amountBrl:"1000.00",amountUsdt:"200.000000",sendAmountUsdt:"200.000000",
    walletAddress:wallet,verifiedAt:new Date().toISOString(),operatorId:randomUUID(),requestId:randomUUID(),attempted:true,sendTransferId:"ozav_tr_send",closedAt:null,
-   environment:"live" as const,txHash:SIGNATURE,refusalCode:null,observation};
-  expect(await decideDelivery(row,deliveryCheck(null))).toBeNull();
-  expect(await decideDelivery({...row,txHash:null,observation:{...observation,transactionReference:null}},deliveryCheck(null))).toBeNull();
+   environment:"live" as const,txHash:SIGNATURE,refusalCode:null,observation,sendAttemptedAt:new Date().toISOString()};
+  expect(await decideDelivery(row,deliveryCheck(null))).toEqual({status:"pending",reason:"NOT_FINALIZED"});
+  expect(await decideDelivery({...row,txHash:null,observation:{...observation,transactionReference:null}},deliveryCheck(null))).toEqual({status:"pending",reason:"NO_TX_HASH"});
+  expect(await decideDelivery({...row,observation:{...observation,targetAmount:null}},deliveryCheck(chainTx(wallet,199950000n)))).toEqual({status:"pending",reason:"SETTLED_TARGET_NOT_REPORTED"});
+  const invalid=deliveryCheck(chainTx(wallet,199950000n));
+  expect(await decideDelivery({...row,txHash:"not-a-solana-signature",observation:{...observation,transactionReference:"not-a-solana-signature"}},invalid)).toEqual({status:"review",reason:"TX_HASH_INVALID"});
+  expect(invalid.connection.getParsedTransaction).not.toHaveBeenCalled();
   expect(await decideDelivery(row,deliveryCheck(chainTx(wallet,199950000n)))).toMatchObject({status:"verified",deliveredUnits:199950000n});
-  // A provider net amount above the locked amount is never verified.
-  expect(await decideDelivery({...row,observation:{...observation,targetAmount:"200.000001"}},deliveryCheck(chainTx(wallet,200000001n)))).toMatchObject({status:"review"});
+  // A credit above the locked amount is never verified, whatever OZAV reports.
+  expect(await decideDelivery({...row,observation:{...observation,targetAmount:"200.000001"}},deliveryCheck(chainTx(wallet,200000001n)))).toMatchObject({status:"review",reason:"AMOUNT_MISMATCH"});
   // OZAV reporting a different hash than the one stored is never verified.
   expect(await decideDelivery({...row,observation:{...observation,transactionReference:"4".repeat(88)}},deliveryCheck(chainTx(wallet,199950000n)))).toMatchObject({status:"review"});
  });

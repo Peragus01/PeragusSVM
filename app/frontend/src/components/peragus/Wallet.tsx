@@ -209,7 +209,7 @@ export function WalletProvider({
           {address ? (
             <div className="flex items-center gap-1">
               <Button variant="outline" size="sm" asChild>
-                <a href={explorerAddress(address)} target="_blank" rel="noreferrer">
+                <a href={explorerAddress(address, "test")} target="_blank" rel="noreferrer">
                   <WalletIcon />
                   <span data-testid="wallet-address">{short(address, 4)}</span>
                   <ExternalLink />

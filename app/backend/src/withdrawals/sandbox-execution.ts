@@ -8,7 +8,7 @@ import {requireFreshMfa,OPERATOR_MFA_MAX_AGE_SECONDS,type WithdrawalOperatorAppr
 import {SandboxWithdrawalProviderError,usdtUnits,type OzavSandboxWithdrawalProvider,type WithdrawalObservation} from "../providers/ozav-sandbox-withdrawal.js";
 import {OzavClientError} from "../providers/ozav-client.js";
 import type {DestinationTokenAccountReader,TokenAccountState} from "../providers/solana-token-accounts.js";
-import {verifyUsdtDelivery,type DeliveryVerification,type DeliveryVerificationInput} from "../solana/usdt-delivery-verifier.js";
+import {isSolanaSignature,verifyUsdtDelivery,type DeliveryVerification,type DeliveryVerificationInput} from "../solana/usdt-delivery-verifier.js";
 export class SandboxExecutionError extends Error {
  /** providerStatus: the provider's HTTP status, when the refusal came from a provider answer. */
  constructor(public readonly code:string,public readonly providerCode:string|null=null,public readonly providerStatus:number|null=null){super(code);}
@@ -58,7 +58,8 @@ export const DEFAULT_USDT_DELIVERY_TOLERANCE_UNITS=100000n;
 export interface DeliveryCheck {usdtMint:string;toleranceUnits:bigint;connection:DeliveryVerificationInput["connection"];}
 export type DeliveryStatus="verified"|"simulated"|"review";
 /** What the delivery check concluded; `reason` is stored and, for review, becomes the status event reason. */
-export type DeliveryOutcome={status:"verified";deliveredUnits:bigint;reason:string}|{status:"review"|"simulated";reason:string};
+/** pending: nothing decided yet (stays `sent`); its reason is stored as delivery_pending_reason. */
+export type DeliveryOutcome={status:"verified";deliveredUnits:bigint;reason:string}|{status:"review"|"simulated"|"pending";reason:string};
 export interface SandboxExecution extends ExecutionContext {
  id:string;operatorId:string;requestId:string;attempted:boolean;sendTransferId:string|null;observation:WithdrawalObservation|null;
  closedAt?:string|null;
@@ -77,6 +78,10 @@ export interface SandboxExecution extends ExecutionContext {
  refusedTransferId?:string|null;
  /** Live: when the pilot slot was released by the operation reaching a final status. */
  slotReleasedAt?:string|null;
+ /** Why a completed send is still undecided (NOT_FINALIZED, RPC_UNAVAILABLE, NO_TX_HASH). */
+ deliveryPendingReason?:string|null;
+ /** When the send was claimed; the verified transaction must not predate it. */
+ sendAttemptedAt?:string|null;
 }
 /** Outcome of the claim transaction. */
 export type ExecutionClaim="claimed"|"taken"|"not_approved";
@@ -104,6 +109,8 @@ export interface SandboxExecutionRepository {
  recordDelivery(row:SandboxExecution,outcome:DeliveryOutcome,actor:string):Promise<SandboxExecution>;
  /** Records that a transfer exists for a refused send (raises the high-severity operator alert). */
  flagRefusedTransfer(row:SandboxExecution,transferId:string):Promise<void>;
+ /** Stores why an undecided completed send is still pending (no status change). */
+ recordDeliveryPending(row:SandboxExecution,reason:string):Promise<SandboxExecution>;
 }
 /** The amount that was (or will be) POSTed: the locked amount, or amount_usdt for pre-Task-10 rows. */
 export const sendAmount=(row:Pick<ExecutionContext,"sendAmountUsdt"|"amountUsdt">)=>row.sendAmountUsdt??row.amountUsdt;
@@ -128,40 +135,61 @@ export function executionView(r:SandboxExecution){
  delivered_amount:r.deliveredAmountUsdt??null,delivery_simulated:r.deliveryStatus==="simulated",
  refused_transfer_found:r.refusedTransferId!=null,
  mainnet_execution:live && r.attempted,delivery_costs_preflight_evaluated:false,pilot_slot_held:!r.closedAt && !r.slotReleasedAt,pilot_closed_at:r.closedAt??null,
- pilot_slot_released_at:r.slotReleasedAt??null,job_enqueued:false,automatic_retry:false};}
+ pilot_slot_released_at:r.slotReleasedAt??null,delivery_pending_reason:r.deliveryPendingReason??null,job_enqueued:false,automatic_retry:false};}
 const completedSend=(o:WithdrawalObservation|null):o is WithdrawalObservation=>o?.status==="completed" && o.sourceLegStatus==="completed" && o.destinationLegStatus==="completed";
+/** Clock allowance between the send claim (database time) and the transaction's block time. */
+export const DELIVERY_BLOCK_TIME_ALLOWANCE_SECONDS=120;
+const formatUsdt=(units:bigint)=>`${units/1000000n}.${String(units%1000000n).padStart(6,"0")}`;
+/** Error code safe to log: an upper-case code from our own code, never a provider/RPC message. */
+const errorCode=(error:unknown)=>error instanceof Error && /^[A-Z][A-Z0-9_]{2,63}$/.test(error.message)?error.message:"RPC_UNAVAILABLE";
 /**
- * Decides the delivery of a completed send (never moves money, reads one transaction):
- *  - OZAV deducts the network fee from the sent amount, so the wallet must have been credited
- *    exactly the net amount OZAV reports (amounts.target.amount), and that net amount must be
- *    at least locked - tolerance. When OZAV reports no net amount the credit is checked against
- *    locked - tolerance only, and the reason says so.
- *  - Anything the chain contradicts (failed tx, other mint, other recipient, other amount) is review.
- *  - Not finalized / not found: live keeps `sent` and tries again later; test labels it simulated.
- * Returns null when there is nothing to record yet.
+ * Decides the delivery of a completed send (never moves money, reads one transaction).
+ * Ruling 30: verified iff the finalized transaction credited the customer's wallet with the
+ * environment's USDT mint, in a block not older than the send claim (minus a 120 s clock
+ * allowance), and
+ *   (a) locked_usdt_amount - USDT_DELIVERY_TOLERANCE_UNITS <= credit <= locked_usdt_amount, and
+ *   (b) credit == OZAV's settled amounts.target.amount (OZAV updates it on wallet -> crypto_address
+ *       sends); a difference is review ONCHAIN_CREDIT_DIFFERS_FROM_SETTLED. Without a settled
+ *       target the operation stays `sent` (pending SETTLED_TARGET_NOT_REPORTED).
+ *  - The chain contradicts (failed tx, older tx, other mint, other recipient, amount out of range): review.
+ *  - Live: no hash yet, not finalized or RPC unavailable -> pending (stays `sent`, retried);
+ *    a hash that is not a Solana signature -> review TX_HASH_INVALID.
+ *  - Test: no hash, not a signature or not on devnet -> simulated (stays `sent`).
+ * Returns null when the send is not completed yet.
  */
 export async function decideDelivery(row:SandboxExecution,delivery:DeliveryCheck):Promise<DeliveryOutcome|null>{
  const o=row.observation;
  if(!completedSend(o))return null;
  const live=row.environment==="live",sent=sendAmount(row),locked=usdtUnits(sent);
  const tolerance=delivery.toleranceUnits<locked?delivery.toleranceUnits:0n;
- const net=o.targetAmount===null?null:usdtUnits(o.targetAmount);
- if(net!==null && net<locked-tolerance)return{status:"review",reason:`AMOUNT_MISMATCH: provider net ${o.targetAmount} below locked ${sent} minus tolerance`};
- if(net!==null && net>locked)return{status:"review",reason:`AMOUNT_MISMATCH: provider net ${o.targetAmount} above locked ${sent}`};
  if(row.txHash && o.transactionReference && row.txHash!==o.transactionReference)return{status:"review",reason:"TX_HASH_CHANGED: provider reported a different transaction"};
  const txHash=row.txHash??o.transactionReference;
- if(!txHash)return live?null:{status:"simulated",reason:"SIMULATED: test send without a transaction hash"};
+ if(!txHash)return live?{status:"pending",reason:"NO_TX_HASH"}:{status:"simulated",reason:"SIMULATED: test send without a transaction hash"};
+ if(!isSolanaSignature(txHash))return live?{status:"review",reason:"TX_HASH_INVALID"}:{status:"simulated",reason:"SIMULATED: test send reference is not a Solana signature"};
+ // Ruling 30: OZAV updates target.amount to the settled amount; until it reports one, wait.
+ if(o.targetAmount===null)return{status:"pending",reason:"SETTLED_TARGET_NOT_REPORTED"};
+ const settled=usdtUnits(o.targetAmount);
+ const attempted=row.sendAttemptedAt?Date.parse(row.sendAttemptedAt):NaN;
  let result:DeliveryVerification;
  try{
   result=await verifyUsdtDelivery({connection:delivery.connection,txHash,mint:delivery.usdtMint,ownerWallet:row.walletAddress,
-   expectedUnits:net??locked,toleranceUnits:net===null?tolerance:0n});
- }catch{return null;} // RPC unavailable or unreadable: stays `sent`, the next reconciliation tries again.
- if(result.verified)return{status:"verified",deliveredUnits:result.deliveredUnits,
-  reason:net===null?"VERIFIED_AGAINST_LOCKED_MINUS_TOLERANCE: provider reported no net amount":"VERIFIED_AGAINST_PROVIDER_NET"};
- if(result.reason==="NOT_FINALIZED")return live?null:{status:"simulated",reason:"SIMULATED: test transaction not found on devnet"};
+   expectedUnits:locked,toleranceUnits:tolerance,
+   ...(Number.isFinite(attempted)?{notBeforeUnix:Math.floor(attempted/1000)-DELIVERY_BLOCK_TIME_ALLOWANCE_SECONDS}:{})});
+ }catch(error){
+  // RPC unavailable or unreadable: stays `sent`, the next reconciliation tries again.
+  const code=errorCode(error);
+  console.warn(JSON.stringify({event:"usdt_delivery_check_failed",execution_id:row.id,environment:row.environment,code}));
+  return{status:"pending",reason:code};
+ }
+ if(result.verified){
+  if(result.deliveredUnits!==settled)return{status:"review",reason:"ONCHAIN_CREDIT_DIFFERS_FROM_SETTLED"};
+  return{status:"verified",deliveredUnits:result.deliveredUnits,
+   reason:`VERIFIED_ONCHAIN: credit ${formatUsdt(result.deliveredUnits)} equals settled target ${o.targetAmount}, within locked ${sent} minus tolerance`};
+ }
+ if(result.reason==="NOT_FINALIZED")return live?{status:"pending",reason:"NOT_FINALIZED"}:{status:"simulated",reason:"SIMULATED: test transaction not found on devnet"};
  return{status:"review",reason:result.reason};
 }
-type ReconcileRepository=Pick<SandboxExecutionRepository,"bind"|"save"|"recordDelivery"|"flagRefusedTransfer">;
+type ReconcileRepository=Pick<SandboxExecutionRepository,"bind"|"save"|"recordDelivery"|"recordDeliveryPending"|"flagRefusedTransfer">;
 type ReconcileReader=Pick<OzavSandboxWithdrawalProvider,"find"|"transfer">;
 /**
  * GET-only reconciliation of one attempted execution (operator route and background job):
@@ -185,7 +213,9 @@ export async function reconcileExecution(repository:ReconcileRepository,provider
  let saved=await repository.save(row,observed);
  if(delivery && saved.deliveryStatus!=="verified" && saved.deliveryStatus!=="review"){
   const outcome=await decideDelivery(saved,delivery);
-  if(outcome && !(outcome.status==="simulated" && saved.deliveryStatus==="simulated"))saved=await repository.recordDelivery(saved,outcome,actor);
+  if(outcome?.status==="pending"){
+   if(!saved.deliveryStatus && saved.deliveryPendingReason!==outcome.reason)saved=await repository.recordDeliveryPending(saved,outcome.reason);
+  }else if(outcome && !(outcome.status==="simulated" && saved.deliveryStatus==="simulated"))saved=await repository.recordDelivery(saved,outcome,actor);
  }
  return executionView(saved);
 }

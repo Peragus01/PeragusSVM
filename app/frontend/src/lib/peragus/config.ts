@@ -45,12 +45,12 @@ export const short = (value: string, size = 7) =>
 /** Solana explorer cluster of a money mode (same pairing as the backend's MoneyEnvironment). */
 export const explorerCluster = (mode: MoneyMode) => (mode === "live" ? "mainnet-beta" : "devnet");
 /**
- * Explorer links for the given mode. Customer screens pass the backend-reported mode (or use
- * the operation's own `explorer_url`); the legacy devnet demo passes none and stays on devnet.
+ * Explorer links for the given mode (required). Customer screens pass the backend-reported mode
+ * (or use the operation's own `explorer_url`); the legacy devnet demo passes "test" explicitly.
  */
-export const explorerTx = (signature: string, mode: MoneyMode = "test") =>
+export const explorerTx = (signature: string, mode: MoneyMode) =>
   `https://explorer.solana.com/tx/${signature}?cluster=${explorerCluster(mode)}`;
-export const explorerAddress = (address: string, mode: MoneyMode = "test") =>
+export const explorerAddress = (address: string, mode: MoneyMode) =>
   `https://explorer.solana.com/address/${address}?cluster=${explorerCluster(mode)}`;
 /** True for exactly the explorer transaction link the backend builds for this mode. */
 export const isExplorerTxUrl = (value: unknown, mode: MoneyMode): value is string =>

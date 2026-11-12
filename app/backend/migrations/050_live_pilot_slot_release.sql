@@ -10,6 +10,9 @@
 -- * refused_transfer_id: a transfer found by metadata (GET only) for a send OZAV answered as
 --   refused. It must not exist; an operator checks it before anything else is done.
 -- * slot_released_at: the global pilot slot is given back without the sandbox closure.
+-- * delivery_pending_reason: why a completed send is still undecided (e.g. NOT_FINALIZED,
+--   RPC_UNAVAILABLE, NO_TX_HASH); cleared when the delivery is decided.
+-- * send_attempted_at: when the send was claimed; the verified transaction must not predate it.
 alter table peragus_sandbox_withdrawal_executions
  add column delivery_status text check(delivery_status is null or delivery_status in ('verified','simulated','review')),
  add column delivery_reason text check(delivery_reason is null or (length(delivery_reason) between 1 and 200 and delivery_reason !~ '[[:cntrl:]]')),
@@ -17,6 +20,10 @@ alter table peragus_sandbox_withdrawal_executions
  add column delivery_checked_at timestamptz,
  add column refused_transfer_id text check(refused_transfer_id is null or refused_transfer_id ~ '^ozav_tr_[A-Za-z0-9_-]{1,120}$'),
  add column slot_released_at timestamptz,
+ add column delivery_pending_reason text check(delivery_pending_reason is null or (length(delivery_pending_reason) between 1 and 200 and delivery_pending_reason !~ '[[:cntrl:]]')),
+ add column send_attempted_at timestamptz,
+ add constraint peragus_execution_pending_only_undecided check(delivery_pending_reason is null or delivery_status is null),
+ add constraint peragus_execution_send_attempted_at check(send_attempted_at is null or create_attempted),
  add constraint peragus_execution_delivery_evidence check(
   (delivery_status is null and delivery_reason is null and delivered_amount_usdt is null and delivery_checked_at is null)
   or (delivery_status is not null and delivery_reason is not null and delivery_checked_at is not null
@@ -27,6 +34,10 @@ alter table peragus_sandbox_withdrawal_executions
  add constraint peragus_execution_delivered_within_sent check(delivered_amount_usdt is null or delivered_amount_usdt<=coalesce(send_amount_usdt,amount_usdt)),
  add constraint peragus_execution_refused_transfer_only_when_refused check(refused_transfer_id is null or provider_refusal_code is not null),
  add constraint peragus_execution_slot_release_live_only check(slot_released_at is null or environment='live');
+
+-- One on-chain transaction never verifies two operations.
+create unique index peragus_execution_verified_tx_unique on peragus_sandbox_withdrawal_executions(provider_tx_hash)
+ where delivery_status='verified';
 
 -- One unresolved execution globally: resolved by the sandbox closure (test) or by the release below (live).
 drop index peragus_one_unresolved_sandbox_withdrawal;
