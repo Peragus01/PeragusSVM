@@ -1,3 +1,4 @@
+import { notifyLegalRequired } from "./legal-acceptance";
 /** Customer session tokens come from the login layer; this module stores no session. */
 import { isExplorerTxUrl, moneyMode, type MoneyMode, type MoneyNetwork } from "./config";
 export interface CustomerOperation {
@@ -120,6 +121,7 @@ export async function read(path: string, token: string, signal?: AbortSignal): P
         typeof error?.["code"] === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(error["code"])
           ? error["code"]
           : "CUSTOMER_READ_UNAVAILABLE";
+      notifyLegalRequired(code);
       throw new CustomerReadError(code, response.status);
     }
     return body;

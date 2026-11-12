@@ -1,3 +1,4 @@
+import { LEGAL_URLS } from "@/lib/peragus/legal-acknowledgement";
 import { useEffect, useRef, useState } from "react";
 import { CustomerNotice } from "./customer-ui";
 import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
@@ -130,6 +131,13 @@ export function CustomerPix({
           ? "Somente teste · não pague com dinheiro real. A confirmação de teste não comprova entrega de USDT."
           : "A confirmação do pagamento não comprova a entrega de USDT na sua carteira."}
       </CustomerNotice>
+      <p className="customer-muted">
+        Antes de pagar, leia a{" "}
+        <a href={LEGAL_URLS.refund} target="_blank" rel="noopener noreferrer">
+          Política de Reembolso
+        </a>
+        .
+      </p>
       {!enabled && (
         <p className="customer-muted">A criação de Pix está desabilitada pelo servidor.</p>
       )}

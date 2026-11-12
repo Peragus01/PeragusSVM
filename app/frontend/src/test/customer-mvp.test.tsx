@@ -156,6 +156,7 @@ describe("money mode drives customer-facing environment", () => {
     });
     fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "client@example.test" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "synthetic-password" } });
+    for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box);
     fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
   }
   it("signup accepts a live invitation when backend mode is live", async () => {

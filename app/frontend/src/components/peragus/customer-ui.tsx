@@ -1,4 +1,5 @@
 import { Link, Outlet, useNavigate } from "@tanstack/react-router";
+import { LegalAcceptanceGate } from "./customer-legal-acceptance";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRight,
@@ -298,7 +299,13 @@ export function CustomerLayout() {
           </div>
         </header>
         <main className="customer-page" id="conteudo">
-          <Outlet />
+          {session.accessToken && session.identity.customer ? (
+            <LegalAcceptanceGate token={session.accessToken}>
+              <Outlet />
+            </LegalAcceptanceGate>
+          ) : (
+            <Outlet />
+          )}
         </main>
         <footer className="customer-footer">
           © Peragus · Sua conta, com clareza em cada etapa.

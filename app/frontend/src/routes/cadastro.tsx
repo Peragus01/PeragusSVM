@@ -5,6 +5,13 @@ import { CustomerOnboarding } from "@/components/peragus/customer-onboarding";
 import { useCustomerSession, signUpCustomer } from "@/lib/peragus/customer-session";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
 import { useMoneyMode } from "@/lib/peragus/config";
+import {
+  LEGAL_DOCUMENT_KEYS,
+  LEGAL_LABELS,
+  LEGAL_URLS,
+  canCreateAccount,
+  type LegalDocumentKey,
+} from "@/lib/peragus/legal-acknowledgement";
 export const Route = createFileRoute("/cadastro")({ component: RegistrationPage });
 export function RegistrationPage() {
   const session = useCustomerSession();
@@ -16,10 +23,17 @@ export function RegistrationPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [legal, setLegal] = useState<Record<LegalDocumentKey, boolean>>({
+    terms: false,
+    privacy: false,
+    refund: false,
+  });
   const lock = useRef(false);
   const redemption = useRef<string | null>(null);
   async function submit() {
     if (lock.current) return;
+    // New accounts must tick every document; the backend gate records the real acceptance after login.
+    if (session.status !== "authenticated" && !canCreateAccount(legal)) return;
     lock.current = true;
     setBusy(true);
     setError("");
@@ -151,12 +165,33 @@ export function RegistrationPage() {
                   />
                 </label>
                 <small id="signup-password-help">Use pelo menos 12 caracteres.</small>
+                <fieldset className="customer-legal">
+                  <legend>Documentos legais</legend>
+                  {LEGAL_DOCUMENT_KEYS.map((key) => (
+                    <label key={key} className="customer-check">
+                      <input
+                        type="checkbox"
+                        checked={legal[key]}
+                        disabled={busy}
+                        onChange={(e) => setLegal((l) => ({ ...l, [key]: e.target.checked }))}
+                      />{" "}
+                      Li e aceito os{" "}
+                      <a href={LEGAL_URLS[key]} target="_blank" rel="noopener noreferrer">
+                        {LEGAL_LABELS[key]}
+                      </a>
+                    </label>
+                  ))}
+                </fieldset>
               </>
             )}
             <button
               className="customer-button"
               type="submit"
-              disabled={busy || !session.configured}
+              disabled={
+                busy ||
+                !session.configured ||
+                (session.status !== "authenticated" && !canCreateAccount(legal))
+              }
             >
               {busy
                 ? "Processando…"

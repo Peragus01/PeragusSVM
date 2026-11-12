@@ -1,3 +1,4 @@
+import { notifyLegalRequired } from "./legal-acceptance";
 import { moneyMode, type MoneyMode } from "./config";
 export type RefundState = "pending_review" | "approved" | "rejected" | "refund_recorded";
 export interface RefundRequest {
@@ -138,6 +139,7 @@ async function call(
     const body: unknown = await response.json();
     if (!response.ok) {
       const code = record(body) && record(body["error"]) ? body["error"]["code"] : null;
+      notifyLegalRequired(code);
       throw new RefundError(
         typeof code === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(code)
           ? code

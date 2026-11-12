@@ -1,3 +1,4 @@
+import { notifyLegalRequired } from "./legal-acceptance";
 export class JourneyError extends Error {
   constructor(
     public code: string,
@@ -40,7 +41,8 @@ export async function journeyRequest<T = Record<string, unknown>>(
     throw new JourneyError("OUTCOME_UNKNOWN");
   }
   const value = await response.json();
-  if (!response.ok)
+  if (!response.ok) {
+    notifyLegalRequired(value?.error?.code);
     throw new JourneyError(
       typeof value?.error?.code === "string" ? value.error.code : "UNAVAILABLE",
       Array.isArray(value?.error?.fields)
@@ -52,6 +54,7 @@ export async function journeyRequest<T = Record<string, unknown>>(
             .slice(0, 32)
         : [],
     );
+  }
   return value.data as T;
 }
 export function journeyMessage(error: unknown) {

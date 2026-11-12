@@ -1,3 +1,4 @@
+import { notifyLegalRequired } from "./legal-acceptance";
 import { moneyMode, moneyNetwork, type MoneyMode, type MoneyNetwork } from "./config";
 export interface Quote {
   id: string;
@@ -117,6 +118,7 @@ export async function purchaseRequest(
         typeof e?.["code"] === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(e["code"])
           ? e["code"]
           : "PURCHASE_UNAVAILABLE";
+      notifyLegalRequired(code);
       throw new PurchaseError(code, uuid(e?.["quote_id"]) ? e["quote_id"] : undefined);
     }
     if (!record(json)) throw new PurchaseError("INVALID_RESPONSE");
