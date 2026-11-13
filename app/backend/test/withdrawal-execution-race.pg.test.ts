@@ -9,6 +9,7 @@ import {Keypair} from "@solana/web3.js";
 import {Pool} from "pg";
 import { enableRuntimeControls } from "./helpers/runtime-controls.js";
 import {afterAll,beforeAll,describe,expect,it} from "vitest";
+import {realPostgresUrl} from "./helpers/real-postgres.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerPurchaseIntentRepository} from "../src/repositories/postgres-customer-purchase-intents.js";
 import {PostgresCustomerPixRepository} from "../src/repositories/postgres-customer-sandbox-pix.js";
@@ -23,8 +24,8 @@ import {PostgresSandboxExecutionRepository} from "../src/repositories/postgres-s
 import {SandboxWithdrawalExecutionService} from "../src/withdrawals/sandbox-execution.js";
 import type {OzavTransfer} from "../src/providers/ozav-client.js";
 
-const realUrl=process.env.TEST_INVITE_DATABASE_URL;
-if(realUrl && !["localhost","127.0.0.1"].includes(new URL(realUrl).hostname))throw Error("DISPOSABLE_LOCAL_DATABASE_REQUIRED");
+// Skips locally; fails (never skips) in CI when the URL is missing.
+const realUrl=realPostgresUrl();
 
 describe.skipIf(!realUrl)("ruling 23 on real PostgreSQL: concurrent withdrawal execution claims once and sends once",()=>{
  const dbName=`peragus_exec_race_${randomBytes(6).toString("hex")}`;
