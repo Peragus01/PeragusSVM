@@ -16,34 +16,35 @@ import {
 } from "@/components/peragus/operator-refund-actions";
 import { listRefunds, refundLabels, type OperatorRefund } from "@/lib/peragus/refunds";
 
+const purchaseId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const Route = createFileRoute("/operador/estornos")({
   // ?operacao=<purchase id> pre-fills the operator refund decision (links from alerts/saques).
   validateSearch: (search: Record<string, unknown>): { operacao?: string } =>
-    typeof search["operacao"] === "string" ? { operacao: search["operacao"] } : {},
+    typeof search["operacao"] === "string" && purchaseId.test(search["operacao"])
+      ? { operacao: search["operacao"] }
+      : {},
   component: OperatorRefundPage,
 });
 function OperatorRefundPage() {
+  const { operacao } = Route.useSearch();
   return (
     <OperatorShell
       title="Estornos"
       description="Decisões e devoluções são registros; nenhuma devolução é executada por esta tela."
     >
-      {(context) => <OperatorRefunds {...context} />}
+      {(context) => <OperatorRefunds {...context} linkedOperation={operacao ?? ""} />}
     </OperatorShell>
   );
 }
 
-const linkedOperation = () => {
-  if (typeof window === "undefined") return "";
-  const value = new URLSearchParams(window.location.search).get("operacao") ?? "";
-  return /^[0-9a-f-]{36}$/i.test(value) ? value : "";
-};
-
-function OperatorRefunds(context: OperatorContext) {
+function OperatorRefunds({
+  linkedOperation,
+  ...context
+}: OperatorContext & { linkedOperation: string }) {
   const { token, verifyMfa } = context;
   const [cursor, setCursor] = useState<string | undefined>();
   const [selected, setSelected] = useState<OperatorRefund | null>(null);
-  const [initialOperation] = useState(linkedOperation);
+  const initialOperation = linkedOperation;
   const read = useOperatorRead(
     token,
     (accessToken, signal) => listRefunds(accessToken, cursor, signal),
@@ -56,6 +57,7 @@ function OperatorRefunds(context: OperatorContext) {
       {/* As before Task 19b, this screen asks for the code only; enrollment is offered on the other operator screens. */}
       <OperatorMfaGate reads={[read]} context={{ token, verifyMfa }} />
       <OperationRefundDecision
+        key={initialOperation}
         token={token}
         verifyMfa={verifyMfa}
         initialOperation={initialOperation}

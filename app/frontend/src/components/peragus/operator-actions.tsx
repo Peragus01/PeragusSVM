@@ -22,22 +22,26 @@ export function OperatorErrorNotice({ error }: { error: OperatorApiError | null 
   );
 }
 
+/** Answers after which a current TOTP is confirmed and the same request repeated once. */
+const mfaCodes = ["OPERATOR_MFA_STALE", "WITHDRAWAL_OPERATOR_MFA_REQUIRED"];
 /** A definitive answer: nothing ambiguous happened, a new click is a new intent. */
 const definitive = (error: OperatorApiError) =>
   error.status >= 400 &&
   error.status < 500 &&
-  error.code !== "OPERATOR_MFA_STALE" &&
+  !mfaCodes.includes(error.code) &&
   error.code !== "OUTCOME_UNKNOWN";
 const pausedCodes = ["OPERATIONS_PAUSED", "DAILY_REVIEW_REQUIRED"];
 
 type Run<T> = (token: string, requestId: string, signal: AbortSignal) => Promise<T>;
 /**
  * Money action with a fresh request_id per user intent (Task 9 flow, generalized):
- * - OPERATOR_MFA_STALE: the caller shows FreshMfaForm; `reverify` confirms a current TOTP
- *   and repeats the SAME request (same request_id) once with the new token. Never more.
+ * - OPERATOR_MFA_STALE / WITHDRAWAL_OPERATOR_MFA_REQUIRED: the caller shows FreshMfaForm;
+ *   `reverify` confirms a current TOTP and repeats the SAME request (same request_id) once
+ *   with the new token. Never more.
  * - Unknown outcome (network/5xx): the intent stays pending; only `repeat` (same
- *   request_id) is offered, never a new intent.
+ *   request_id, last token that reached the backend) is offered, never a new intent.
  * - Definitive answers (4xx, paused): the intent ends.
+ * An in-flight request is never aborted (not even on unmount): its outcome must not be lost.
  */
 export function useFreshMfaAction(verifyMfa: VerifyMfa) {
   const [busy, setBusy] = useState(false);
@@ -50,41 +54,42 @@ export function useFreshMfaAction(verifyMfa: VerifyMfa) {
     done: (v: unknown) => void;
   } | null>(null);
   const retried = useRef(false);
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
+  const inFlight = useRef(false);
+  /** Last token used for an attempt: the fresh one after a reverify. */
+  const lastToken = useRef<string | null>(null);
   async function attempt(token: string) {
     const intent = pending.current;
-    if (!intent || controller.current) return;
-    const abort = new AbortController();
-    controller.current = abort;
+    if (!intent || inFlight.current) return;
+    inFlight.current = true;
+    lastToken.current = token;
     setBusy(true);
     setError(null);
     try {
-      const value = await intent.run(token, intent.requestId, abort.signal);
-      if (abort.signal.aborted) return;
+      const value = await intent.run(token, intent.requestId, new AbortController().signal);
       pending.current = null;
       setPendingId(null);
       intent.done(value);
     } catch (err) {
-      if (abort.signal.aborted) return;
       const failure = toOperatorError(err);
       setError(failure);
-      const stale = failure.code === "OPERATOR_MFA_STALE";
-      setStaleMfa(stale && !retried.current);
-      // The intent ends on a definitive answer, and on a second stale answer (one retry only).
-      if (definitive(failure) || pausedCodes.includes(failure.code) || (stale && retried.current)) {
+      const needsMfa = mfaCodes.includes(failure.code);
+      setStaleMfa(needsMfa && !retried.current);
+      // The intent ends on a definitive answer, and on a second MFA answer (one retry only).
+      if (
+        definitive(failure) ||
+        pausedCodes.includes(failure.code) ||
+        (needsMfa && retried.current)
+      ) {
         pending.current = null;
         setPendingId(null);
       }
     } finally {
-      if (!abort.signal.aborted) {
-        controller.current = null;
-        setBusy(false);
-      }
+      inFlight.current = false;
+      setBusy(false);
     }
   }
   function start<T>(token: string, run: Run<T>, done: (value: T) => void) {
-    if (controller.current || pending.current) return Promise.resolve();
+    if (inFlight.current || pending.current) return Promise.resolve();
     const requestId = crypto.randomUUID();
     pending.current = { requestId, run: run as Run<unknown>, done: done as (v: unknown) => void };
     retried.current = false;
@@ -93,7 +98,7 @@ export function useFreshMfaAction(verifyMfa: VerifyMfa) {
     return attempt(token);
   }
   async function reverify(code: string) {
-    if (controller.current || retried.current || !pending.current) return;
+    if (inFlight.current || retried.current || !pending.current) return;
     setBusy(true);
     setError(null);
     let fresh: string;
@@ -109,13 +114,15 @@ export function useFreshMfaAction(verifyMfa: VerifyMfa) {
     setBusy(false);
     await attempt(fresh);
   }
-  /** Repeats the pending intent with the same request_id after an unknown outcome. */
-  function repeat(token: string) {
-    if (!staleMfa) return attempt(token);
-    return Promise.resolve();
+  /** Repeats the pending intent (same request_id) after an unknown outcome, with the last good token. */
+  function repeat(fallbackToken: string) {
+    if (staleMfa) return Promise.resolve();
+    return attempt(lastToken.current ?? fallbackToken);
   }
   const uncertain = !!pendingId && !!error && !staleMfa && !definitive(error);
-  return { busy, error, staleMfa, pendingId, uncertain, start, reverify, repeat };
+  /** True while a request is in flight or an intent is still open (MFA retry or unknown outcome). */
+  const locked = busy || !!pendingId;
+  return { busy, error, staleMfa, pendingId, uncertain, locked, start, reverify, repeat };
 }
 export type FreshMfaAction = ReturnType<typeof useFreshMfaAction>;
 
@@ -182,6 +189,7 @@ export function ConfirmDialog({
   confirmLabel,
   disabled,
   busy,
+  cancelDisabled,
   onConfirm,
   onCancel,
 }: {
@@ -190,6 +198,8 @@ export function ConfirmDialog({
   confirmLabel: string;
   disabled?: boolean;
   busy?: boolean;
+  /** Keeps the dialog open while its intent is in flight or unresolved. */
+  cancelDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -209,7 +219,7 @@ export function ConfirmDialog({
           <button
             type="button"
             className="customer-button-secondary"
-            disabled={busy}
+            disabled={busy || cancelDisabled}
             onClick={onCancel}
           >
             Cancelar

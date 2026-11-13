@@ -2,6 +2,7 @@ import type { ComponentType, ReactNode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
+  search: {} as { operacao?: string },
   session: {
     status: "authenticated",
     identity: { user: { id: "operator" }, customer: null as null | { id: string } },
@@ -19,7 +20,7 @@ vi.mock("@/lib/peragus/customer-session", () => ({
   fetchOperatorStatus: async () => true,
 }));
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => (options: unknown) => ({ options }),
+  createFileRoute: () => (options: unknown) => ({ options, useSearch: () => mocks.search }),
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
 }));
 import { Route } from "@/routes/operador.estornos";
@@ -55,7 +56,7 @@ const page = (data: unknown[]) =>
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  window.history.replaceState(null, "", "/");
+  mocks.search = {};
 });
 
 describe("operator refund console", () => {
@@ -104,7 +105,7 @@ describe("operator refund console", () => {
   });
 
   it("posts the operator refund decision for an operation id taken from the link", async () => {
-    window.history.replaceState(null, "", `/operador/estornos?operacao=${purchase}`);
+    mocks.search = { operacao: purchase };
     vi.spyOn(crypto, "randomUUID").mockReturnValue(requestA);
     const fetcher = vi
       .spyOn(globalThis, "fetch")

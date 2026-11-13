@@ -34,11 +34,11 @@ describe("operator proxy allowlist", () => {
   it("opens exactly the operator console resources with their methods", () => {
     expect(operatorMethods("v1/admin/operator-status")).toEqual(["GET"]);
     expect(operatorMethods("v1/admin/runtime-controls")).toEqual(["GET", "PUT"]);
-    expect(operatorMethods("v1/admin/daily-reviews")).toEqual(["POST"]);
+    expect(operatorMethods("v1/admin/daily-reviews")).toEqual(["GET", "POST"]);
     expect(operatorMethods("v1/admin/operational-alerts")).toEqual(["GET"]);
     expect(operatorMethods("v1/admin/operator-notifications")).toEqual(["GET"]);
     expect(operatorMethods("v1/admin/withdrawal-requests")).toEqual(["GET"]);
-    expect(operatorMethods(`v1/admin/withdrawal-requests/${id}/approval`)).toEqual(["GET", "POST"]);
+    expect(operatorMethods(`v1/admin/withdrawal-requests/${id}/approval`)).toEqual(["POST"]);
     expect(operatorMethods(`v1/admin/withdrawal-requests/${id}/execution`)).toEqual([
       "GET",
       "POST",
@@ -46,7 +46,8 @@ describe("operator proxy allowlist", () => {
     expect(operatorMethods(`v1/admin/withdrawal-requests/${id}/execution/reconcile`)).toEqual([
       "POST",
     ]);
-    expect(operatorMethods(`v1/admin/withdrawal-requests/${id}/audit`)).toEqual(["GET"]);
+    // No console screen uses the audit trail: it stays closed in the proxy.
+    expect(operatorMethods(`v1/admin/withdrawal-requests/${id}/audit`)).toEqual([]);
     expect(refundMethods(`v1/admin/refund-requests/${id}/completion`)).toEqual(["POST"]);
     expect(refundMethods(`v1/admin/operations/${id}/refund-decision`)).toEqual(["POST"]);
     for (const path of [
@@ -93,12 +94,13 @@ describe("operator proxy allowlist", () => {
     expect(new Headers(init.headers).get("cookie")).toBeNull();
     expect(new Headers(init.headers).get("authorization")).toBe(`Bearer ${token}`);
     const wrong = await forwardOperator(
-      new Request("https://app.example.test/api/v1/admin/daily-reviews", {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` },
+      new Request("https://app.example.test/api/v1/admin/operational-alerts", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: "{}",
       }),
-      new URL("https://backend.example.test/v1/admin/daily-reviews"),
-      "v1/admin/daily-reviews",
+      new URL("https://backend.example.test/v1/admin/operational-alerts"),
+      "v1/admin/operational-alerts",
     );
     expect(wrong.status).toBe(405);
   });

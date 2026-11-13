@@ -1,7 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CustomerNotice, CustomerPanel } from "@/components/peragus/customer-ui";
-import { useOperatorRead } from "@/components/peragus/operator-actions";
+import {
+  FreshMfaForm,
+  useFreshMfaAction,
+  useOperatorRead,
+} from "@/components/peragus/operator-actions";
 import {
   OperatorMfaGate,
   OperatorRead,
@@ -13,6 +17,7 @@ import {
   ExecuteDialog,
   ExecutionDetails,
   walletPrefix,
+  type QueueIntent,
 } from "@/components/peragus/operator-withdrawal-actions";
 import {
   listWithdrawals,
@@ -45,24 +50,79 @@ const filters: (QueueState | "all")[] = [
   "needs_review",
 ];
 
-/** Withdrawal queue: amounts and a short wallet prefix only; Aprovar, Executar, Detalhes. */
+/** sessionStorage key of a money intent left unresolved when the operator left this screen. */
+const LEFT_KEY = "peragus.operator.withdrawal-intent-left";
+function readLeftIntent(): QueueIntent | null {
+  try {
+    const raw = sessionStorage.getItem(LEFT_KEY);
+    sessionStorage.removeItem(LEFT_KEY);
+    const value = raw ? (JSON.parse(raw) as QueueIntent) : null;
+    return value && /^[0-9a-f-]{36}$/i.test(value.itemId) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Withdrawal queue: amounts and a short wallet prefix only; Aprovar, Executar, Detalhes.
+ * The money action lives here (not in the dialog): while it is in flight or unresolved
+ * (MFA retry, unknown outcome) the rows, the filter and the dialog's Cancelar are locked, so
+ * the pending request_id and its "resultado incerto" notice are never abandoned. The request
+ * is never aborted; leaving the screen records it and the next visit shows the notice.
+ */
 export function WithdrawalConsole(context: OperatorContext) {
   const [filter, setFilter] = useState<QueueState | "all">("all");
   const [panel, setPanel] = useState<Panel | null>(null);
   const [notice, setNotice] = useState("");
+  const [left] = useState(readLeftIntent);
+  const action = useFreshMfaAction(context.verifyMfa);
+  const intent = useRef<QueueIntent | null>(null);
+  const locked = useRef(false);
+  locked.current = action.locked;
   const read = useOperatorRead(
     context.token,
     (token, signal) => listWithdrawals(token, filter, signal),
     filter,
   );
+  useEffect(() => {
+    if (!action.locked) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [action.locked]);
+  useEffect(
+    () => () => {
+      if (!locked.current || !intent.current) return;
+      try {
+        sessionStorage.setItem(LEFT_KEY, JSON.stringify(intent.current));
+      } catch {
+        // Storage unavailable: the beforeunload warning still applied.
+      }
+    },
+    [],
+  );
   const done = (message: string) => {
+    intent.current = null;
     setNotice(message);
     setPanel(null);
     read.reload();
   };
+  const open = (kind: Panel["kind"], item: WithdrawalQueueItem) => {
+    if (action.locked) return;
+    setNotice("");
+    setPanel({ kind, item });
+  };
   return (
     <>
+      {left && (
+        <CustomerNotice kind="warning">
+          Uma {left.kind === "execute" ? "execução de envio" : "aprovação"} do saque{" "}
+          {left.itemId.slice(0, 8)} ficou sem resultado confirmado quando você saiu da tela.
+          Consulte o saque (Detalhes) antes de qualquer nova ação; não inicie outra intenção.
+        </CustomerNotice>
+      )}
       {notice && <CustomerNotice>{notice}</CustomerNotice>}
+      <FreshMfaForm action={action} token={context.token} />
       <OperatorMfaGate reads={[read]} context={context} />
       <CustomerPanel title="Saques">
         <div className="customer-row">
@@ -70,6 +130,7 @@ export function WithdrawalConsole(context: OperatorContext) {
             Situação
             <select
               value={filter}
+              disabled={action.locked}
               onChange={(event) => {
                 setFilter(event.target.value as QueueState | "all");
                 setPanel(null);
@@ -85,7 +146,7 @@ export function WithdrawalConsole(context: OperatorContext) {
           <button
             type="button"
             className="customer-button-secondary"
-            disabled={read.loading}
+            disabled={read.loading || action.locked}
             onClick={() => read.reload()}
           >
             Atualizar fila
@@ -115,7 +176,8 @@ export function WithdrawalConsole(context: OperatorContext) {
                       <button
                         type="button"
                         className="customer-button-secondary"
-                        onClick={() => setPanel({ kind: "approve", item })}
+                        disabled={action.locked}
+                        onClick={() => open("approve", item)}
                       >
                         Aprovar
                       </button>
@@ -124,7 +186,8 @@ export function WithdrawalConsole(context: OperatorContext) {
                       <button
                         type="button"
                         className="customer-button-secondary"
-                        onClick={() => setPanel({ kind: "execute", item })}
+                        disabled={action.locked}
+                        onClick={() => open("execute", item)}
                       >
                         Executar
                       </button>
@@ -133,20 +196,22 @@ export function WithdrawalConsole(context: OperatorContext) {
                       <button
                         type="button"
                         className="customer-button-secondary"
-                        onClick={() => setPanel({ kind: "details", item })}
+                        disabled={action.locked}
+                        onClick={() => open("details", item)}
                       >
                         Detalhes
                       </button>
                     )}
-                    {["pending_approval", "needs_review"].includes(item.state) && (
-                      <Link
-                        className="customer-link"
-                        to="/operador/estornos"
-                        search={{ operacao: item.purchase_intent_id }}
-                      >
-                        Decidir estorno
-                      </Link>
-                    )}
+                    {!action.locked &&
+                      ["pending_approval", "needs_review"].includes(item.state) && (
+                        <Link
+                          className="customer-link"
+                          to="/operador/estornos"
+                          search={{ operacao: item.purchase_intent_id }}
+                        >
+                          Decidir estorno
+                        </Link>
+                      )}
                   </span>
                 </div>
               ))
@@ -159,6 +224,8 @@ export function WithdrawalConsole(context: OperatorContext) {
           key={panel.item.id}
           item={panel.item}
           context={context}
+          action={action}
+          onStart={() => (intent.current = { kind: "approve", itemId: panel.item.id })}
           onDone={done}
           onCancel={() => setPanel(null)}
         />
@@ -168,6 +235,8 @@ export function WithdrawalConsole(context: OperatorContext) {
           key={panel.item.id}
           item={panel.item}
           context={context}
+          action={action}
+          onStart={() => (intent.current = { kind: "execute", itemId: panel.item.id })}
           onDone={done}
           onCancel={() => setPanel(null)}
         />

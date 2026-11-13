@@ -7,6 +7,22 @@ export async function registerDailyReviewRoutes(app:FastifyInstance,service?:Dai
  await app.register(async scoped=>{
   scoped.removeContentTypeParser("application/json");
   scoped.addContentTypeParser("application/json",{parseAs:"buffer",bodyLimit:4096},(_request,body,done)=>done(null,body));
+  // GET ?day=YYYY-MM-DD: read-only review status (allowlist + AAL2; no fresh MFA, no PII).
+  scoped.get("/v1/admin/daily-reviews",async(request,reply)=>{
+   reply.header("Cache-Control","no-store");const user=request.authenticatedUser;
+   if(!user)return reply.code(401).send({error:{code:"AUTH_REQUIRED"}});
+   if(!service)return reply.code(503).send({error:{code:"DAILY_REVIEWS_UNAVAILABLE"}});
+   try{
+    service.authorizeRead(user);
+    const query=request.query as Record<string,unknown>;
+    if(request.body!==undefined || Object.keys(query).length!==1 || typeof query["day"]!=="string")return reply.code(400).send({error:{code:"VALIDATION_ERROR"}});
+    return{data:await service.status(user,query["day"])};
+   }catch(error){
+    if(error instanceof OperatorApprovalError)return reply.code(403).send({error:{code:error.code}});
+    if(error instanceof DailyReviewError)return reply.code(400).send({error:{code:"VALIDATION_ERROR"}});
+    request.log.warn({event:"daily_reviews_unavailable"});return reply.code(503).send({error:{code:"DAILY_REVIEWS_UNAVAILABLE"}});
+   }
+  });
   scoped.post("/v1/admin/daily-reviews",{bodyLimit:4096},async(request,reply)=>{
    reply.header("Cache-Control","no-store");const user=request.authenticatedUser;
    if(!user)return reply.code(401).send({error:{code:"AUTH_REQUIRED"}});

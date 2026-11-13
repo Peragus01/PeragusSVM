@@ -9,7 +9,12 @@ import {
   type OperatorContext,
 } from "@/components/peragus/operator-shell";
 import { AlertList } from "@/routes/operador.alertas";
-import { getRuntimeControls, listAlerts, listWithdrawals } from "@/lib/peragus/operator-console";
+import {
+  getDailyReview,
+  getRuntimeControls,
+  listAlerts,
+  listWithdrawals,
+} from "@/lib/peragus/operator-console";
 import { listRefunds, refundLabels, type RefundState } from "@/lib/peragus/refunds";
 import {
   addDays,
@@ -50,9 +55,12 @@ export function OperatorDashboard({ now, ...context }: OperatorContext & { now?:
   const alerts = useOperatorRead(context.token, (token, signal) =>
     listAlerts(token, { severity: "high", limit: 5 }, signal),
   );
+  const review = useOperatorRead(context.token, (token, signal) =>
+    getDailyReview(token, yesterday, signal),
+  );
   return (
     <>
-      <OperatorMfaGate reads={[controls, queue, refunds, alerts]} context={context} />
+      <OperatorMfaGate reads={[controls, queue, refunds, alerts, review]} context={context} />
       <CustomerPanel title="Chaves operacionais">
         <OperatorRead read={controls} loadingText="Consultando chaves…">
           {(rows) => (
@@ -70,16 +78,24 @@ export function OperatorDashboard({ now, ...context }: OperatorContext & { now?:
         </Link>
       </CustomerPanel>
       <CustomerPanel title="Revisão diária">
-        <p>
-          Hoje ({today}, São Paulo) só pode ser revisado depois de terminar. Ontem ({yesterday}): se
-          houve atividade sem revisão, novas operações ficam bloqueadas.
-        </p>
+        <OperatorRead read={review} loadingText="Consultando a revisão de ontem…">
+          {(status) => (
+            <p>
+              <strong>
+                {status.reviewed
+                  ? `Ontem (${status.day}): revisada em ${new Date(status.reviewed_at ?? "").toLocaleString("pt-BR")}.`
+                  : status.has_activity
+                    ? `Ontem (${status.day}): revisão pendente com atividade — novas operações ficam bloqueadas até o registro.`
+                    : `Ontem (${status.day}): sem atividade; a revisão não é exigida.`}
+              </strong>
+            </p>
+          )}
+        </OperatorRead>
         <p className="customer-muted">
-          O backend não expõe consulta de revisões; registrar ontem é idempotente e mostra quando a
-          revisão já tinha sido feita.
+          Hoje ({today}, São Paulo) só pode ser revisado depois de terminar.
         </p>
         <Link className="customer-link" to="/operador/revisao-diaria">
-          Registrar ou conferir a revisão de ontem
+          Registrar a revisão de ontem
         </Link>
       </CustomerPanel>
       <CustomerPanel title="Operações abertas por situação">

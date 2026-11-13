@@ -60,6 +60,25 @@ export class DailyReviewService {
   authorizeWithdrawalOperator(user,this.operators);
   requireFreshMfa(user,this.policy.mfaMaxAgeSeconds,this.policy.now()/1000);
  }
+ /** Read access (GET): allowlisted operator with AAL2; no fresh TOTP (nothing changes). */
+ authorizeRead(user:AuthenticatedUser){authorizeWithdrawalOperator(user,this.operators);}
+ /**
+  * Review status of `day` (a São Paulo day from 2026-01-01 up to today): whether it was
+  * reviewed, when, and whether it had operation activity. Never the reviewer or the note.
+  */
+ async status(user:AuthenticatedUser,day:string){
+  this.authorizeRead(user);
+  const parsed=new Date(`${day}T00:00:00Z`);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0,10)!==day)throw new DailyReviewError("VALIDATION_ERROR");
+  const r=await this.pool.query<{allowed:boolean;active:boolean;reviewed_at:Date|string|null}>(`select
+   $1::date<=(now() at time zone '${DAILY_REVIEW_TIME_ZONE}')::date and $1::date>=date '2026-01-01' as allowed,
+   ${dayActivitySql(`'${this.e.mode}'`,"$1::date")} as active,
+   (select v.reviewed_at from peragus_daily_reviews v where v.day=$1::date and v.environment='${this.e.mode}') as reviewed_at`,[day]);
+  const row=r.rows[0];
+  if(row?.allowed!==true)throw new DailyReviewError("VALIDATION_ERROR");
+  return{day,reviewed:row.reviewed_at!==null,reviewed_at:row.reviewed_at?new Date(row.reviewed_at).toISOString():null,
+   has_activity:row.active===true,environment:this.e.mode};
+ }
  /**
   * Records the review of `day`, a São Paulo day that has already ended (before today).
   * Today is refused with DAILY_REVIEW_DAY_NOT_ENDED (409). Idempotent per day.

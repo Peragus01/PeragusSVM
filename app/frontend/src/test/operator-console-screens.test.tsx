@@ -366,6 +366,169 @@ describe("withdrawal queue screen", () => {
   });
 });
 
+describe("withdrawal queue: in-flight and uncertain money actions", () => {
+  const twoRows = () =>
+    queue(queueItem("pending_approval"), { ...queueItem("needs_review"), id: requestB });
+  async function confirmApproval() {
+    fireEvent.click(await screen.findByRole("button", { name: "Aprovar" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Motivo da aprovação"), {
+      target: { value: "Conferi Pix, conversão e carteira" },
+    });
+    return within(dialog).getByRole("button", { name: "Confirmar aprovação" });
+  }
+
+  it("a double click sends exactly one request, and nothing else can be opened while in flight", async () => {
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(requestA);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const fetcher = backend({
+      "GET /api/v1/admin/withdrawal-requests": twoRows(),
+      [`POST /api/v1/admin/withdrawal-requests/${id}/approval`]: async () => {
+        await gate;
+        return Response.json({ data: { id, approved: true }, meta: { idempotent_replay: false } });
+      },
+    });
+    render(<WithdrawalConsole token="synthetic.aal2" verifyMfa={vi.fn()} />);
+    const confirm = await confirmApproval();
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(
+        sent(fetcher, "POST", `/api/v1/admin/withdrawal-requests/${id}/approval`),
+      ).toHaveLength(1),
+    );
+    expect(screen.getByRole("button", { name: "Detalhes" })).toBeDisabled();
+    expect(screen.getByLabelText("Situação")).toBeDisabled();
+    expect(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Cancelar" }),
+    ).toBeDisabled();
+    release();
+    expect(await screen.findByText(/Aprovação registrada/)).toBeInTheDocument();
+    expect(sent(fetcher, "POST", `/api/v1/admin/withdrawal-requests/${id}/approval`)).toHaveLength(
+      1,
+    );
+  });
+
+  it("an unknown outcome keeps the intent: panel/filter locked, repeat reuses the same request_id", async () => {
+    vi.spyOn(crypto, "randomUUID").mockReturnValueOnce(requestA).mockReturnValueOnce(requestB);
+    let posts = 0;
+    const fetcher = backend({
+      "GET /api/v1/admin/withdrawal-requests": twoRows(),
+      [`POST /api/v1/admin/withdrawal-requests/${id}/approval`]: () =>
+        ++posts === 1
+          ? Response.json({ error: { code: "WITHDRAWAL_APPROVAL_UNAVAILABLE" } }, { status: 503 })
+          : Response.json({ data: { id, approved: true }, meta: { idempotent_replay: true } }),
+    });
+    render(<WithdrawalConsole token="synthetic.aal2" verifyMfa={vi.fn()} />);
+    fireEvent.click(await confirmApproval());
+    const repeat = await screen.findByRole("button", { name: "Repetir mesma solicitação" });
+    expect(screen.getByText(/Resultado incerto/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Detalhes" })).toBeDisabled();
+    expect(screen.getByLabelText("Situação")).toBeDisabled();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Confirmar aprovação" })).toBeDisabled();
+    fireEvent.click(repeat);
+    expect(await screen.findByText(/Aprovação registrada/)).toBeInTheDocument();
+    const calls = sent(fetcher, "POST", `/api/v1/admin/withdrawal-requests/${id}/approval`);
+    expect(calls.map((call) => call.body.request_id)).toEqual([requestA, requestA]);
+    expect(screen.getByRole("button", { name: "Detalhes" })).not.toBeDisabled();
+  });
+
+  it("repeat after a re-verification uses the fresh token kept by the action", async () => {
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(requestA);
+    const verifyMfa = vi.fn().mockResolvedValue("synthetic.fresh");
+    let posts = 0;
+    const fetcher = backend({
+      "GET /api/v1/admin/withdrawal-requests": twoRows(),
+      [`POST /api/v1/admin/withdrawal-requests/${id}/approval`]: () => {
+        posts++;
+        if (posts === 1) return stale();
+        if (posts === 2)
+          return Response.json({ error: { code: "X_UNAVAILABLE" } }, { status: 503 });
+        return Response.json({ data: { id, approved: true }, meta: { idempotent_replay: true } });
+      },
+    });
+    render(<WithdrawalConsole token="synthetic.aal2" verifyMfa={verifyMfa} />);
+    fireEvent.click(await confirmApproval());
+    fireEvent.change(await screen.findByLabelText("Código atual do autenticador"), {
+      target: { value: "654321" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar e repetir" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Repetir mesma solicitação" }));
+    expect(await screen.findByText(/Aprovação registrada/)).toBeInTheDocument();
+    const calls = sent(fetcher, "POST", `/api/v1/admin/withdrawal-requests/${id}/approval`);
+    expect(calls.map((call) => call.authorization)).toEqual([
+      "Bearer synthetic.aal2",
+      "Bearer synthetic.fresh",
+      "Bearer synthetic.fresh",
+    ]);
+    expect(new Set(calls.map((call) => call.body.request_id))).toEqual(new Set([requestA]));
+  });
+
+  it("Conciliar shows its errors and offers the fresh-MFA form instead of swallowing them", async () => {
+    const verifyMfa = vi.fn().mockResolvedValue("synthetic.fresh");
+    let reconciles = 0;
+    const fetcher = backend({
+      "GET /api/v1/admin/withdrawal-requests": queue(queueItem("uncertain")),
+      [`GET /api/v1/admin/withdrawal-requests/${id}/execution`]: Response.json({
+        data: {
+          id: requestA,
+          withdrawal_request_id: id,
+          request_id: requestA,
+          state: "uncertain",
+          environment: "test",
+          source: { currency: "USDT", amount: "199.900000" },
+          provider_transaction_reference: null,
+          provider_refusal_code: null,
+          provider_completed: false,
+          recovery_required: true,
+          manual_review_required: false,
+          onchain_delivery_verified: false,
+          delivery_status: null,
+          delivery_reason: null,
+          delivered_amount: null,
+          refused_transfer_found: false,
+          delivery_pending_reason: null,
+        },
+      }),
+      [`POST /api/v1/admin/withdrawal-requests/${id}/execution/reconcile`]: () =>
+        ++reconciles === 1
+          ? Response.json({ error: { code: "WITHDRAWAL_OPERATOR_MFA_REQUIRED" } }, { status: 403 })
+          : Response.json({
+              data: {
+                id: requestA,
+                withdrawal_request_id: id,
+                state: "provider_completed",
+                environment: "test",
+                delivery_status: "simulated",
+                delivery_reason: "SIMULATED: test",
+                recovery_required: false,
+              },
+            }),
+    });
+    render(<WithdrawalConsole token="synthetic.aal2" verifyMfa={verifyMfa} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Detalhes" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Conciliar/ }));
+    expect(await screen.findByText(/WITHDRAWAL_OPERATOR_MFA_REQUIRED/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Código atual do autenticador"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar e repetir" }));
+    expect(await screen.findByText(/Envio simulado/)).toBeInTheDocument();
+    const calls = sent(
+      fetcher,
+      "POST",
+      `/api/v1/admin/withdrawal-requests/${id}/execution/reconcile`,
+    );
+    expect(calls.map((call) => call.authorization)).toEqual([
+      "Bearer synthetic.aal2",
+      "Bearer synthetic.fresh",
+    ]);
+  });
+});
+
 describe("alerts screen", () => {
   it("renders operational alerts and uncertain/failed notifications", async () => {
     backend({
@@ -396,6 +559,15 @@ describe("dashboard", () => {
         meta: { has_more: false, next_cursor: null },
       }),
       "GET /api/v1/admin/operational-alerts": alerts,
+      "GET /api/v1/admin/daily-reviews?day=2026-11-12": Response.json({
+        data: {
+          day: "2026-11-12",
+          reviewed: false,
+          reviewed_at: null,
+          has_activity: true,
+          environment: "test",
+        },
+      }),
     });
     render(
       <OperatorDashboard
@@ -404,6 +576,9 @@ describe("dashboard", () => {
         now={new Date("2026-11-13T15:00:00Z")}
       />,
     );
+    expect(
+      await screen.findByText(/Ontem \(2026-11-12\): revisão pendente com atividade/),
+    ).toBeInTheDocument();
     expect(await screen.findByText(/Envios de USDT: desligada/)).toBeInTheDocument();
     expect(screen.getByText(/Novas operações: ligada/)).toBeInTheDocument();
     expect(await screen.findByText("Aguardando aprovação: 1")).toBeInTheDocument();

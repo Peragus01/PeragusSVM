@@ -176,6 +176,33 @@ export async function recordDailyReview(
   return data as unknown as DailyReview;
 }
 
+export interface DailyReviewStatus {
+  day: string;
+  reviewed: boolean;
+  reviewed_at: string | null;
+  has_activity: boolean;
+}
+/** Read-only review status of a São Paulo day (GET /v1/admin/daily-reviews?day=). */
+export async function getDailyReview(token: string, day: string, signal?: AbortSignal) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw validation();
+  const body = await operatorRequest(
+    token,
+    `v1/admin/daily-reviews?day=${day}`,
+    signal ? { signal } : {},
+  );
+  const data = body["data"];
+  if (
+    !record(data) ||
+    data["day"] !== day ||
+    typeof data["reviewed"] !== "boolean" ||
+    typeof data["has_activity"] !== "boolean" ||
+    !(data["reviewed_at"] === null || typeof data["reviewed_at"] === "string")
+  )
+    throw invalid();
+  sameMode(data["environment"]);
+  return data as unknown as DailyReviewStatus;
+}
+
 export type QueueState =
   | "pending_approval"
   | "approved"

@@ -2,6 +2,7 @@ import type { ComponentType, ReactNode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
+  search: {} as { operacao?: string },
   session: {
     status: "authenticated",
     identity: { user: { id: "operator" }, customer: null as null | { id: string } },
@@ -16,7 +17,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/peragus/customer-session", () => ({ useCustomerSession: () => mocks.session }));
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => (options: unknown) => ({ options }),
+  createFileRoute: () => (options: unknown) => ({ options, useSearch: () => mocks.search }),
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
 }));
 import { Route } from "@/routes/operador.estornos";

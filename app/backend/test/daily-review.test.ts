@@ -107,4 +107,30 @@ describe("daily review",()=>{
   const service=new DailyReviewService(pool,new Set([s.owner]),"test");
   await expect(service.review({id:s.owner,email:"c@example.test",assuranceLevel:"aal2",mfaVerifiedAt:Math.floor(Date.now()/1000)},day)).rejects.toMatchObject({code:"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"});
  });
+
+ it("GET ?day= is read-only (allowlist + AAL2, no fresh MFA) and reports reviewed/has_activity without PII",async()=>{
+  const url="/v1/admin/daily-reviews",today=await spDay(0),tomorrow=await spDay(1),day=await spDay(-5),quiet=await spDay(-6);
+  await activityOn(day);
+  const outsider=await appFor({id:randomUUID(),email:"x@example.test",assuranceLevel:"aal2",mfaVerifiedAt:Math.floor(Date.now()/1000)});
+  const r1=await outsider.inject({method:"GET",url:`${url}?day=${day}`,headers});
+  expect(r1.statusCode).toBe(403);expect(r1.json().error.code).toBe("WITHDRAWAL_OPERATOR_REQUIRED");
+  const aal1=await appFor({id:operatorId,email:"operator@example.test",assuranceLevel:"aal1"});
+  const r2=await aal1.inject({method:"GET",url:`${url}?day=${day}`,headers});
+  expect(r2.statusCode).toBe(403);expect(r2.json().error.code).toBe("WITHDRAWAL_OPERATOR_MFA_REQUIRED");
+  expect((await aal1.inject({method:"GET",url:`${url}?day=${day}`})).statusCode).toBe(401);
+  // A stale TOTP is enough for this read.
+  const app=await appFor(fresh(Math.floor(Date.now()/1000)-3600));
+  const before=await app.inject({method:"GET",url:`${url}?day=${day}`,headers});
+  expect(before.statusCode).toBe(200);expect(before.headers["cache-control"]).toBe("no-store");
+  expect(before.json()).toEqual({data:{day,reviewed:false,reviewed_at:null,has_activity:true,environment:"test"}});
+  expect((await app.inject({method:"GET",url:`${url}?day=${quiet}`,headers})).json().data).toMatchObject({reviewed:false,has_activity:false});
+  expect((await app.inject({method:"GET",url:`${url}?day=${today}`,headers})).statusCode).toBe(200);
+  await (await appFor(fresh())).inject({method:"POST",url,headers,payload:{day,note:"Nota sintética"}});
+  const after=(await app.inject({method:"GET",url:`${url}?day=${day}`,headers})).json().data;
+  expect(after).toMatchObject({day,reviewed:true,has_activity:true});
+  expect(Number.isFinite(Date.parse(after.reviewed_at))).toBe(true);
+  expect(JSON.stringify(after)).not.toMatch(/reviewed_by|note|Nota|@|[0-9a-f]{8}-[0-9a-f]{4}/i);
+  for(const bad of [`?day=${tomorrow}`,"?day=2026-02-30","?day=yesterday","",`?day=${day}&x=1`,"?day=2025-12-31"])
+   expect((await app.inject({method:"GET",url:`${url}${bad}`,headers})).statusCode,bad).toBe(400);
+ });
 });

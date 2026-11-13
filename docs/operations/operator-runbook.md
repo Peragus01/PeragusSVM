@@ -12,9 +12,9 @@ alternativa de contingência no [Apêndice A](#apêndice-a--api-direta-contingê
 
 | Tela | Rota | Para quê | API usada |
 |---|---|---|---|
-| Painel | `/operador` | Estado das chaves, lembrete da revisão de ontem, saques/estornos abertos por situação, alertas de alta gravidade | `GET runtime-controls`, `GET withdrawal-requests?state=all`, `GET refund-requests?state=all`, `GET operational-alerts?severity=high` |
+| Painel | `/operador` | Estado das chaves, estado da revisão de ontem, saques/estornos abertos por situação, alertas de alta gravidade | `GET runtime-controls`, `GET daily-reviews?day=<ontem>`, `GET withdrawal-requests?state=all`, `GET refund-requests?state=all`, `GET operational-alerts?severity=high` |
 | Controles | `/operador/controles` | Ligar/desligar `new_operations`, `usdt_sends`, `onboarding` (motivo obrigatório + confirmação) | `GET/PUT /v1/admin/runtime-controls` |
-| Revisão diária | `/operador/revisao-diaria` | Registrar a revisão de um dia **encerrado** (São Paulo) | `POST /v1/admin/daily-reviews` |
+| Revisão diária | `/operador/revisao-diaria` | Registrar a revisão de um dia **encerrado** (São Paulo) | `POST /v1/admin/daily-reviews` (consulta: `GET ?day=`) |
 | Saques | `/operador/saques` | Fila; **Aprovar** (motivo), **Executar** (confirmação; em produção digitar `LIVE_USDT_SEND`), **Detalhes** (verificação de entrega, motivo de revisão, link do explorer, **Conciliar**) | `GET withdrawal-requests`, `POST .../approval`, `GET/POST .../execution`, `POST .../execution/reconcile` |
 | Estornos | `/operador/estornos` | Decisão de estorno pela operação, análise de pedidos do cliente, registro da devolução com a referência da OZAV, contagem do prazo de 24 h | `POST /v1/admin/operations/:id/refund-decision`, `GET refund-requests`, `POST .../decision`, `POST .../completion` |
 | Alertas | `/operador/alertas` | Alertas operacionais e notificações por e-mail `uncertain`/`failed` | `GET /v1/admin/operational-alerts`, `GET /v1/admin/operator-notifications` |
@@ -26,7 +26,9 @@ Como o console se comporta:
 - Se o backend pedir MFA (`WITHDRAWAL_OPERATOR_MFA_REQUIRED`), a tela mostra o campo do código (e, na primeira vez,
   **Configurar autenticador**). Ações de dinheiro, chaves e revisão diária exigem TOTP de no máximo 300 s: se o backend
   responder `OPERATOR_MFA_STALE`, a tela pede um **código atual** e repete **uma única vez** a mesma solicitação, com o
-  **mesmo `request_id`**. Um segundo `OPERATOR_MFA_STALE` é só exibido.
+  **mesmo `request_id`**. Um segundo `OPERATOR_MFA_STALE` é só exibido. Na fila de saques, enquanto uma aprovação ou
+  execução está em andamento ou sem resultado confirmado, as outras linhas, o filtro e o Cancelar ficam bloqueados; se
+  você sair da tela nesse estado, a próxima visita avisa qual saque conferir antes de qualquer nova ação.
 - Toda ação de dinheiro tem um passo de confirmação e usa um `request_id` novo por intenção. Se o resultado for incerto
   (rede/5xx), a tela oferece apenas **Repetir mesma solicitação** (mesma chave de idempotência), nunca uma nova.
 - Mensagens em português; o código do backend aparece em uma linha secundária ("Código: ...").
@@ -73,8 +75,8 @@ bloqueadas** (`DAILY_REVIEW_REQUIRED`) e o scanner envia o alerta `daily_review_
 2. Confirme que, para o dia: BRL pago ↔ transfer 1 ↔ transfer 2 ↔ transação on-chain fecham; nenhum `needs_review`,
    `refund_pending` ou alerta de Pix aberto sem tratamento; nenhuma notificação `failed`/`uncertain` sem explicação.
 3. Registre na tela: o dia vem preenchido com **ontem**; **Observação (opcional)** até 500 caracteres → **Registrar revisão**.
-   É idempotente por dia: repetir mostra quando a revisão foi feita. A API não oferece consulta de revisões; para saber se
-   ontem já foi revisado, registre ontem de novo (o painel lembra disso). Dia sem atividade não exige revisão.
+   É idempotente por dia: repetir mostra quando a revisão foi feita. O **Painel** mostra o estado de ontem (revisada em …,
+   revisão pendente com atividade, ou sem atividade) via `GET /v1/admin/daily-reviews?day=`. Dia sem atividade não exige revisão.
 
 ## 3. Aprovar e executar um envio de USDT — `/operador/saques`
 
