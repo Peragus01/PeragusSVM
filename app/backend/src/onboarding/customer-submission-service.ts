@@ -89,7 +89,7 @@ export class CustomerSubmissionService {
     if (caps.environment !== this.mode || !["customers", "custody"].every(value => caps.entitlements.includes(value))
       || !caps.scopes.includes("customers:write")) throw new SubmissionError("ONBOARDING_CAPABILITY_REQUIRED");
     // Kill switch onboarding: checked right before every POST, including retries of a pending request.
-    await this.repository.claimAttempt?.(record);
+    await this.repository.claimAttempt(record);
     const result = await this.provider.createOnboardingCustomer(payload, record.idempotencyKey);
     if (result.externalRef !== payload.external_ref || result.email !== payload.email || result.verificationMode !== "full") throw new SubmissionError("ONBOARDING_CONFLICT");
     return { data: submissionView(await this.repository.complete(record, result), this.mode), replayed: false };

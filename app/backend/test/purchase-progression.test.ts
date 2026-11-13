@@ -213,6 +213,17 @@ describe("PurchaseProgression.applyTransferObservation (GET is the only source o
   expect(await statusOf(f.p.id)).toBe("expired");
   expect((await eventsOf(f.p.id)).at(-1)).toMatchObject({from_status:"awaiting_pix",to_status:"expired",reason:`PIX_EXPIRED_UNPAID: deadline=${deadline}`});
  });
+ it("final review I9: instructions hide 5 min before the deadline; an unpaid GET expires only 10 min after it",async()=>{
+  const deadline=new Date(Date.now()+8*60_000).toISOString(),f=await fixture({facility:{...LOCKED,deadlineAt:deadline}});
+  const graced=new PurchaseProgression({pool,mode:"live",operations:purchases,withdrawals:new PostgresCustomerWithdrawalRequestRepository(pool,"live"),
+   refunds,pix:{repo:new PostgresCustomerPixRepository(pool,"live"),provider:f.provider},expiryGraceMs:10*60_000,instructionsMarginMs:5*60_000});
+  const at=(ms:number)=>{vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(Date.parse(deadline)+ms);};
+  const margin=new CustomerPixService(new PostgresCustomerPixRepository(pool,"live"),f.provider,"live",purchases,{instructionsMarginMs:5*60_000});
+  at(-6*60_000);expect((await margin.read(f.s.customer.id,f.pixId)).payment_instructions?.expires_at).toBe(new Date(Date.parse(deadline)-5*60_000).toISOString());
+  at(-4*60_000);expect((await margin.read(f.s.customer.id,f.pixId)).payment_instructions).toBeNull();
+  at(5*60_000);await graced.refreshPix(f.s.customer.id,f.pixId);expect(await statusOf(f.p.id)).toBe("awaiting_pix");
+  at(10*60_000+1);await graced.refreshPix(f.s.customer.id,f.pixId);expect(await statusOf(f.p.id)).toBe("expired");
+ });
  it("does not expire when the GET shows the payment arrived",async()=>{
   const deadline=new Date(Date.now()+60000).toISOString(),f=await fixture({facility:{...LOCKED,deadlineAt:deadline}});
   vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(Date.parse(deadline)+1);

@@ -234,4 +234,13 @@ describe("Pix eligibility follows the configured purchase limits",()=>{
   expect(await new PostgresCustomerPixRepository(pool,"test",{minCents:5001n,maxCents:100000n}).context(s.customer.id,p.data.id,"create")).toBeNull();
   expect(()=>new PostgresCustomerPixRepository(pool,"test",{minCents:0n,maxCents:1n})).toThrow("Invalid purchase limits");
  });
+ it("final review I3: a reserved, never-claimed row is claimed by the next create with the same request_id (no endless replay)",async()=>{
+  const f=await fixture();
+  const context=(await f.pixRepo.context(f.s.customer.id,f.p.data.id,"create"))!;
+  const reserved=await f.pixRepo.reserve(f.s.customer.id,f.requestId,context,"ozav_wal_testmanaged");
+  expect(reserved.attempted).toBe(false);
+  const created=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+  expect(created.replayed).toBe(false);expect(created.data.id).toBe(reserved.id);expect(f.stats().posts).toBe(1);
+  expect((await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id)).replayed).toBe(true);expect(f.stats().posts).toBe(1);
+ });
 });
