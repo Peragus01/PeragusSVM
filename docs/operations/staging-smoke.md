@@ -67,8 +67,12 @@ conversão. 8. Registro do pedido de saque, espera de `awaiting_approval` e **ap
 (`SANDBOX_ONLY`), respeitando o intervalo mínimo. 10. Conciliação até a entrega `verified` ou `simulated`.
 11. Imprime o estado final da operação, o resultado da conciliação e os ids.
 
-**Sempre** (bloco `finally`) as chaves que o script ligou são desligadas de novo, mesmo após falha. Se isso não for
-possível (por exemplo MFA expirada sem terminal), o script avisa e sai com erro: desligue pelo console do operador.
+**Sempre** as chaves que o script ligou são desligadas de novo: após falha, após estouro de tempo de uma etapa e
+após Ctrl+C/SIGTERM (o primeiro sinal aborta a jornada sem enviar novas requisições e restaura as chaves; um segundo
+sinal sai na hora com aviso, e nesse caso confira as chaves no console). Uma etapa que estoura o tempo também aborta
+tudo: nenhuma aprovação ou execução tardia é enviada depois da falha. Chaves que já estavam ligadas não são tocadas.
+Se a restauração não for possível (por exemplo MFA expirada sem terminal), o script avisa e sai com erro: desligue pelo
+console do operador. No Windows o Ctrl+C no terminal funciona; `taskkill` não entrega sinal ao Node.
 
 ## Se falhar
 

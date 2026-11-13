@@ -87,6 +87,7 @@ describe("staging smoke guard", () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
     expect(url).toBe(`${BASE}/v1/me/purchase-capabilities`);
     expect(init.headers.authorization).toBe("Bearer tok");
+    expect((init as unknown as { redirect: string }).redirect).toBe("error");
   });
 
   it.each([

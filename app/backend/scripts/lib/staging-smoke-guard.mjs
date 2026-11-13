@@ -53,6 +53,7 @@ export async function assertTargetIsTest({ apiBase, customerToken, fetchImpl = f
     const response = await fetchImpl(`${base}/v1/me/purchase-capabilities`, {
       method: "GET",
       headers: { authorization: `Bearer ${customerToken}`, accept: "application/json" },
+      redirect: "error",
       signal: AbortSignal.timeout(timeoutMs),
     });
     status = response.status;

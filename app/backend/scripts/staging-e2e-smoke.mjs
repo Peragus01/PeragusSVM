@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { assertStagingSafe, normalizeBase, SmokeGuardError } from "./lib/staging-smoke-guard.mjs";
+import { runWithSwitches, withDeadline } from "./lib/staging-smoke-switches.mjs";
 
 const env = process.env;
 const args = new Set(process.argv.slice(2));
@@ -25,12 +26,22 @@ class StepError extends Error {
     this.step = step;
   }
 }
+let currentStep = "inicio";
+// Shared abort flag, set on SIGINT/SIGTERM and on a step timeout. Once set, no new request is
+// sent (only the switch restoration bypasses it, with noAbort) and in-flight requests are cancelled.
+const abortController = new AbortController();
+const aborted = () => abortController.signal.aborted;
+const abortedPromise = new Promise((_, reject) =>
+  abortController.signal.addEventListener("abort", () => reject(new StepError(currentStep, "interrompido (sinal ou timeout)")), { once: true }),
+);
+abortedPromise.catch(() => {});
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (line) => console.log(line);
 
 // ---- HTTP -----------------------------------------------------------------------------------
 let API = "";
-async function http(step, method, path, { token, body, ok = [200, 201], allow = [] } = {}) {
+async function http(step, method, path, { token, body, ok = [200, 201], allow = [], noAbort = false } = {}) {
+  if (!noAbort && aborted()) throw new StepError(step, "execucao abortada: nenhuma nova requisicao sera enviada");
   let response;
   try {
     response = await fetch(`${API}${path}`, {
@@ -41,7 +52,8 @@ async function http(step, method, path, { token, body, ok = [200, 201], allow = 
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      redirect: "error",
+      signal: noAbort ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), abortController.signal]),
     });
   } catch {
     throw new StepError(step, `falha de rede ou timeout em ${method} ${path}`);
@@ -81,7 +93,15 @@ async function askLine(question) {
   rl._writeToOutput = (text) => {
     if (text.includes(question)) out.write(text);
   };
-  const answer = await new Promise((resolve) => rl.question(question, resolve));
+  // Ctrl+C inside the prompt is forwarded as a process signal so the restoration path runs.
+  rl.on("SIGINT", () => {
+    rl.close();
+    process.emit("SIGINT");
+  });
+  const answer = await new Promise((resolve) => {
+    rl.once("close", () => resolve(""));
+    rl.question(question, resolve);
+  });
   rl.close();
   out.write("\n");
   return answer.trim();
@@ -117,7 +137,9 @@ async function operatorHttp(step, method, path, options = {}) {
 async function poll(step, fn, { timeoutMs = STEP_TIMEOUT_MS, describe = "condicao" } = {}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    if (aborted()) throw new StepError(step, "execucao abortada");
     const value = await fn();
+    if (aborted()) throw new StepError(step, "execucao abortada");
     if (value) return value;
     if (Date.now() + POLL_MS > deadline) throw new StepError(step, `timeout aguardando ${describe} (${Math.round(timeoutMs / 1000)}s)`);
     await sleep(POLL_MS);
@@ -129,40 +151,25 @@ const saoPauloDay = (offsetDays) => {
   return parts; // YYYY-MM-DD
 };
 
-let currentStep = "inicio";
-// Every step is raced against a deadline. A timeout becomes a StepError (not process.exit),
-// so the finally in main() still turns the switches back OFF.
+// Every step races a deadline. A timeout sets the shared abort flag FIRST, so no late request
+// (approval, execution, ...) can land after the failure is reported, then becomes a StepError
+// (not process.exit) so the switches are still restored.
 async function step(name, fn, timeoutMs = STEP_TIMEOUT_MS + 60000) {
   currentStep = name;
   log(`[etapa] ${name}`);
-  let timer;
-  const deadline = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new StepError(name, `estourou o tempo limite da etapa (${Math.round(timeoutMs / 1000)}s)`)), timeoutMs);
-  });
-  try {
-    return await Promise.race([fn(), deadline]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return withDeadline(
+    () => Promise.race([fn(), abortedPromise]),
+    timeoutMs,
+    () => new StepError(name, `estourou o tempo limite da etapa (${Math.round(timeoutMs / 1000)}s)`),
+    () => abortController.abort(),
+  );
 }
 
 // ---- runtime switches -------------------------------------------------------------------------
-const turnedOn = [];
 async function setSwitch(stepName, key, enabled, reason) {
-  const result = await operatorHttp(stepName, "PUT", "/v1/admin/runtime-controls", { body: { key, enabled, reason }, ok: [200] });
+  // Restoration (enabled=false) bypasses the abort flag so it works after a signal or timeout.
+  const result = await operatorHttp(stepName, "PUT", "/v1/admin/runtime-controls", { body: { key, enabled, reason }, ok: [200], noAbort: !enabled });
   log(`  chave ${key} enabled=${result.json?.data?.enabled} changed=${result.json?.data?.changed}`);
-}
-
-async function turnSwitchesOff() {
-  for (const key of [...turnedOn].reverse()) {
-    try {
-      await setSwitch(`desligar chave ${key}`, key, false, "Fim do smoke de staging: restaurando chave desligada");
-      turnedOn.splice(turnedOn.indexOf(key), 1);
-    } catch (error) {
-      console.error(`ATENCAO: nao foi possivel desligar a chave ${key} (${error.message}). Desligue-a no console do operador.`);
-      process.exitCode = 1;
-    }
-  }
 }
 
 // ---- onboarding ------------------------------------------------------------------------------
@@ -226,31 +233,27 @@ async function onboarding(token) {
 }
 
 // ---- main ------------------------------------------------------------------------------------
-async function journey() {
-  const customer = customerToken();
-  const ids = {};
-
+async function preflight() {
   await step("guarda (modo do alvo)", async () => {
     API = normalizeBase(env.STAGING_API_BASE_URL);
-    await assertStagingSafe({ env, apiBase: env.STAGING_API_BASE_URL, customerToken: customer });
+    await assertStagingSafe({ env, apiBase: env.STAGING_API_BASE_URL, customerToken: customerToken() });
     log("  alvo confirmado: environment=test network=solana:devnet");
   });
   if (!readOperatorToken()) throw new StepError("entradas", "informe STAGING_OPERATOR_TOKEN (ou STAGING_OPERATOR_TOKEN_FILE)");
+}
 
-  await step("chaves de runtime: ler estado", async () => {
+async function readSwitchStates() {
+  return step("chaves de runtime: ler estado", async () => {
     const { json } = await operatorHttp("chaves de runtime: ler estado", "GET", "/v1/admin/runtime-controls", { ok: [200] });
-    const states = new Map((json?.data?.controls ?? []).map((c) => [c.key, c.enabled]));
-    ids.alreadyOn = SWITCHES.filter((k) => states.get(k) === true);
-    log(`  ja ligadas antes do smoke: ${ids.alreadyOn.join(",") || "nenhuma"}`);
+    const states = Object.fromEntries((json?.data?.controls ?? []).map((c) => [c.key, c.enabled]));
+    log(`  ja ligadas antes do smoke: ${SWITCHES.filter((k) => states[k] === true).join(",") || "nenhuma"}`);
+    return states;
   });
+}
 
-  await step("chaves de runtime: ligar onboarding, new_operations, usdt_sends", async () => {
-    for (const key of SWITCHES) {
-      if (ids.alreadyOn.includes(key)) continue;
-      turnedOn.push(key); // registered first so finally always tries to restore it
-      await setSwitch("chaves de runtime: ligar", key, true, "Smoke de staging ponta a ponta: ligando chave temporariamente");
-    }
-  });
+async function journey() {
+  const customer = customerToken();
+  const ids = {};
 
   await step("revisao diaria de ontem (se exigida)", async () => {
     const day = saoPauloDay(-1);
@@ -397,20 +400,53 @@ async function journey() {
   log(`RESULTADO: SUCESSO (quote=${ids.quote} purchase=${ids.purchase} pix=${ids.pix} withdrawal=${ids.withdrawal})`);
 }
 
+function report(error) {
+  if (error instanceof SmokeGuardError) console.error(`${error.message} [${error.code}]`);
+  else if (error instanceof StepError) console.error(`FALHA na etapa "${error.step}": ${error.message}`);
+  else console.error(`FALHA na etapa "${currentStep}": erro inesperado (${error?.name ?? "Error"})`);
+}
+
+let signalCount = 0;
+function onSignal(name) {
+  signalCount += 1;
+  if (signalCount > 1) {
+    console.error(`ATENCAO: segundo sinal (${name}): saindo sem terminar a restauracao. Confira e desligue as chaves onboarding/new_operations/usdt_sends no console do operador.`);
+    process.exit(130);
+  }
+  console.error(`Sinal ${name} recebido: abortando e desligando as chaves ligadas pelo smoke...`);
+  process.exitCode = 130;
+  abortController.abort();
+}
+process.on("SIGINT", () => onSignal("SIGINT"));
+process.on("SIGTERM", () => onSignal("SIGTERM"));
+
 async function main() {
   try {
-    await journey();
+    await preflight();
   } catch (error) {
-    if (error instanceof SmokeGuardError) console.error(`${error.message} [${error.code}]`);
-    else if (error instanceof StepError) console.error(`FALHA na etapa "${error.step}": ${error.message}`);
-    else console.error(`FALHA na etapa "${currentStep}": erro inesperado (${error?.name ?? "Error"})`);
+    report(error);
+    process.exitCode = process.exitCode || 1;
+    return;
+  }
+  const { failure, restoreFailures } = await runWithSwitches({
+    keys: SWITCHES,
+    getStates: readSwitchStates,
+    setSwitch: (key, enabled) =>
+      setSwitch(
+        enabled ? "chaves de runtime: ligar" : `desligar chave ${key}`,
+        key,
+        enabled,
+        enabled ? "Smoke de staging ponta a ponta: ligando chave temporariamente" : "Fim do smoke de staging: restaurando chave desligada",
+      ),
+    journey,
+  });
+  if (failure) {
+    report(failure);
+    process.exitCode = process.exitCode || 1;
+  }
+  for (const key of restoreFailures) {
+    console.error(`ATENCAO: nao foi possivel desligar a chave ${key}. Desligue-a no console do operador.`);
     process.exitCode = 1;
-  } finally {
-    if (turnedOn.length) {
-      currentStep = "desligar chaves";
-      log("[etapa] desligar chaves ligadas pelo smoke");
-      await turnSwitchesOff();
-    }
   }
 }
 
