@@ -73,7 +73,7 @@ function setup(responses: OzavResponse[]) {
     };
   return {
     client: new OzavClient({
-      apiKey,
+      mode: "test", apiKey,
       writeTransport,
       wait: async (milliseconds) => {
         delays.push(milliseconds);
@@ -207,5 +207,38 @@ describe("OZAV sandbox write client", () => {
       metadata: {},
     })).rejects.toThrow("Invalid OZAV transfer input");
     expect(subject.requests).toHaveLength(0);
+  });
+});
+
+describe("createCustomerIndicativeQuote rate lock preview", () => {
+  const liveKey = "ozav_sk_live_fake_for_write_tests";
+  const run = async (mode: "test" | "live", facility: unknown, options?: { facilityPreview: boolean }) => {
+    const bodies: Record<string, unknown>[] = [];
+    const client = new OzavClient({
+      mode,
+      apiKey: mode === "live" ? liveKey : apiKey,
+      attempts: 1,
+      writeTransport: async (request) => {
+        bodies.push(request.body);
+        return { statusCode: 201, body: { ...quoteResponse, ...(facility === undefined ? {} : { facility }) } };
+      },
+    });
+    const quote = await client.createCustomerIndicativeQuote("ozav_cus_test", "500.00", undefined, options);
+    return { quote, bodies };
+  };
+  it("sends facility_preview only when asked and returns terms_version", async () => {
+    const asked = await run("live", { terms_version: "2.0", capacity_guaranteed: false }, { facilityPreview: true });
+    expect(asked.bodies[0]).toMatchObject({ facility_preview: true });
+    expect(asked.quote.facility).toEqual({ termsVersion: "2.0" });
+    const plain = await run("live", { terms_version: "2.0" });
+    expect(plain.bodies[0]).not.toHaveProperty("facility_preview");
+    expect(plain.quote.facility).toBeUndefined();
+  });
+  it("treats a missing facility block as unavailable, not as an error", async () => {
+    const r = await run("live", undefined, { facilityPreview: true });
+    expect(r.quote.facility).toBeUndefined();
+  });
+  it("never sends facility_preview with a test key", async () => {
+    await expect(run("test", { terms_version: "2.0" }, { facilityPreview: true })).rejects.toThrow();
   });
 });

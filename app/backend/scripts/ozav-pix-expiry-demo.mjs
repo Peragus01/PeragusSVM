@@ -232,6 +232,7 @@ function createContext() {
   );
   const client = new OzavClient({
     apiKey: required(env.OZAV_API_KEY, "OZAV_API_KEY"),
+    mode: "test",
   });
 
   const reserveGate =

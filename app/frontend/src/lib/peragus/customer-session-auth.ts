@@ -89,6 +89,11 @@ export function parseTokens(value: Record<string, unknown>): AuthTokens {
     expires_at: Date.now() + value["expires_in"] * 1000,
   };
 }
+export async function refreshSession(refreshToken: string): Promise<AuthTokens> {
+  return parseTokens(
+    await supabaseAuth("token?grant_type=refresh_token", { refresh_token: refreshToken }),
+  );
+}
 export async function fetchIdentity(
   token: string,
   signal?: AbortSignal,
@@ -149,4 +154,25 @@ export async function requestPasswordRecovery(email: string) {
 }
 export async function completePasswordRecovery(accessToken: string, password: string) {
   await supabaseAuth("user", { password }, "PUT", accessToken);
+}
+/**
+ * Asks the backend whether this account (AAL1 is enough) is an allowlisted operator.
+ * Fails closed: any error, non-2xx answer or unexpected body means "not an operator".
+ */
+export async function fetchOperatorStatus(token: string, signal?: AbortSignal): Promise<boolean> {
+  try {
+    const response = await fetch("/api/v1/admin/operator-status", {
+      method: "GET",
+      headers: { Accept: "application/json", Authorization: "Bearer " + token },
+      cache: "no-store",
+      credentials: "same-origin",
+      redirect: "error",
+      ...(signal ? { signal } : {}),
+    });
+    if (!response.ok) return false;
+    const body = (await response.json()) as { data?: { operator?: unknown } } | null;
+    return body?.data?.operator === true;
+  } catch {
+    return false;
+  }
 }

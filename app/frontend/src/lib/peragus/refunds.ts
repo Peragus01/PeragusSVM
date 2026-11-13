@@ -1,3 +1,5 @@
+import { notifyLegalRequired } from "./legal-acceptance";
+import { moneyMode, type MoneyMode } from "./config";
 export type RefundState = "pending_review" | "approved" | "rejected" | "refund_recorded";
 export interface RefundRequest {
   id: string;
@@ -12,7 +14,7 @@ export interface RefundRequest {
   returned_amount: { currency: "BRL"; amount: string } | null;
   partial_refund: boolean | null;
   refund_recorded_at: string | null;
-  environment: "test";
+  environment: MoneyMode;
   record_only: true;
   refund_execution_automated: false;
   provider_verified: false;
@@ -53,6 +55,10 @@ export function refundErrorMessage(code: string) {
     REFUND_IDEMPOTENCY_CONFLICT:
       "Os dados diferem de um registro anterior. Consulte o pedido antes de continuar.",
     WITHDRAWAL_OPERATOR_MFA_REQUIRED: "Confirme o código do autenticador para acessar a análise.",
+    OPERATOR_MFA_STALE:
+      "Por segurança, confirme um código atual do autenticador para concluir esta ação.",
+    REFUND_WITHDRAWAL_IN_PROGRESS:
+      "A retirada desta operação já foi aprovada ou iniciada; o estorno não pode ser decidido.",
     AUTH_REQUIRED: "Entre novamente para continuar.",
     VALIDATION_ERROR:
       "Confira o motivo informado; use uma única linha com pelo menos 10 caracteres.",
@@ -90,7 +96,7 @@ function parseRefund(
     typeof value["reason"] !== "string" ||
     !money(value["requested_amount"]) ||
     !(value["returned_amount"] === null || money(value["returned_amount"])) ||
-    value["environment"] !== "test" ||
+    value["environment"] !== moneyMode() ||
     value["record_only"] !== true ||
     value["refund_execution_automated"] !== false ||
     value["provider_verified"] !== false ||
@@ -108,6 +114,9 @@ function parseRefund(
     throw new RefundError("INVALID_RESPONSE", 200);
   return value as unknown as RefundRequest | OperatorRefund;
 }
+/** Validates an operator refund record (same checks as the list), bound to its id. */
+export const parseOperatorRefund = (value: unknown, id: string) =>
+  parseRefund(value, true, { id }) as OperatorRefund;
 async function call(
   token: string,
   path: string,
@@ -133,6 +142,7 @@ async function call(
     const body: unknown = await response.json();
     if (!response.ok) {
       const code = record(body) && record(body["error"]) ? body["error"]["code"] : null;
+      notifyLegalRequired(code);
       throw new RefundError(
         typeof code === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(code)
           ? code

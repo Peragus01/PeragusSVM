@@ -99,7 +99,7 @@ function Footer() {
       </div>
       <div className="footer-program">
         <span>DEVNET PROGRAM</span>
-        <a href={explorerAddress(PROGRAM_ID)} target="_blank" rel="noreferrer">
+        <a href={explorerAddress(PROGRAM_ID, "test")} target="_blank" rel="noreferrer">
           <code>{short(PROGRAM_ID, 9)}</code>
           <ExternalLink className="size-3" />
         </a>

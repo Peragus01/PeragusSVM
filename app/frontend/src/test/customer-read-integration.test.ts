@@ -178,3 +178,70 @@ describe("customer read client", () => {
     });
   });
 });
+
+describe("on-chain delivery evidence follows the backend-reported mode (Task 11)", () => {
+  const signature = "5".repeat(88);
+  const liveOperation = (explorer_url: string | null) => ({
+    id,
+    environment: "live",
+    real_money: true,
+    onchain_delivery_verified: true,
+    mainnet_execution: true,
+    delivered_target: { currency: "USDT", amount: "199.950000" },
+    delivery_simulated: false,
+    explorer_url,
+  });
+  const page = (item: unknown) =>
+    json({ data: [item], meta: { has_more: false, next_cursor: null } });
+  afterEach(() => vi.unstubAllEnvs());
+  it("accepts a verified live delivery with a mainnet-beta explorer link", async () => {
+    vi.stubEnv("VITE_PERAGUS_MONEY_MODE", "live");
+    const item = liveOperation(`https://explorer.solana.com/tx/${signature}?cluster=mainnet-beta`);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(page(item));
+    expect((await getCustomerOperations(token)).data[0]).toMatchObject({
+      onchain_delivery_verified: true,
+      delivered_target: { amount: "199.950000" },
+      explorer_url: item.explorer_url,
+    });
+  });
+  it("rejects an explorer link of another cluster, host or shape, and a verified claim without one", async () => {
+    vi.stubEnv("VITE_PERAGUS_MONEY_MODE", "live");
+    for (const url of [
+      `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+      `https://explorer.example.test/tx/${signature}?cluster=mainnet-beta`,
+      `https://explorer.solana.com/tx/not-a-signature?cluster=mainnet-beta`,
+      null,
+    ]) {
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(page(liveOperation(url)));
+      await expect(getCustomerOperations(token)).rejects.toMatchObject({
+        code: "INVALID_RESPONSE",
+      });
+    }
+  });
+  it("never accepts mainnet execution in test mode", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      page({
+        id,
+        environment: "test",
+        real_money: false,
+        onchain_delivery_verified: false,
+        mainnet_execution: true,
+        explorer_url: null,
+      }),
+    );
+    await expect(getCustomerOperations(token)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+  it("accepts a verified devnet delivery in test mode with a devnet link", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      page({
+        id,
+        environment: "test",
+        real_money: false,
+        onchain_delivery_verified: true,
+        mainnet_execution: false,
+        explorer_url: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+      }),
+    );
+    expect((await getCustomerOperations(token)).data).toHaveLength(1);
+  });
+});

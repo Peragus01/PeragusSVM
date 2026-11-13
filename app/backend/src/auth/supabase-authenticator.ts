@@ -34,15 +34,27 @@ export function createSupabaseAuthenticator(url: string, publishableKey: string,
     // Decode assurance ONLY after getUser accepted this exact bearer token at the
     // pinned Auth server. Never derive identity or role from an unverified JWT.
     let assuranceLevel: "aal2" | undefined;
+    let mfaVerifiedAt: number | undefined;
     try {
       const parts = token.split(".");
       if (parts.length === 3) {
         const claims = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8"));
         if (claims.sub === parsed.data.id && claims.iss === `${endpoint.origin}/auth/v1`
           && claims.aud === "authenticated" && claims.aal === "aal2"
-          && Number.isInteger(claims.exp) && claims.exp > Date.now()/1000) assuranceLevel = "aal2";
+          && Number.isInteger(claims.exp) && claims.exp > Date.now()/1000) {
+          assuranceLevel = "aal2";
+          // The most recent TOTP verification of this session (epoch seconds).
+          const totp = Array.isArray(claims.amr) ? claims.amr
+            .filter((entry: unknown) => entry && typeof entry === "object"
+              && (entry as {method?: unknown}).method === "totp"
+              && Number.isSafeInteger((entry as {timestamp?: unknown}).timestamp)
+              && (entry as {timestamp: number}).timestamp > 0)
+            .map((entry: {timestamp: number}) => entry.timestamp) : [];
+          if (totp.length) mfaVerifiedAt = Math.max(...totp);
+        }
       }
     } catch { /* Unknown assurance is never privileged. */ }
-    return { id: parsed.data.id, email: parsed.data.email, ...(assuranceLevel ? {assuranceLevel} : {}) };
+    return { id: parsed.data.id, email: parsed.data.email, emailConfirmedAt: parsed.data.email_confirmed_at, ...(assuranceLevel ? {assuranceLevel} : {}),
+      ...(mfaVerifiedAt !== undefined ? {mfaVerifiedAt} : {}) };
   };
 }

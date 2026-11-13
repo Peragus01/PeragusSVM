@@ -10,9 +10,22 @@ import {
   configured,
   supabaseAuth,
   parseTokens,
+  refreshSession,
   fetchIdentity,
+  fetchOperatorStatus,
   CustomerSessionError,
 } from "./customer-session-auth";
+import {
+  clearStoredSession,
+  loadStoredSession,
+  saveStoredSession,
+} from "./customer-session-storage";
+
+// Refresh this long before the access token expires; retry transient failures after 15 s.
+const refreshSkewMs = 60_000;
+const refreshRetryMs = 15_000;
+// Never schedule the proactive refresh sooner than this (short-lived tokens must not loop).
+export const refreshFloorMs = 10_000;
 
 const operatorMfaFriendlyName = "Peragus Operador";
 // GoTrue renders each QR module as SVG markup; keep a bounded limit that fits
@@ -45,12 +58,19 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
   const [identity, setIdentity] = useState<CustomerIdentity | null>(null);
   const [tokens, setTokens] = useState<AuthTokens | null>(null);
   const tokensRef = useRef<AuthTokens | null>(null);
+  // True until the one-time restore from sessionStorage finishes, so guards do not
+  // redirect to /login while a stored session is being validated.
+  const [restoring, setRestoring] = useState(true);
   const generation = useRef(0);
   const pending = useRef<AbortController | null>(null);
+  const refreshing = useRef<Promise<string | null> | null>(null);
+  const restoreStarted = useRef(false);
   const logout = useCallback(() => {
     const prior = tokensRef.current;
     generation.current++;
     pending.current?.abort();
+    refreshing.current = null;
+    clearStoredSession();
     tokensRef.current = null;
     setTokens(null);
     setIdentity(null);
@@ -62,6 +82,8 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     const turn = ++generation.current;
     pending.current?.abort();
+    refreshing.current = null;
+    clearStoredSession();
     const controller = new AbortController();
     pending.current = controller;
     setIdentity(null);
@@ -89,15 +111,75 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
       throw error;
     }
   }, []);
-  const reloadIdentity = useCallback(async (signal?: AbortSignal) => {
-    const current = tokensRef.current;
-    if (!current) throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
-    const who = await fetchIdentity(current.access_token, signal);
-    if (tokensRef.current === current && !signal?.aborted) setIdentity(who);
-  }, []);
+  // Single-flight refresh shared by the proactive timer, restore, 401 retries and any
+  // consumer. The refreshed token keeps whatever AAL Supabase returns (never cached/faked).
+  const refreshAccessToken = useCallback((): Promise<string | null> => {
+    if (refreshing.current) return refreshing.current;
+    const base = tokensRef.current;
+    if (!base) return Promise.resolve(null);
+    const turn = generation.current;
+    const flight: { promise: Promise<string | null> | null } = { promise: null };
+    flight.promise = (async (): Promise<string | null> => {
+      try {
+        const next = await refreshSession(base.refresh_token);
+        if (generation.current !== turn) return null;
+        // Fresh-MFA re-verify may have replaced the tokens meanwhile; keep the newer ones.
+        if (tokensRef.current !== base) return tokensRef.current?.access_token ?? null;
+        tokensRef.current = next;
+        setTokens(next);
+        // The refresh token rotated: persist it now, so a reload before the identity effect
+        // runs never restores the consumed (now invalid) refresh token.
+        const stored = loadStoredSession();
+        if (stored) saveStoredSession({ ...next, user: stored.user });
+        return next.access_token;
+      } catch (error) {
+        if (generation.current !== turn) return null;
+        const rejected = error instanceof CustomerSessionError && error.code === "AUTH_REJECTED";
+        // A rejected refresh token ends the session; a transient outage only does once expired.
+        if (rejected || base.expires_at <= Date.now()) logout();
+        return null;
+      } finally {
+        if (refreshing.current === flight.promise) refreshing.current = null;
+      }
+    })();
+    refreshing.current = flight.promise;
+    return flight.promise;
+  }, [logout]);
+  // Calls fetchIdentity and, on a 401, refreshes once and retries with the new token.
+  const identityWithRetry = useCallback(
+    async (signal?: AbortSignal) => {
+      const current = tokensRef.current;
+      if (!current) throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
+      try {
+        return await fetchIdentity(current.access_token, signal);
+      } catch (error) {
+        if (!(error instanceof CustomerSessionError) || error.code !== "IDENTITY_401") throw error;
+        const token = await refreshAccessToken();
+        if (!token) throw error;
+        return await fetchIdentity(token, signal);
+      }
+    },
+    [refreshAccessToken],
+  );
+  const reloadIdentity = useCallback(
+    async (signal?: AbortSignal) => {
+      const current = tokensRef.current;
+      if (!current) throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
+      const turn = generation.current;
+      const who = await identityWithRetry(signal);
+      if (tokensRef.current && generation.current === turn && !signal?.aborted) setIdentity(who);
+    },
+    [identityWithRetry],
+  );
   const enrollOperatorMfa = useCallback(async (): Promise<OperatorMfaEnrollment> => {
     const current = tokensRef.current;
     if (!current) throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
+    // MFA enrollment exists only for allowlisted operators (the backend decides).
+    if (!(await fetchOperatorStatus(current.access_token)))
+      throw new CustomerSessionError(
+        "OPERATOR_REQUIRED",
+        "Esta conta não é de operador; o cadastro de autenticador não está disponível.",
+      );
 
     // Supabase keeps an enrollment as an unverified factor when the page is
     // closed or the client rejects the one-time QR response. Starting over is
@@ -183,6 +265,8 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
     tokensRef.current = next;
     setTokens(next);
   }, []);
+  // A new challenge/verify also on an AAL2 session: GoTrue upserts the session's totp
+  // AMR claim (updated_at = now) and issues a token whose amr totp timestamp is fresh.
   const verifyOperatorMfa = useCallback(async (code: string) => {
     const current = tokensRef.current;
     const turn = generation.current;
@@ -230,49 +314,90 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
       throw new CustomerSessionError("SESSION_CHANGED", "A sessão mudou. Entre novamente.");
     tokensRef.current = next;
     setTokens(next);
+    return next.access_token;
   }, []);
-  // Refresh in memory only. Reloading the page requires login again; no bearer or
-  // refresh tokens are written to browser storage.
+  // Persist what is needed to restore the session in this tab (sessionStorage only).
+  useEffect(() => {
+    if (tokens && identity) saveStoredSession({ ...tokens, user: identity.user });
+  }, [tokens, identity]);
+  // One-time restore after a reload: refresh if (almost) expired, validate via /me,
+  // retrying once through a refresh on a 401.
+  useEffect(() => {
+    if (restoreStarted.current) return;
+    restoreStarted.current = true;
+    const saved = loadStoredSession();
+    if (!saved) {
+      setRestoring(false);
+      return;
+    }
+    const turn = generation.current;
+    const controller = new AbortController();
+    pending.current = controller;
+    tokensRef.current = {
+      access_token: saved.access_token,
+      refresh_token: saved.refresh_token,
+      expires_at: saved.expires_at,
+    };
+    let refreshed = false;
+    void (async () => {
+      try {
+        if (saved.expires_at - Date.now() <= refreshSkewMs) {
+          refreshed = true;
+          if (!(await refreshAccessToken()))
+            throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
+        }
+        const who = await identityWithRetry(controller.signal);
+        if (generation.current !== turn || !tokensRef.current) return;
+        setTokens(tokensRef.current);
+        setIdentity(who);
+        setStatus("authenticated");
+      } catch (error) {
+        if (generation.current !== turn) return; // logout()/login() already took over
+        tokensRef.current = null;
+        // A restore that already attempted a refresh leaves nothing reusable in storage.
+        if (
+          refreshed ||
+          (error instanceof CustomerSessionError && error.code.startsWith("IDENTITY_4"))
+        )
+          clearStoredSession();
+        setTokens(null);
+        setIdentity(null);
+        setStatus("unauthenticated");
+      } finally {
+        setRestoring(false);
+      }
+    })();
+  }, [refreshAccessToken, identityWithRetry]);
+  // Proactive refresh shortly before expiry; retry while a transient outage persists.
   useEffect(() => {
     if (!tokens) return;
     let active = true;
-    const timer = setInterval(async () => {
-      const current = tokensRef.current;
-      if (!current || current.expires_at - Date.now() > 90_000) return;
-      const turn = generation.current;
-      try {
-        const next = parseTokens(
-          await supabaseAuth("token?grant_type=refresh_token", {
-            refresh_token: current.refresh_token,
-          }),
-        );
-        if (active && turn === generation.current && tokensRef.current === current) {
-          tokensRef.current = next;
-          setTokens(next);
-        }
-      } catch {
-        if (
-          active &&
-          turn === generation.current &&
-          tokensRef.current === current &&
-          current.expires_at < Date.now()
-        )
-          logout();
-      }
-    }, 30000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = (delay: number) => {
+      timer = setTimeout(
+        () => {
+          void refreshAccessToken().then((next) => {
+            if (active && !next && tokensRef.current === tokens) schedule(refreshRetryMs);
+          });
+        },
+        Math.min(delay, 2_147_000_000),
+      );
+    };
+    schedule(Math.max(refreshFloorMs, tokens.expires_at - refreshSkewMs - Date.now()));
     return () => {
       active = false;
-      clearInterval(timer);
+      clearTimeout(timer);
     };
-  }, [tokens, logout]);
+  }, [tokens, refreshAccessToken]);
   return (
     <Context.Provider
       value={{
-        status,
+        status: restoring ? "loading" : status,
         identity,
         accessToken: tokens?.access_token ?? null,
         configured,
         login,
+        refreshAccessToken,
         logout,
         enrollOperatorMfa,
         verifyOperatorMfaEnrollment,

@@ -1,15 +1,50 @@
+import { LEGAL_URLS } from "@/lib/peragus/legal-acknowledgement";
 import { useEffect, useRef, useState } from "react";
 import { CustomerNotice } from "./customer-ui";
-import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
+import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
+import { moneyMode, useMoneyMode, type MoneyMode } from "@/lib/peragus/config";
+// The FX rate lock was refused or did not match: the operation failed and no Pix exists to pay.
+const LOCK_FAILURES: Record<string, string> = {
+  PIX_RATE_LOCK_UNAVAILABLE:
+    "A trava de câmbio não foi concedida. Nenhum Pix foi gerado; faça uma nova cotação.",
+  PIX_LOCKED_AMOUNT_MISMATCH:
+    "O valor travado não conferiu com a cotação aceita. Nenhum Pix foi gerado; faça uma nova cotação.",
+  PIX_RATE_LOCK_REQUIRED:
+    "Esta compra não tem uma trava de câmbio aceita. Nenhum Pix foi gerado; faça uma nova cotação.",
+};
+// Customer cancel before the Pix is confirmed (Política de Reembolso 7.1–7.2).
+const CANCEL_FAILURES: Record<string, string> = {
+  CANCEL_TOO_LATE_PAYMENT_RECEIVED:
+    "O pagamento Pix já foi recebido; o pedido não pode mais ser cancelado por desistência (Política de Reembolso, item 7.2).",
+  CANCEL_NOT_ALLOWED: "Este pedido não pode mais ser cancelado.",
+};
+/** Pix still open at OZAV until it expires: a payment before expiry withdraws the cancel (7.1). */
+export const CANCELLED_MESSAGE =
+  "Pedido cancelado — as instruções de pagamento foram ocultadas. Se você já pagou, a compra seguirá normalmente. O pedido continua ocupando sua vaga de compra até o Pix vencer; depois disso você poderá fazer uma nova compra.";
+/** No Pix was generated: the order ended at once and the purchase slot is free. */
+export const CANCELLED_NO_PIX_MESSAGE =
+  "Pedido cancelado. Nenhum Pix foi gerado; você já pode fazer uma nova compra.";
+/** The order already expired: nothing to pay; a late payment goes to the refund path. */
+export const CANCELLED_EXPIRED_MESSAGE =
+  "Pedido cancelado e encerrado. Não pague este Pix: um pagamento feito depois do encerramento será devolvido conforme a Política de Reembolso.";
+/** Final review I11: the message depends on what the cancel left behind. */
+export function cancelMessage(status: string | null | undefined, hasPix: boolean) {
+  if (status === "expired" || status === "failed")
+    return hasPix ? CANCELLED_EXPIRED_MESSAGE : CANCELLED_NO_PIX_MESSAGE;
+  return hasPix || status === "awaiting_pix" ? CANCELLED_MESSAGE : CANCELLED_NO_PIX_MESSAGE;
+}
+type Cancel = { purchase_id: string; status: string; cancel_requested_at: string };
 type Pix = {
   id: string;
   purchase_intent_id: string;
   request_id: string;
-  environment: "test";
-  real_money: false;
+  environment: MoneyMode;
+  real_money: boolean;
   operations_enabled: false;
   payment_confirmed: boolean;
   state: string;
+  /** Status of the purchase operation; failed/expired never show instructions. */
+  status?: string | null;
   source: { currency: "BRL"; amount: string };
   payment_instructions: {
     br_code: string;
@@ -18,6 +53,8 @@ type Pix = {
   } | null;
   subsequent_delivery: { started: false };
   recovery_required: boolean;
+  /** Set once the customer asked to cancel; instructions are never shown afterwards. */
+  cancel_requested_at?: string | null;
 };
 export function CustomerPix({
   token,
@@ -30,14 +67,19 @@ export function CustomerPix({
   amount: string;
   enabled: boolean;
 }) {
+  const test = useMoneyMode() === "test";
   const [pix, setPix] = useState<Pix | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [clock, setClock] = useState(Date.now());
+  const [cancel, setCancel] = useState<Cancel | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const lock = useRef(false);
   const epoch = useRef(0);
   const storageKey = `peragus-pix-v1:${purchaseId}`;
+  const cancelKey = `peragus-cancel-v1:${purchaseId}`;
   useEffect(() => {
     const generation = epoch;
     generation.current++;
@@ -45,6 +87,9 @@ export function CustomerPix({
     setBusy(false);
     setPix(null);
     setError("");
+    setCancel(null);
+    setConfirming(false);
+    setCancelling(false);
     const timer = setInterval(() => setClock(Date.now()), 1000);
     return () => {
       generation.current++;
@@ -73,8 +118,8 @@ export function CustomerPix({
       if (epoch.current !== turn) return;
       if (
         !data ||
-        data.environment !== "test" ||
-        data.real_money !== false ||
+        data.environment !== moneyMode() ||
+        data.real_money !== (moneyMode() === "live") ||
         data.operations_enabled !== false ||
         data.purchase_intent_id !== purchaseId ||
         data.request_id !== saved.requestId ||
@@ -88,7 +133,8 @@ export function CustomerPix({
       sessionStorage.setItem(storageKey, JSON.stringify({ ...saved, id: data.id }));
       setPix(data);
     } catch (e) {
-      if (epoch.current === turn) setError(journeyMessage(e));
+      if (epoch.current === turn)
+        setError((e instanceof JourneyError && LOCK_FAILURES[e.code]) || journeyMessage(e));
     } finally {
       if (epoch.current === turn) {
         lock.current = false;
@@ -96,7 +142,53 @@ export function CustomerPix({
       }
     }
   }
+  async function requestCancel() {
+    if (lock.current) return;
+    lock.current = true;
+    setCancelling(true);
+    setError("");
+    const turn = epoch.current;
+    try {
+      // One request_id per purchase: a repeated click or reload replays the same cancel.
+      const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+      const saved = sessionStorage.getItem(cancelKey);
+      const requestId = saved && uuid.test(saved) ? saved : crypto.randomUUID();
+      sessionStorage.setItem(cancelKey, requestId);
+      const data = await journeyRequest<Cancel>(
+        token,
+        `v1/me/purchase-intents/${purchaseId}/cancel`,
+        "POST",
+        { request_id: requestId },
+      );
+      if (epoch.current !== turn) return;
+      if (!data || data.purchase_id !== purchaseId || typeof data.cancel_requested_at !== "string")
+        throw Error();
+      setCancel(data);
+      setConfirming(false);
+    } catch (e) {
+      if (epoch.current === turn) {
+        setConfirming(false);
+        setError((e instanceof JourneyError && CANCEL_FAILURES[e.code]) || journeyMessage(e));
+      }
+    } finally {
+      if (epoch.current === turn) {
+        lock.current = false;
+        setCancelling(false);
+      }
+    }
+  }
+  const cancelled = Boolean(cancel || pix?.cancel_requested_at);
+  const closed = pix?.status === "failed" || pix?.status === "expired";
+  // Cancellable only before the Pix is confirmed (7.1); the server decides with a fresh GET.
+  const cancellable =
+    !cancelled &&
+    !pix?.payment_confirmed &&
+    (pix === null || pix.status === "accepted" || pix.status === "awaiting_pix");
   const instructions =
+    !closed &&
+    !cancelled &&
+    // Live: only a verified FX lock (operation awaiting_pix) may be paid.
+    (test || pix?.status === "awaiting_pix") &&
     pix?.state === "awaiting_payment" &&
     !pix.recovery_required &&
     !pix.payment_confirmed &&
@@ -108,32 +200,96 @@ export function CustomerPix({
     <section className="premium-review">
       <h3>Pagamento Pix</h3>
       <CustomerNotice kind="warning">
-        Somente teste · não pague com dinheiro real. A confirmação de teste não comprova entrega de
-        USDT.
+        {test
+          ? "Somente teste · não pague com dinheiro real. A confirmação de teste não comprova entrega de USDT."
+          : "A confirmação do pagamento não comprova a entrega de USDT na sua carteira."}
       </CustomerNotice>
+      <p className="customer-muted">
+        Antes de pagar, leia a{" "}
+        <a href={LEGAL_URLS.refund} target="_blank" rel="noopener noreferrer">
+          Política de Reembolso
+        </a>
+        .
+      </p>
       {!enabled && (
         <p className="customer-muted">A criação de Pix está desabilitada pelo servidor.</p>
       )}
       <button
         type="button"
         className="customer-button"
-        disabled={busy || (!enabled && !pix)}
+        disabled={busy || cancelling || (!enabled && !pix) || (cancelled && !pix)}
         onClick={() => void run()}
       >
-        {busy ? "Consultando…" : pix ? "Atualizar pagamento" : "Gerar ou recuperar Pix de teste"}
+        {busy
+          ? "Consultando…"
+          : pix
+            ? "Atualizar pagamento"
+            : test
+              ? "Gerar ou recuperar Pix de teste"
+              : "Gerar ou recuperar Pix"}
       </button>
       {error && (
         <div role="alert">
           <CustomerNotice kind="warning">{error}</CustomerNotice>
         </div>
       )}
-      {pix && (
+      {cancelled && !pix?.payment_confirmed && (
+        <p role="status">{cancelMessage(pix?.status ?? cancel?.status, Boolean(pix))}</p>
+      )}
+      {cancellable && !confirming && (
+        <button
+          type="button"
+          className="customer-button-secondary"
+          disabled={busy || cancelling}
+          onClick={() => setConfirming(true)}
+        >
+          Cancelar pedido
+        </button>
+      )}
+      {cancellable && confirming && (
+        <div role="dialog" aria-modal="false" aria-labelledby="customer-cancel-title">
+          <h4 id="customer-cancel-title">Cancelar pedido?</h4>
+          <p className="customer-muted">
+            Pela{" "}
+            <a href={LEGAL_URLS.refund} target="_blank" rel="noopener noreferrer">
+              Política de Reembolso
+            </a>{" "}
+            (item 7.1), você pode cancelar antes da confirmação do pagamento Pix. Depois que o Pix
+            for confirmado, não há cancelamento por desistência (item 7.2). Se você já pagou, a
+            compra seguirá normalmente. Com um Pix já gerado, o pedido continua ocupando sua vaga de
+            compra até o Pix vencer.
+          </p>
+          <button
+            type="button"
+            className="customer-button"
+            disabled={cancelling}
+            onClick={() => void requestCancel()}
+          >
+            {cancelling ? "Cancelando…" : "Confirmar cancelamento"}
+          </button>
+          <button
+            type="button"
+            className="customer-button-secondary"
+            disabled={cancelling}
+            onClick={() => setConfirming(false)}
+          >
+            Voltar
+          </button>
+        </div>
+      )}
+      {pix && (!cancelled || closed || pix.payment_confirmed) && (
         <p role="status">
-          {pix.payment_confirmed
-            ? "Pagamento confirmado em teste"
-            : instructions
-              ? "Aguardando pagamento de teste"
-              : "Pagamento sem instruções válidas para exibição"}{" "}
+          {closed
+            ? "Operação encerrada · nenhum Pix para pagar"
+            : pix.payment_confirmed
+              ? test
+                ? "Pagamento confirmado em teste"
+                : "Pagamento confirmado"
+              : instructions
+                ? test
+                  ? "Aguardando pagamento de teste"
+                  : "Aguardando pagamento"
+                : "Pagamento sem instruções válidas para exibição"}{" "}
           · Entrega não iniciada
         </p>
       )}
@@ -149,11 +305,11 @@ export function CustomerPix({
                 width="200"
                 height="200"
                 src={instructions.qr_code_image}
-                alt="QR do Pix de teste"
+                alt={test ? "QR do Pix de teste" : "QR do Pix"}
               />
             )}
           <label className="customer-field">
-            Pix copia e cola de teste
+            {test ? "Pix copia e cola de teste" : "Pix copia e cola"}
             <textarea readOnly value={instructions.br_code} />
           </label>
           <button
@@ -166,7 +322,7 @@ export function CustomerPix({
                 .catch(() => setError("Não foi possível copiar. Selecione o código manualmente."));
             }}
           >
-            {copied ? "Código copiado" : "Copiar código de teste"}
+            {copied ? "Código copiado" : test ? "Copiar código de teste" : "Copiar código"}
           </button>
         </>
       )}

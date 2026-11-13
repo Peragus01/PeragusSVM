@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { PGlite } from "@electric-sql/pglite";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -23,7 +24,7 @@ const pool = {
     return { ...r, rowCount: r.rows.length };
   },
 } as unknown as Pool;
-const repo = new DocumentRepository(pool);
+const repo = new DocumentRepository(pool,"test");
 const jpeg = () => Buffer.from([255, 216, 255, 224, 11, 12, 13, 14, 255, 217]);
 const origins = new Set(["https://storage.ozav.io"]);
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -154,7 +155,7 @@ async function setup() {
   };
 }
 async function appFor(s: Awaited<ReturnType<typeof setup>>, enabled = true) {
-  const access = {
+  const access = { legal: allAcceptedLegal,
     authenticate: async (token: string) => {
       if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN");
       return { id: s.owner, email: "synthetic@example.test" };
@@ -611,14 +612,14 @@ describe("private PF document uploads", () => {
       body: { data: [], has_more: false },
     }));
     const client = new OzavClient({
-      apiKey: "ozav_sk_test_synthetic",
+      mode: "test", apiKey: "ozav_sk_test_synthetic",
       attempts: 1,
       writeTransport: write,
       transport: read,
     });
     const providerCustomer = "ozav_cus_11111111111111111111";
     const unsafeClient = new OzavClient({
-      apiKey: "ozav_sk_test_synthetic",
+      mode: "test", apiKey: "ozav_sk_test_synthetic",
       writeTransport: write,
       transport: read,
     });

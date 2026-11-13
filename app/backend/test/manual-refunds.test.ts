@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from "node:crypto";
 import {readFile,readdir} from "node:fs/promises";
 import {Keypair} from "@solana/web3.js";
@@ -17,27 +18,28 @@ beforeAll(async()=>{
  await db.exec("create role anon;create role authenticated;alter default privileges grant all on tables to anon,authenticated;");
  const dir=new URL("../migrations/",import.meta.url);
  for(const name of (await readdir(dir)).filter(n=>/^\d+_.*\.sql$/.test(n)).sort())await db.exec(await readFile(new URL(name,dir),"utf8"));
+ await db.exec("insert into peragus_database_environment(environment) values('test')");
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 const reason="Cliente solicita analise manual da devolucao.";
 const reviewReason="Operador conferiu o caso e a localizacao dos fundos.";
 async function fixture(){
- const owner=randomUUID(),operator={id:randomUUID(),assuranceLevel:"aal2" as const};
+ const owner=randomUUID(),operator={id:randomUUID(),assuranceLevel:"aal2" as const,mfaVerifiedAt:Math.floor(Date.now()/1000)};
  const customer=(await customers.createOrGet({ownerUserId:owner,type:"pf",displayName:"Synthetic customer"})).customer;
  const provider="ozav_cus_"+randomUUID().replaceAll("-",""),terms=randomUUID(),quote=randomUUID(),purchase=randomUUID(),pix=randomUUID(),wallet=Keypair.generate().publicKey.toBase58();
- await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance)
- values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now(),now(),'{}','{}')`,[terms,customer.id,randomUUID()]);
- await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version)
- values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full','{}',1)`,[randomUUID(),customer.id,terms,"a".repeat(64),randomUUID(),provider]);
- await db.query(`insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl) values($1,$2,$3,$4,1000)`,[quote,customer.id,randomUUID(),provider]);
- await db.query(`insert into peragus_customer_purchase_intents(id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot)
- values($1,$2,$3,$4,$5,1000,200,'{}',$6,now(),'{}')`,[purchase,customer.id,randomUUID(),quote,provider,wallet]);
+ await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance,environment)
+ values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now(),now(),'{}','{}','test')`,[terms,customer.id,randomUUID()]);
+ await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version,environment)
+ values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full','{}',1,'test')`,[randomUUID(),customer.id,terms,"a".repeat(64),randomUUID(),provider]);
+ await db.query(`insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,environment) values($1,$2,$3,$4,1000,'test')`,[quote,customer.id,randomUUID(),provider]);
+ await db.query(`insert into peragus_customer_purchase_intents(id,customer_id,request_id,quote_id,provider_customer_id,source_amount_brl,estimated_target_amount_usdt,quote_snapshot,wallet_address,wallet_verified_at,evidence_snapshot,environment,wallet_proof_network)
+ values($1,$2,$3,$4,$5,1000,200,'{}',$6,now(),'{}','test','solana:devnet')`,[purchase,customer.id,randomUUID(),quote,provider,wallet]);
  const transfer="ozav_tr_"+randomUUID().replaceAll("-","");
- await db.query(`insert into peragus_customer_sandbox_pix(id,customer_id,request_id,purchase_intent_id,provider_customer_id,provider_quote_id,source_amount_brl,wallet_address,provider_wallet_id,idempotency_key,create_attempted,provider_transfer_id,observation)
- values($1,$2,$3,$4,$5,'ozav_q_example',1000,$6,'ozav_wal_example',$7,true,$8,$9)`,[pix,customer.id,randomUUID(),purchase,provider,wallet,randomUUID(),transfer,{id:transfer,customerId:provider,quoteId:"ozav_q_example",source:{type:"fiat_payment",currency:"BRL",rail:"pix"},status:"completed",sourceLegStatus:"completed",destinationLegStatus:"completed",amounts:{source:{currency:"BRL",amount:"1000.00"},target:{currency:"USDT",amount:"200.000000"}},private_data:"PRIVATE_PROVIDER_DETAILS"}]);
- const service=new ManualRefundService(pool,new Set([operator.id]),true);
+ await db.query(`insert into peragus_customer_sandbox_pix(id,customer_id,request_id,purchase_intent_id,provider_customer_id,provider_quote_id,source_amount_brl,wallet_address,provider_wallet_id,idempotency_key,create_attempted,provider_transfer_id,observation,environment)
+ values($1,$2,$3,$4,$5,'ozav_q_example',1000,$6,'ozav_wal_example',$7,true,$8,$9,'test')`,[pix,customer.id,randomUUID(),purchase,provider,wallet,randomUUID(),transfer,{id:transfer,customerId:provider,quoteId:"ozav_q_example",source:{type:"fiat_payment",currency:"BRL",rail:"pix"},status:"completed",sourceLegStatus:"completed",destinationLegStatus:"completed",amounts:{source:{currency:"BRL",amount:"1000.00"},target:{currency:"USDT",amount:"200.000000"}},private_data:"PRIVATE_PROVIDER_DETAILS"}]);
+ const service=new ManualRefundService(pool,new Set([operator.id]),true,"test");
  const appFor=async(identity:{id:string;assuranceLevel?:"aal2"}={id:owner},manual=service)=>{
-  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},manualRefundService:manual});apps.push(app);return app;
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return identity;}},manualRefundService:manual});apps.push(app);return app;
  };
  return {owner,operator,customer,purchase,pix,wallet,provider,service,appFor,requestId:randomUUID()};
 }
@@ -50,9 +52,9 @@ describe("manual refund case tracking",()=>{
   const item=response.json().data;
   expect(item).toMatchObject({state:"pending_review",requested_amount:{currency:"BRL",amount:"1000.00"},returned_amount:null,refund_execution_automated:false,provider_verified:false,original_transfer_cancelled:false});
   expect((await app.inject({method:"GET",url:path,headers})).json().data).toEqual(item);
-  const history=await new CustomerOperationHistoryService(pool).list(f.customer.id,parseHistoryQuery({}));
+  const history=await new CustomerOperationHistoryService(pool,"test").list(f.customer.id,parseHistoryQuery({}));
   expect(history.data[0]!.refund_request).toMatchObject({id:item.id,state:"pending_review"});
-  const detail=await new CustomerOperationHistoryService(pool).get(f.customer.id,f.purchase);
+  const detail=await new CustomerOperationHistoryService(pool,"test").get(f.customer.id,f.purchase);
   expect(detail).toEqual(history.data[0]);
   expect(JSON.stringify(detail)).not.toContain("PRIVATE_PROVIDER_DETAILS");
   expect((await db.query("select count(*) as n from settlements")).rows[0]).toEqual({n:0});
@@ -86,6 +88,16 @@ describe("manual refund case tracking",()=>{
   await expect(f.service.complete(f.operator,request.data.id,completionId,"900.00","SYNTHETIC_MANUAL_REFERENCE")).rejects.toThrow("REFUND_IDEMPOTENCY_CONFLICT");
   await expect(f.service.complete(f.operator,request.data.id,randomUUID(),"950.00","SYNTHETIC_MANUAL_REFERENCE")).rejects.toThrow("REFUND_ALREADY_RECORDED");
  });
+ it("refund completion requires a fresh TOTP and records nothing with a stale one",async()=>{
+  const f=await fixture(),request=await f.service.request(f.customer.id,f.purchase,f.requestId,reason);
+  await f.service.decide(f.operator,request.data.id,randomUUID(),"approved",reviewReason);
+  const stale={...f.operator,mfaVerifiedAt:Math.floor(Date.now()/1000)-301},none={id:f.operator.id,assuranceLevel:"aal2" as const};
+  for(const identity of [stale,none])await expect(f.service.complete(identity,request.data.id,randomUUID(),"1000.00","SYNTHETIC_REFERENCE")).rejects.toThrow("OPERATOR_MFA_STALE");
+  const app=await f.appFor(stale);
+  const r=await app.inject({method:"POST",url:`/v1/admin/refund-requests/${request.data.id}/completion`,headers,payload:{request_id:randomUUID(),amount_brl:"1000.00",reference:"SYNTHETIC_REFERENCE",confirmation:"MANUAL_REFUND_EXECUTED_EXTERNALLY"}});
+  expect(r.statusCode).toBe(403);expect(r.json().error.code).toBe("OPERATOR_MFA_STALE");
+  expect((await db.query("select count(*)::int n from peragus_manual_refund_completions where refund_request_id=$1",[request.data.id])).rows[0]).toEqual({n:0});
+ });
  it("refuses completion without approval and preserves a rejection",async()=>{
   const f=await fixture(),request=await f.service.request(f.customer.id,f.purchase,f.requestId,reason),key=randomUUID();
   await expect(f.service.complete(f.operator,request.data.id,randomUUID(),"1000.00","SYNTHETIC_REFERENCE")).rejects.toThrow("REFUND_APPROVAL_REQUIRED");
@@ -107,14 +119,14 @@ describe("manual refund case tracking",()=>{
  it("requires operator role, MFA and a separate non-customer account",async()=>{
   const f=await fixture(),request=await f.service.request(f.customer.id,f.purchase,f.requestId,reason);
   for(const [identity,code] of [[{id:f.operator.id},"WITHDRAWAL_OPERATOR_MFA_REQUIRED"],[{id:randomUUID(),assuranceLevel:"aal2"},"WITHDRAWAL_OPERATOR_REQUIRED"],[{id:f.owner,assuranceLevel:"aal2"},"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"]] as const){
-   const service=new ManualRefundService(pool,new Set([f.operator.id,f.owner]),true),app=await f.appFor(identity,service);
+   const service=new ManualRefundService(pool,new Set([f.operator.id,f.owner]),true,"test"),app=await f.appFor(identity,service);
    const response=await app.inject({method:"GET",url:`/v1/admin/refund-requests/${request.data.id}`,headers});
    expect(response.statusCode).toBe(403);expect(response.json().error.code).toBe(code);
   }
  });
  it("keeps reads available with writes disabled and validates operator confirmation",async()=>{
   const f=await fixture(),request=await f.service.request(f.customer.id,f.purchase,f.requestId,reason);
-  const disabled=new ManualRefundService(pool,new Set([f.operator.id]),false),app=await f.appFor({id:f.owner},disabled);
+  const disabled=new ManualRefundService(pool,new Set([f.operator.id]),false,"test"),app=await f.appFor({id:f.owner},disabled);
   const path=`/v1/me/operations/${f.purchase}/refund-request`;
   expect((await app.inject({method:"GET",url:path,headers})).statusCode).toBe(200);
   expect((await app.inject({method:"POST",url:path,headers,payload:{request_id:randomUUID(),reason}})).statusCode).toBe(503);

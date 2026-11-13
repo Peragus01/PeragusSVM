@@ -60,7 +60,7 @@ for (const mode of ["embedded", ...(realUrl ? ["postgres"] : [])])
     );
     const svc = new PilotInviteService(
       db,
-      new Set([operator.id]),
+      new Set([operator.id]),"test",
       true,
       "ab".repeat(32),
       cipher,
@@ -92,7 +92,7 @@ for (const mode of ["embedded", ...(realUrl ? ["postgres"] : [])])
         },
       } as Pick<PoolClient, "query">;
       try {
-        return await processInviteEmail(q, cipher, custom);
+        return await processInviteEmail(q, cipher, custom,"test");
       } finally {
         client?.release();
       }
@@ -114,6 +114,9 @@ for (const mode of ["embedded", ...(realUrl ? ["postgres"] : [])])
         if (real) await db.query(sql);
         else await embedded!.exec(sql);
       }
+      await db.query(
+        "insert into peragus_database_environment(environment) values('test') on conflict do nothing",
+      );
     }, 60000);
     beforeEach(async () => {
       await db.query(
@@ -259,7 +262,7 @@ for (const mode of ["embedded", ...(realUrl ? ["postgres"] : [])])
       const value = await issue();
       await process();
       const accepted = await row(value.data.id);
-      const delivery = new InviteEmailDelivery(db);
+      const delivery = new InviteEmailDelivery(db,"test");
       const event = {
         type: "email.delivered",
         data: {
@@ -381,9 +384,9 @@ for (const mode of ["embedded", ...(realUrl ? ["postgres"] : [])])
         });
       await db.query(
         `with s as (update peragus_pilot_invite_slots set current_invite_id=$1 where slot=1 returning slot),
-   i as (insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,reason,code_hash,duration_hours,expires_at)
-   select $1,slot,$2,$3,$4,$5,$6,1,clock_timestamp()+interval '2 seconds' from s returning id)
-   insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload) select id,'peragus-invitation-test/'||id::text,$7::jsonb from i`,
+   i as (insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,reason,code_hash,duration_hours,expires_at,environment)
+   select $1,slot,$2,$3,$4,$5,$6,1,clock_timestamp()+interval '2 seconds','test' from s returning id)
+   insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload,environment) select id,'peragus-invitation-test/'||id::text,$7::jsonb,'test' from i`,
         [
           id,
           randomUUID(),
@@ -411,9 +414,9 @@ for (const mode of ["embedded", ...(realUrl ? ["postgres"] : [])])
         });
         await db.query(
           `with s as (update peragus_pilot_invite_slots set current_invite_id=$1 where slot=1 returning slot),
-        i as (insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,reason,code_hash,duration_hours,expires_at)
-        select $1,slot,$2,$3,$4,$5,$6,1,clock_timestamp()+interval '1 second' from s returning id)
-        insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload) select id,'peragus-invitation-test/'||id::text,$7::jsonb from i`,
+        i as (insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,reason,code_hash,duration_hours,expires_at,environment)
+        select $1,slot,$2,$3,$4,$5,$6,1,clock_timestamp()+interval '1 second','test' from s returning id)
+        insert into peragus_invite_email_outbox(invite_id,idempotency_key,encrypted_payload,environment) select id,'peragus-invitation-test/'||id::text,$7::jsonb,'test' from i`,
           [
             id,
             randomUUID(),

@@ -116,6 +116,29 @@ describe("signed document PUT transport", () => {
       vi.restoreAllMocks();
     }
   });
+  it("accepts the live key only when the configured money mode is live", async () => {
+    const auth = {
+      apiKey: "ozav_sk_live_synthetic123",
+      customerId: "ozav_cus_1234567890123456",
+      documentId: "ozav_doc_1234567890123456",
+    };
+    const url = new URL(
+      `https://developers.ozav.io/v2/customers/${auth.customerId}/documents/${auth.documentId}/upload?upload_token=synthetic`,
+    );
+    const t = transport(200, false, "https://developers.ozav.io");
+    await uploadDocumentBytes(url, Buffer.from("x"), "image/jpeg", { ...auth, mode: "live" });
+    expect(t.request).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+    const next = transport(200, false, "https://developers.ozav.io");
+    await expect(
+      uploadDocumentBytes(url, Buffer.from("x"), "image/jpeg", {
+        ...auth,
+        apiKey: "ozav_sk_test_synthetic123",
+        mode: "live",
+      }),
+    ).rejects.toThrow("DOCUMENT_UPLOAD_ORIGIN_REFUSED");
+    expect(next.request).not.toHaveBeenCalled();
+  });
   it("never sends OZAV API keys to an external storage origin", async () => {
     const t = transport();
     await uploadDocumentBytes(

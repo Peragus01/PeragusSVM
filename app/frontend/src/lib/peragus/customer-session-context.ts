@@ -27,7 +27,13 @@ export type SessionContextValue = {
   login: (email: string, password: string) => Promise<void>;
   enrollOperatorMfa: () => Promise<OperatorMfaEnrollment>;
   verifyOperatorMfaEnrollment: (factorId: string, code: string) => Promise<void>;
-  verifyOperatorMfa: (code: string) => Promise<void>;
+  /**
+   * Challenge + verify of the verified TOTP factor; resolves with the new access token,
+   * whose `amr` totp timestamp is the time of this verification (fresh MFA).
+   */
+  verifyOperatorMfa: (code: string) => Promise<string>;
+  /** Shared single-flight refresh; resolves with the new access token, or null (and logs out) on rejection. */
+  refreshAccessToken: () => Promise<string | null>;
   logout: () => void;
   reloadIdentity: (signal?: AbortSignal) => Promise<void>;
 };

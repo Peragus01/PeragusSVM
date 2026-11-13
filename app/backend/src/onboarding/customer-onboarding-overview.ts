@@ -2,6 +2,7 @@ import { onboardingReview } from "../notifications/onboarding-result.js";
 import type { Customer } from "../auth/customer-access.js";
 import type { OzavVerification } from "../providers/ozav-client.js";
 import type { TermsState } from "./terms-types.js";
+import { moneyNetworkFor, type MoneyMode } from "../config/money-environment.js";
 export interface OverviewFacts {
   binding_consistent: boolean;
   wallet: { wallet_address: string; verified_at: string } | null;
@@ -23,7 +24,8 @@ const allowedChecks = [...captureChecks,"aml_name_screening"] as const;
 export class CustomerOnboardingOverview {
   constructor(private readonly repository: OnboardingOverviewRepository, private readonly actions: OnboardingActions,
     private readonly now: () => Date = () => new Date(),
-    private readonly emailReady: (customer: Customer) => Promise<boolean> = async () => false) {}
+    private readonly emailReady: (customer: Customer) => Promise<boolean> = async () => false,
+    private readonly mode: MoneyMode = "test") {}
   async read(customer: Customer) {
     const facts = await this.repository.read(customer.id);
     if (!facts.binding_consistent) throw new Error("ONBOARDING_EVIDENCE_CONFLICT");
@@ -67,7 +69,7 @@ export class CustomerOnboardingOverview {
       customer: { id: customer.id, type: customer.type, verification_status: customer.verificationStatus },
       review_state: onboardingReview(facts),
       email_notifications: { enabled: await this.emailReady(customer).catch(() => false), channel: "email" },
-      environment: "test", sandbox_only: true, source: "stored_observations", checked_at: this.now().toISOString(),
+      environment: this.mode, sandbox_only: this.mode === "test", source: "stored_observations", checked_at: this.now().toISOString(),
       draft: facts.draft ? { version: facts.draft.version, updated_at: facts.draft.updated_at,
         matches_submitted_version: facts.registration ? facts.draft.version===facts.registration.draft_version : null } : null,
       provider_terms: terms ? { session_id: terms.session_id, state: terms.state, version: terms.version,
@@ -84,10 +86,10 @@ export class CustomerOnboardingOverview {
         lists: facts.screening.lists, matches_count: facts.screening.matches_count,
         suggested_decision: facts.screening.suggested_decision, refreshed_at: facts.screening.refreshed_at } : null,
       wallet: facts.wallet ? { wallet_address: facts.wallet.wallet_address, verified_at: facts.wallet.verified_at,
-        network: "solana:devnet", proof_type: "signed_message" } : null,
+        network: moneyNetworkFor(this.mode), proof_type: "signed_message" } : null,
       pending_steps: pending, actions_enabled: { ...this.actions },
       observation_freshness: "not_evaluated", operations_enabled: false,
-      operation_blockers: ["SANDBOX_ONLY", "FINANCIAL_OPERATIONS_DISABLED"],
+      operation_blockers: this.mode === "test" ? ["SANDBOX_ONLY", "FINANCIAL_OPERATIONS_DISABLED"] : ["FINANCIAL_OPERATIONS_DISABLED"],
     };
   }
 }

@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
@@ -18,6 +19,7 @@ beforeAll(async()=>{
  await db.exec('create role anon;create role authenticated;');
  const dir=new URL('../migrations/',import.meta.url);
  for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await db.exec(await readFile(new URL(f,dir),'utf8'));
+ await db.exec("insert into peragus_database_environment(environment) values('test')");
 },30000);
 beforeEach(()=>db.exec('truncate peragus_authenticated_api_rate_limits'));
 afterEach(async()=>{await Promise.all(apps.splice(0).map(a=>a.close()));});
@@ -33,7 +35,7 @@ async function setup(rate=limiter()){
   if(token==='bad')throw new AuthenticationError('INVALID_TOKEN');
   return {id:token==='bob'?bob:alice,email:'synthetic@example.test'};
  });
- const app=await buildApp({customerAccess:{customers,authenticate},apiRateLimiter:rate});
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate},apiRateLimiter:rate});
  const handler=customers.createOrGet;
  apps.push(app);return {app,customers,authenticate,handler};
 }
@@ -114,7 +116,7 @@ it('does not replace customer ownership and role separation with a quota',async(
 });
 it('keeps existing behavior when the limiter is not configured',async()=>{
  const customers={findByOwner:async()=>null} as unknown as CustomerRepository;
- const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:alice,email:'synthetic@example.test'})}});
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:alice,email:'synthetic@example.test'})}});
  apps.push(app);
  await seed(alice);
  const response=await app.inject({url:'/v1/me',headers:headers()});

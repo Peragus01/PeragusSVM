@@ -1,31 +1,51 @@
 import type {Pool} from "pg";
+import {providerKeyMatchesMode,type MoneyMode} from "../config/money-environment.js";
 import {OzavClient,type OzavTransport} from "../providers/ozav-client.js";
 import {OzavSandboxWithdrawalProvider} from "../providers/ozav-sandbox-withdrawal.js";
 import {PostgresCustomerPixRepository} from "../repositories/postgres-customer-sandbox-pix.js";
 import {PostgresSandboxExecutionRepository} from "../repositories/postgres-sandbox-withdrawal-execution.js";
 import {recoverSandboxWithdrawal} from "../withdrawals/sandbox-recovery.js";
+import type {DeliveryCheck} from "../withdrawals/sandbox-execution.js";
 import {reconcileCustomerPix} from "./customer-sandbox-pix.js";
 import type {CustomerReconciliationReader} from "../jobs/customer-reconciliation.js";
+import {refreshPixAndProgress,type PurchaseProgression} from "./purchase-progression.js";
 
+const FUNDING_STAGES=new Set(["accepted","awaiting_pix","pix_confirmed","converted"]);
 /** Returns two GET-only functions. There is no send, reserve, claim or simulation capability. */
-export function createCustomerReconciliationReader(pool:Pool,key:string,read?:OzavTransport):CustomerReconciliationReader{
- if(!/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(key))throw Error("Sandbox key required");
- const client=new OzavClient({apiKey:key,attempts:1,timeoutMs:10000,...(read?{transport:read}:{})});
- const withdrawal=new OzavSandboxWithdrawalProvider(key,read?{read}:{});
- const pixRepository=new PostgresCustomerPixRepository(pool),withdrawalRepository=new PostgresSandboxExecutionRepository(pool);
+export function createCustomerReconciliationReader(pool:Pool,key:string,mode:MoneyMode,read?:OzavTransport,
+ progression?:Pick<PurchaseProgression,"applyTransferObservation">,delivery?:DeliveryCheck):CustomerReconciliationReader{
+ // The key, provider clients and repositories all belong to the configured money mode.
+ if(!providerKeyMatchesMode(key,mode))throw Error("Provider key for the money mode required");
+ const client=new OzavClient({apiKey:key,mode,attempts:1,timeoutMs:10000,...(read?{transport:read}:{})});
+ const withdrawal=new OzavSandboxWithdrawalProvider(key,{mode,...(read?{read}:{})});
+ const pixRepository=new PostgresCustomerPixRepository(pool,mode),withdrawalRepository=new PostgresSandboxExecutionRepository(pool,mode);
  const pixProvider=Object.freeze({findCustomerPixTransfer:client.findCustomerPixTransfer.bind(client),getTransfer:client.getTransfer.bind(client)});
  const withdrawalProvider=Object.freeze({find:withdrawal.find.bind(withdrawal),transfer:withdrawal.transfer.bind(withdrawal)});
  return Object.freeze({
   pix:async(customerId:string,id:string)=>{
-   const view=await reconcileCustomerPix(pixRepository,pixProvider,customerId,id);
+   // The GET observation (never a webhook body) drives the purchase operation forward.
+   const view=progression?await refreshPixAndProgress(pixRepository,pixProvider,progression,customerId,id,mode,"system:reconciliation")
+    :await reconcileCustomerPix(pixRepository,pixProvider,customerId,id,mode);
    const failed=["failed","cancelled","expired"].includes(view.state);
+   if(progression){
+    // Final review I5: keep polling (with backoff) until OZAV's transfer is terminal AND the
+    // operation left the funding stages. OZAV's needs_review is not terminal: never end there.
+    // Review only for a real inconsistency; ordinary unpaid or refunded Pix have their own alerts.
+    const terminal=failed || view.state==="completed";
+    const funding=view.status!==null && FUNDING_STAGES.has(view.status);
+    return {status:view.state,complete:terminal && !funding,review:view.state==="completed" && !view.custody_conversion_completed};
+   }
    return {status:view.state,complete:view.custody_conversion_completed || failed,
     review:view.state==="needs_review" || (view.state==="completed" && !view.custody_conversion_completed) || (failed && view.source_leg_status==="completed")};
   },
   withdrawal:async(customerId:string,id:string)=>{
-   const view=await recoverSandboxWithdrawal(withdrawalRepository,withdrawalProvider,id,customerId);
+   // With a delivery check the same GET-only pass verifies the delivery on chain
+   // (sent -> delivered_verified | needs_review), acting as system:reconciliation.
+   const view=await recoverSandboxWithdrawal(withdrawalRepository,withdrawalProvider,id,customerId,delivery,"system:reconciliation");
    const status=view.state.startsWith("provider_")?view.state.slice(9):view.state;
-   return {status,complete:view.provider_completed,review:view.manual_review_required || (status==="completed" && !view.provider_completed)};
+   // A completed send keeps being checked until its delivery is settled (verified, or simulated in test).
+   const settled=!delivery || view.onchain_delivery_verified || view.delivery_simulated;
+   return {status,complete:view.provider_completed && settled,review:view.manual_review_required || (status==="completed" && !view.provider_completed)};
   }
  });
 }

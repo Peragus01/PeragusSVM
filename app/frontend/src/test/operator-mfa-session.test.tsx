@@ -32,9 +32,12 @@ function Probe() {
       </button>
       <button
         onClick={() => {
-          void session.enrollOperatorMfa().then((value) => {
-            void session.verifyOperatorMfaEnrollment(value.factorId, "123456");
-          });
+          void session
+            .enrollOperatorMfa()
+            .then((value) => {
+              void session.verifyOperatorMfaEnrollment(value.factorId, "123456");
+            })
+            .catch(() => {});
         }}
       >
         Enroll MFA
@@ -46,6 +49,7 @@ function Probe() {
 }
 afterEach(() => {
   cleanup();
+  window.sessionStorage.clear();
   vi.restoreAllMocks();
 });
 async function login() {
@@ -57,7 +61,7 @@ async function login() {
   fireEvent.click(screen.getByText("Login"));
   await screen.findByText("synthetic.aal1");
 }
-describe("operator MFA in existing memory-only session", () => {
+describe("operator MFA in existing session", () => {
   it("enrolls a TOTP factor, verifies it and promotes the in-memory session", async () => {
     // The raw GoTrue endpoint returns SVG. supabase-js normally converts this
     // to a data URL, but this application intentionally calls Auth directly.
@@ -72,6 +76,7 @@ describe("operator MFA in existing memory-only session", () => {
       .mockResolvedValueOnce(
         json({ data: { user: { id, email: "operator@example.test" }, customer: null } }),
       )
+      .mockResolvedValueOnce(json({ data: { operator: true, mfa_enrolled_required: true } }))
       .mockResolvedValueOnce(json({ factors: [] }))
       .mockResolvedValueOnce(
         json({ id, type: "totp", totp: { qr_code: qrCode, secret: "JBSWY3DPEHPK3PXP" } }),
@@ -81,16 +86,20 @@ describe("operator MFA in existing memory-only session", () => {
     await login();
     fireEvent.click(screen.getByText("Enroll MFA"));
     await screen.findByText("synthetic.aal2");
-    expect(fetcher.mock.calls[2]![0]).toBe("https://syntheticproject.supabase.co/auth/v1/user");
-    expect(fetcher.mock.calls[3]![0]).toBe("https://syntheticproject.supabase.co/auth/v1/factors");
-    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toEqual({
+    expect(fetcher.mock.calls[2]![0]).toBe("/api/v1/admin/operator-status");
+    expect(new Headers(fetcher.mock.calls[2]![1]?.headers).get("authorization")).toBe(
+      "Bearer synthetic.aal1",
+    );
+    expect(fetcher.mock.calls[3]![0]).toBe("https://syntheticproject.supabase.co/auth/v1/user");
+    expect(fetcher.mock.calls[4]![0]).toBe("https://syntheticproject.supabase.co/auth/v1/factors");
+    expect(JSON.parse(String(fetcher.mock.calls[4]![1]?.body))).toEqual({
       factor_type: "totp",
       friendly_name: "Peragus Operador",
     });
-    expect(fetcher.mock.calls[4]![0]).toBe(
+    expect(fetcher.mock.calls[5]![0]).toBe(
       `https://syntheticproject.supabase.co/auth/v1/factors/${id}/challenge`,
     );
-    expect(JSON.parse(String(fetcher.mock.calls[5]![1]?.body))).toEqual({
+    expect(JSON.parse(String(fetcher.mock.calls[6]![1]?.body))).toEqual({
       challenge_id: "enrollment-challenge",
       code: "123456",
     });
@@ -103,6 +112,7 @@ describe("operator MFA in existing memory-only session", () => {
       .mockResolvedValueOnce(
         json({ data: { user: { id, email: "operator@example.test" }, customer: null } }),
       )
+      .mockResolvedValueOnce(json({ data: { operator: true, mfa_enrolled_required: true } }))
       .mockResolvedValueOnce(
         json({ factors: [{ id: staleId, factor_type: "totp", status: "unverified" }] }),
       )
@@ -122,11 +132,28 @@ describe("operator MFA in existing memory-only session", () => {
     await login();
     fireEvent.click(screen.getByText("Enroll MFA"));
     await screen.findByText("synthetic.aal2");
-    expect(fetcher.mock.calls[3]![0]).toBe(
+    expect(fetcher.mock.calls[4]![0]).toBe(
       `https://syntheticproject.supabase.co/auth/v1/factors/${staleId}`,
     );
-    expect(fetcher.mock.calls[3]![1]?.method).toBe("DELETE");
-    expect(fetcher.mock.calls[3]![1]?.body).toBeUndefined();
+    expect(fetcher.mock.calls[4]![1]?.method).toBe("DELETE");
+    expect(fetcher.mock.calls[4]![1]?.body).toBeUndefined();
+  });
+  it("MFA enrollment is not offered to non-operators: the session refuses before any factor call", async () => {
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(json(tokens("synthetic.aal1")))
+      .mockResolvedValueOnce(
+        json({ data: { user: { id, email: "customer@example.test" }, customer: null } }),
+      )
+      .mockResolvedValueOnce(json({ data: { operator: false, mfa_enrolled_required: true } }));
+    await login();
+    fireEvent.click(screen.getByText("Enroll MFA"));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    expect(fetcher.mock.calls[2]![0]).toBe("/api/v1/admin/operator-status");
+    // Give a rejected enrollment the chance to (wrongly) continue.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(screen.getByText("synthetic.aal1")).toBeInTheDocument();
   });
   it("gets verified factors, challenges, verifies and replaces the session token", async () => {
     const fetcher = vi
@@ -158,7 +185,9 @@ describe("operator MFA in existing memory-only session", () => {
     expect(new Headers(fetcher.mock.calls[4]![1]?.headers).get("authorization")).toBe(
       "Bearer synthetic.aal1",
     );
-    expect(storage).not.toHaveBeenCalled();
+    // Only the tab-scoped session record is written, and never to localStorage.
+    expect(storage.mock.calls.every(([key]) => key === "peragus.session")).toBe(true);
+    expect(window.localStorage.length).toBe(0);
   });
   it("does not replace tokens after rejected MFA", async () => {
     const fetcher = vi

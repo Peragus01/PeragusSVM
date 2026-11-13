@@ -86,7 +86,7 @@ function setup(options: {
 
   return {
     client: new OzavClient({
-      apiKey,
+      mode: "test", apiKey,
       transport,
       writeTransport,
       attempts: 1,

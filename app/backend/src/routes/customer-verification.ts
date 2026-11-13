@@ -1,13 +1,15 @@
+import {replyIfPaused} from "../operations/runtime-controls.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CustomerVerificationService } from "../onboarding/customer-verification-service.js";
 import { VerificationError } from "../onboarding/verification-types.js";
 import { OzavClientError } from "../providers/ozav-client.js";
-export async function registerCustomerVerificationRoutes(app: FastifyInstance, service?: CustomerVerificationService, simulationEnabled = false) {
+export async function registerCustomerVerificationRoutes(app: FastifyInstance, service?: CustomerVerificationService, simulationEnabled = false, simulationRegistered = true) {
+  // simulationRegistered is false outside test mode: the simulate route then does not exist (404).
   await app.register(async scoped => {
     scoped.removeContentTypeParser("application/json");
     scoped.addContentTypeParser("application/json", { parseAs: "buffer", bodyLimit: 8192 }, (_request, body, done) => done(null, body));
-    for (const action of ["read", "start", "refresh", "simulate"] as const) scoped.route({
+    for (const action of (simulationRegistered ? ["read", "start", "refresh", "simulate"] as const : ["read", "start", "refresh"] as const)) scoped.route({
       method: action === "read" ? "GET" : "POST", bodyLimit: 8192,
       url: `/v1/me/onboarding/verification${action === "refresh" || action === "simulate" ? `/${action}` : ""}`,
       handler: async (request, reply) => {
@@ -33,7 +35,9 @@ export async function registerCustomerVerificationRoutes(app: FastifyInstance, s
           const result = await service.start(customer.id);
           return reply.code(result.replayed ? 200 : 201).send({ data: result.data, meta: { idempotent_replay: result.replayed, operations_enabled: false } });
         } catch (error) {
-          if (error instanceof VerificationError) return reply.code(409).send({ error: { code: error.code } });
+          if (replyIfPaused(error, reply)) return reply;
+          // Live fails closed without a hosted session; retrying shortly may help (OZAV's own code).
+          if (error instanceof VerificationError) return reply.code(error.code === "VERIFICATION_SESSION_UNAVAILABLE" ? 503 : 409).send({ error: { code: error.code } });
           if (error instanceof OzavClientError) return reply.code(502).send({ error: { code: "VERIFICATION_PROVIDER_UNAVAILABLE", provider_http_status: error.statusCode ?? null, retryable: error.retryable } });
           request.log.warn({ event: "customer_verification_unavailable" });
           return reply.code(503).send({ error: { code: "CUSTOMER_VERIFICATION_UNAVAILABLE" } });

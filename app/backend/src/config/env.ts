@@ -1,9 +1,12 @@
 import { parseWithdrawalOperators } from "../withdrawals/operator-approvals.js";
 import "dotenv/config";
+import { moneyPathsNotLiveReady, providerKeyMatchesMode } from "./money-environment.js";
+import { purchaseLimits } from "../purchases/operation-status.js";
 
 import { z } from "zod";
+import { parseLegalRequiredDocuments } from "../legal/legal-acceptance.js";
 
-const envSchema = z
+export const envSchema = z
   .object({
     PERAGUS_DEPLOYMENT_ENV: z
       .enum(["staging", "production"])
@@ -38,6 +41,15 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    // Operator + trusted-person e-mail alerts (Task 17): the worker drains the outbox and runs
+    // the stuck-operation scanner only when enabled. Recipients are validated, never logged.
+    OPERATOR_NOTIFICATIONS_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    OPERATOR_ALERT_EMAIL: z.email().optional(),
+    TRUSTED_ALERT_EMAIL: z.email().optional(),
+    OPERATOR_NOTIFICATIONS_FROM: z.email().optional(),
     CUSTOMER_RECONCILIATION_ENABLED: z
       .enum(["true", "false"])
       .default("false")
@@ -55,6 +67,27 @@ const envSchema = z
       .default("false")
       .transform((value) => value === "true"),
     WITHDRAWAL_OPERATOR_APPROVALS_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    // Money-moving operator actions need a TOTP verified at most this long ago (<= 300 s).
+    OPERATOR_MFA_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(300).default(300),
+    // Minimum seconds between a withdrawal approval and its execution.
+    OPERATOR_EXECUTION_MIN_DELAY_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(86_400)
+      .default(900),
+    // How many USDT units (6 decimals) the on-chain delivery may fall below the locked amount
+    // and still be verified: OZAV deducts the network fee from the sent USDT. Default 0.10 USDT.
+    USDT_DELIVERY_TOLERANCE_UNITS: z
+      .string()
+      .regex(/^(0|[1-9]\d{0,8})$/)
+      .default("100000")
+      .transform((value) => BigInt(value)),
+    // true: the executor must be a different operator from the approver.
+    OPERATOR_FOUR_EYES_ENABLED: z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
@@ -95,6 +128,35 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    // Purchase range (BRL, decimal strings) and global open-operation cap.
+    PURCHASE_MIN_BRL: z
+      .string()
+      .regex(/^(0|[1-9]\d{0,4})(\.\d{1,2})?$/)
+      .default("1000.00"),
+    PURCHASE_MAX_BRL: z
+      .string()
+      .regex(/^(0|[1-9]\d{0,4})(\.\d{1,2})?$/)
+      .default("1000.00"),
+    PURCHASE_MAX_OPEN_GLOBAL: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1_000)
+      .default(1),
+    // Final review I3: an accepted operation without a claimed Pix create expires after this TTL;
+    // a claimed create with no transfer listed by OZAV expires after the grace period.
+    ACCEPTED_OPERATION_TTL_MINUTES: z.coerce.number().int().min(5).max(1_440).default(30),
+    PIX_CREATE_NOT_FOUND_GRACE_MINUTES: z.coerce.number().int().min(5).max(1_440).default(30),
+    // Final review I9: Pix instructions are hidden this long before min(Pix expiry, lock
+    // deadline); an unpaid GET expires the operation only this long after it.
+    PIX_INSTRUCTIONS_HIDE_MARGIN_MINUTES: z.coerce.number().int().min(0).max(30).default(5),
+    PIX_EXPIRY_GRACE_MINUTES: z.coerce.number().int().min(0).max(60).default(10),
+    // Final review I8: every ended São Paulo day with activity since this date must be reviewed.
+    DAILY_REVIEW_FLOOR_DATE: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)))
+      .default("2026-11-01"),
     CUSTOMER_WALLET_LINKING_ENABLED: z
       .enum(["true", "false"])
       .default("false")
@@ -183,8 +245,14 @@ const envSchema = z
     JOB_CONCURRENCY: z.coerce.number().int().min(1).max(25).default(3),
     OZAV_API_KEY: z
       .string()
-      .regex(/^ozav_sk_test_[A-Za-z0-9_-]+$/)
+      .regex(/^ozav_sk_(test|live)_[A-Za-z0-9_-]+$/)
       .optional(),
+    SOLANA_USDT_MINT: z.string().min(32).max(44).optional(),
+    // JSON {"terms":{"version","sha256"},"privacy":{...},"refund":{...}}; shape is
+    // validated below, and the server refuses to start customer access without it.
+    // Reverse-proxy hops in front of the API (Railway: 1). request.ip honors exactly this many.
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(2).default(0),
+    LEGAL_REQUIRED_DOCUMENTS: z.string().min(1).optional(),
     OZAV_ONRAMP_WRITES_ENABLED: z
       .enum(["true", "false"])
       .default("false")
@@ -248,6 +316,80 @@ const envSchema = z
     SOLANA_FEE_PAYER_KEYPAIR_BASE64: z.string().min(1).optional(),
   })
   .superRefine((env, context) => {
+    if (env.LEGAL_REQUIRED_DOCUMENTS !== undefined) {
+      try {
+        parseLegalRequiredDocuments(env.LEGAL_REQUIRED_DOCUMENTS);
+      } catch {
+        context.addIssue({
+          code: "custom",
+          path: ["LEGAL_REQUIRED_DOCUMENTS"],
+          message: "LEGAL_REQUIRED_DOCUMENTS_INVALID",
+        });
+      }
+    }
+    const expected =
+      env.PERAGUS_DEPLOYMENT_ENV === "production" ? "live" : "test";
+    // Sandbox money executors stay off in live until their live paths exist
+    // (the customer Pix path and, since Task 10, the withdrawal execution are live-safe).
+    for (const flag of moneyPathsNotLiveReady(expected, env)) {
+      context.addIssue({
+        code: "custom",
+        path: [flag],
+        message: `MONEY_PATH_NOT_LIVE_READY: ${flag}`,
+      });
+    }
+    // Final review I12: a live money path needs the refund path, signed webhooks and the
+    // real client IP (rate limits) before it may start.
+    if (
+      expected === "live" &&
+      (env.CUSTOMER_SANDBOX_PIX_ENABLED || env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED)
+    ) {
+      for (const [field, ok] of [
+        ["MANUAL_REFUNDS_ENABLED", env.MANUAL_REFUNDS_ENABLED],
+        ["CUSTOMER_WEBHOOKS_ENABLED", env.CUSTOMER_WEBHOOKS_ENABLED],
+        ["TRUST_PROXY_HOPS", env.TRUST_PROXY_HOPS > 0],
+      ] as const) {
+        if (!ok)
+          context.addIssue({
+            code: "custom",
+            path: [field],
+            message: `LIVE_MONEY_PATH_REQUIRES_SAFEGUARD: ${field}`,
+          });
+      }
+    }
+    {
+      const { minCents, maxCents } = purchaseLimits(env);
+      if (minCents <= 0n || maxCents > 1_000_000n || minCents > maxCents)
+        context.addIssue({
+          code: "custom",
+          path: ["PURCHASE_MAX_BRL"],
+          message:
+            "PURCHASE_MIN_BRL must be positive and not above PURCHASE_MAX_BRL (at most 10000.00)",
+        });
+    }
+    if (env.OZAV_API_KEY) {
+      if (!providerKeyMatchesMode(env.OZAV_API_KEY, expected)) {
+        context.addIssue({
+          code: "custom",
+          path: ["OZAV_API_KEY"],
+          message: `OZAV_API_KEY must be an ozav_sk_${expected}_ key for ${env.PERAGUS_DEPLOYMENT_ENV}`,
+        });
+      }
+    }
+    if (
+      env.PERAGUS_DEPLOYMENT_ENV === "staging" &&
+      !env.SOLANA_USDT_MINT &&
+      (env.CUSTOMER_QUOTES_ENABLED ||
+        env.CUSTOMER_PURCHASE_INTENTS_ENABLED ||
+        env.CUSTOMER_SANDBOX_PIX_ENABLED ||
+        env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["SOLANA_USDT_MINT"],
+        message: "SOLANA_USDT_MINT is required when purchase flows are enabled",
+      });
+    }
     if (env.INVITE_EMAIL_OUTBOX_ENABLED) {
       const key = env.INVITE_EMAIL_ENCRYPTION_KEY ?? "";
       const decoded = Buffer.from(key, "base64");
@@ -275,6 +417,20 @@ const envSchema = z
             "Invitation outbox requires the selected Auth project and valid encryption configuration",
         });
       }
+    }
+    if (env.OPERATOR_NOTIFICATIONS_ENABLED) {
+      // Messages name the variable only, never its value.
+      if (!env.OPERATOR_ALERT_EMAIL)
+        context.addIssue({ code: "custom", path: ["OPERATOR_ALERT_EMAIL"], message: "OPERATOR_ALERT_EMAIL is required when operator notifications are enabled" });
+      if (!env.TRUSTED_ALERT_EMAIL)
+        context.addIssue({ code: "custom", path: ["TRUSTED_ALERT_EMAIL"], message: "TRUSTED_ALERT_EMAIL is required when operator notifications are enabled" });
+      if (env.OPERATOR_ALERT_EMAIL && env.TRUSTED_ALERT_EMAIL
+        && env.OPERATOR_ALERT_EMAIL.toLowerCase() === env.TRUSTED_ALERT_EMAIL.toLowerCase())
+        context.addIssue({ code: "custom", path: ["TRUSTED_ALERT_EMAIL"], message: "TRUSTED_ALERT_EMAIL must differ from OPERATOR_ALERT_EMAIL" });
+      if (!env.OPERATOR_NOTIFICATIONS_FROM?.toLowerCase().endsWith("@peragus.com.br"))
+        context.addIssue({ code: "custom", path: ["OPERATOR_NOTIFICATIONS_FROM"], message: "OPERATOR_NOTIFICATIONS_FROM must be an @peragus.com.br sender" });
+      if (!env.DATABASE_URL)
+        context.addIssue({ code: "custom", path: ["DATABASE_URL"], message: "DATABASE_URL is required when operator notifications are enabled" });
     }
     const validateSigner = (
       pathValue: string | undefined,
@@ -428,6 +584,14 @@ export function getEnv(): Env {
   const result = envSchema.safeParse(process.env);
 
   if (!result.success) {
+    const notLiveReady = result.error.issues
+      .filter((issue) => issue.message.startsWith("MONEY_PATH_NOT_LIVE_READY"))
+      .map((issue) => String(issue.path[0]));
+    if (notLiveReady.length)
+      throw Object.assign(
+        new Error(`MONEY_PATH_NOT_LIVE_READY: ${notLiveReady.join(",")}`),
+        { code: "MONEY_PATH_NOT_LIVE_READY", fields: notLiveReady },
+      );
     const fields = [
       ...new Set(
         result.error.issues

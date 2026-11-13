@@ -5,7 +5,9 @@ import {
   CustomerPanel,
   CustomerPublicLayout,
 } from "@/components/peragus/customer-ui";
-import { CustomerSessionError, useCustomerSession } from "@/lib/peragus/customer-session";
+import { OperatorMfaPanel, useOperatorStatus } from "@/components/peragus/operator-mfa";
+import { OperatorNav } from "@/components/peragus/operator-shell";
+import { useCustomerSession } from "@/lib/peragus/customer-session";
 import type { OperatorMfaEnrollment } from "@/lib/peragus/customer-session-context";
 import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
 
@@ -112,7 +114,7 @@ function OperatorInvitesPage() {
                 Esta área exige uma conta separada de operador, sem perfil de cliente.
               </CustomerNotice>
             ) : (
-              <InviteConsole
+              <OperatorInviteArea
                 token={session.accessToken}
                 verifyMfa={session.verifyOperatorMfa}
                 enrollMfa={session.enrollOperatorMfa}
@@ -121,13 +123,32 @@ function OperatorInvitesPage() {
             )}
           </>
         )}
-        <p>
-          <Link className="customer-link" to="/operador/estornos">
-            Ir para estornos
-          </Link>
-        </p>
+        <OperatorNav />
       </div>
     </CustomerPublicLayout>
+  );
+}
+
+/** Offers TOTP enrollment only when the backend says this account is an operator. */
+export function OperatorInviteArea({
+  token,
+  verifyMfa,
+  enrollMfa,
+  verifyMfaEnrollment,
+}: {
+  token: string;
+  verifyMfa: (code: string) => Promise<unknown>;
+  enrollMfa?: () => Promise<OperatorMfaEnrollment>;
+  verifyMfaEnrollment?: (factorId: string, code: string) => Promise<void>;
+}) {
+  const operator = useOperatorStatus(token);
+  return (
+    <InviteConsole
+      token={token}
+      verifyMfa={verifyMfa}
+      {...(operator === true && enrollMfa ? { enrollMfa } : {})}
+      {...(verifyMfaEnrollment ? { verifyMfaEnrollment } : {})}
+    />
   );
 }
 
@@ -138,7 +159,7 @@ export function InviteConsole({
   verifyMfaEnrollment,
 }: {
   token: string;
-  verifyMfa: (code: string) => Promise<void>;
+  verifyMfa: (code: string) => Promise<unknown>;
   enrollMfa?: () => Promise<OperatorMfaEnrollment>;
   verifyMfaEnrollment?: (factorId: string, code: string) => Promise<void>;
 }) {
@@ -150,9 +171,6 @@ export function InviteConsole({
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [mfaNeeded, setMfaNeeded] = useState(false);
-  const [mfaCode, setMfaCode] = useState("");
-  const [mfaEnrollment, setMfaEnrollment] = useState<OperatorMfaEnrollment | null>(null);
-  const [mfaSecretCopied, setMfaSecretCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const pending = useRef<{
@@ -179,50 +197,6 @@ export function InviteConsole({
       setMfaNeeded(false);
     } catch (err) {
       handleError(err);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function verify(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      if (mfaEnrollment) {
-        if (!verifyMfaEnrollment)
-          throw new CustomerSessionError("MFA_REQUIRED", "Cadastro indisponível.");
-        await verifyMfaEnrollment(mfaEnrollment.factorId, mfaCode);
-      } else {
-        await verifyMfa(mfaCode);
-      }
-      setMfaNeeded(false);
-      setMfaCode("");
-      setMfaEnrollment(null);
-      setInfo("MFA confirmado. Você já pode gerar o convite ou atualizar o histórico.");
-    } catch (err) {
-      setError(
-        err instanceof CustomerSessionError && err.code === "MFA_REQUIRED"
-          ? err.message
-          : "Não foi possível confirmar o MFA. Verifique o código e tente novamente.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function startMfaEnrollment() {
-    if (!enrollMfa || busy) return;
-    setBusy(true);
-    setError("");
-    setMfaSecretCopied(false);
-    try {
-      setMfaEnrollment(await enrollMfa());
-      setInfo("Escaneie o QR code e confirme o primeiro código antes de sair desta página.");
-    } catch (err) {
-      setError(
-        err instanceof CustomerSessionError
-          ? err.message
-          : "Não foi possível cadastrar o autenticador.",
-      );
     } finally {
       setBusy(false);
     }
@@ -315,97 +289,16 @@ export function InviteConsole({
       {error && <CustomerNotice kind="warning">{error}</CustomerNotice>}
       {info && <CustomerNotice>{info}</CustomerNotice>}
       {mfaNeeded && (
-        <CustomerPanel title="Confirmar autenticação multifator">
-          {!mfaEnrollment && enrollMfa && (
-            <>
-              <p className="customer-muted">
-                Se esta é a primeira entrada desta conta de operador, cadastre um aplicativo
-                autenticador antes de informar o código.
-              </p>
-              <button
-                type="button"
-                className="customer-button-secondary"
-                disabled={busy}
-                onClick={() => void startMfaEnrollment()}
-              >
-                Configurar autenticador
-              </button>
-            </>
-          )}
-          {mfaEnrollment && (
-            <div className="customer-mfa-enrollment">
-              <div className="customer-mfa-qr">
-                <img
-                  src={mfaEnrollment.qrCode}
-                  width={280}
-                  height={280}
-                  alt="QR code para cadastrar o autenticador"
-                  draggable={false}
-                />
-              </div>
-              <p className="customer-muted">
-                No Microsoft Authenticator, escolha <b>Outra conta</b>. No Google Authenticator,
-                toque em <b>+</b> e depois em <b>Ler um QR code</b>.
-              </p>
-              {mfaEnrollment.secret && (
-                <div className="customer-mfa-secret">
-                  <label htmlFor="operator-mfa-secret">Chave manual</label>
-                  <div>
-                    <input
-                      id="operator-mfa-secret"
-                      readOnly
-                      spellCheck={false}
-                      autoComplete="off"
-                      value={mfaEnrollment.secret}
-                      onFocus={(event) => event.currentTarget.select()}
-                    />
-                    <button
-                      type="button"
-                      className="customer-button-secondary"
-                      onClick={() => {
-                        if (!navigator.clipboard) {
-                          document.getElementById("operator-mfa-secret")?.focus();
-                          return;
-                        }
-                        void navigator.clipboard
-                          .writeText(mfaEnrollment.secret ?? "")
-                          .then(() => setMfaSecretCopied(true))
-                          .catch(() => {
-                            setMfaSecretCopied(false);
-                            document.getElementById("operator-mfa-secret")?.focus();
-                          });
-                      }}
-                    >
-                      {mfaSecretCopied ? "Chave copiada" : "Copiar chave"}
-                    </button>
-                  </div>
-                  <small>Use somente as letras e os números exibidos, sem espaços.</small>
-                </div>
-              )}
-              <p className="customer-muted">
-                Esta chave é confidencial. Não envie, não registre em chamados e não salve em texto
-                aberto. Depois de escanear, informe abaixo o código de seis dígitos.
-              </p>
-            </div>
-          )}
-          <form onSubmit={(event) => void verify(event)}>
-            <label className="customer-field">
-              Código do autenticador
-              <input
-                required
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                autoComplete="one-time-code"
-                value={mfaCode}
-                onChange={(event) => setMfaCode(event.target.value)}
-              />
-            </label>
-            <button className="customer-button" disabled={busy}>
-              {mfaEnrollment ? "Ativar MFA" : "Confirmar MFA"}
-            </button>
-          </form>
-        </CustomerPanel>
+        <OperatorMfaPanel
+          verifyMfa={verifyMfa}
+          enrollMfa={enrollMfa}
+          verifyMfaEnrollment={verifyMfaEnrollment}
+          onVerified={() => {
+            setMfaNeeded(false);
+            setError("");
+            setInfo("MFA confirmado. Você já pode gerar o convite ou atualizar o histórico.");
+          }}
+        />
       )}
       <CustomerPanel title="Emitir convite">
         <form onSubmit={(event) => void issue(event)}>

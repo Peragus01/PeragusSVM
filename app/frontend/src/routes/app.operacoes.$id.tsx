@@ -9,6 +9,7 @@ import {
   SectionTitle,
 } from "@/components/peragus/customer-ui";
 import {
+  DeliveryEvidence,
   displayDate,
   formatAmount,
   operationLabel,
@@ -167,13 +168,15 @@ function OperationDetail() {
             </CustomerPanel>
             <CustomerPanel title="Pagamento e entrega">
               <CustomerNotice kind="warning">
-                Este registro é de teste, sem dinheiro real. O processamento finalizado não comprova
-                entrega na carteira.
+                {operation.environment === "test"
+                  ? "Este registro é de teste, sem dinheiro real. O processamento finalizado não comprova entrega na carteira."
+                  : "O processamento finalizado não comprova entrega na carteira."}
               </CustomerNotice>
               <div className="customer-row">
                 <span>Ambiente</span>
-                <b>Testes · Solana Devnet</b>
+                <b>{operation.environment === "test" ? "Testes · Solana Devnet" : "Solana"}</b>
               </div>
+              <DeliveryEvidence operation={operation} />
               <details className="premium-technical-details">
                 <summary>Detalhes técnicos e suporte</summary>{" "}
                 <div className="customer-row">
@@ -186,16 +189,14 @@ function OperationDetail() {
                 </div>
                 <div className="customer-row">
                   <span>Processamento finalizado</span>
-                  <b>{operation.withdrawal?.provider_completed ? "Sim, em teste" : "Não"}</b>
+                  <b>
+                    {operation.withdrawal?.provider_completed
+                      ? operation.environment === "test"
+                        ? "Sim, em teste"
+                        : "Sim"
+                      : "Não"}
+                  </b>
                 </div>
-                <div className="customer-row">
-                  <span>Entrega on-chain verificada</span>
-                  <b>{operation.onchain_delivery_verified ? "Sim" : "Não"}</b>
-                </div>
-                <p className="customer-muted">
-                  ID da transação na Solana: não disponível. Nenhum link de explorador é gerado sem
-                  uma confirmação verificável.
-                </p>
               </details>
               {result && (
                 <>

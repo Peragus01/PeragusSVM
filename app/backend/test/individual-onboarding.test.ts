@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { Writable } from "node:stream";
@@ -62,7 +63,7 @@ describe("PF draft schema and encryption", () => {
 
 const db = new PGlite();
 const pool = { query: async (sql: string, params?: unknown[]) => { const r = await db.query(sql, params); return { ...r, rowCount: r.rows.length }; } } as unknown as Pool;
-const customers = new PostgresCustomerRepository(pool), drafts = new PostgresIndividualDraftRepository(pool), service = new IndividualDraftService(drafts, cipher);
+const customers = new PostgresCustomerRepository(pool), drafts = new PostgresIndividualDraftRepository(pool,"test"), service = new IndividualDraftService(drafts, cipher);
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 const headers = { authorization: "Bearer valid" }, path = "/v1/me/onboarding/individual";
 async function profile(type: "pf" | "pj" = "pf") {
@@ -70,7 +71,7 @@ async function profile(type: "pf" | "pj" = "pf") {
   return { owner, customer };
 }
 async function appFor(actor: Awaited<ReturnType<typeof profile>>, enabled = true, logging?: Writable) {
-  const app = await buildApp({ customerAccess: { customers, authenticate: async token => {
+  const app = await buildApp({ customerAccess: { legal: allAcceptedLegal, customers, authenticate: async token => {
     if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN");
     return { id: actor.owner, email: "confirmed@example.test" };
   } }, ...(enabled ? { individualDraftService: service } : {}), ...(logging ? { logger: { level: "debug", stream: logging } } : {}) });
@@ -80,6 +81,7 @@ beforeAll(async () => {
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon, authenticated;");
   const dir = new URL("../migrations/", import.meta.url);
   for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file, dir), "utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
 }, 30000);
 afterAll(async () => { await Promise.all(apps.map(app => app.close())); await db.close(); });
 describe("owned encrypted PF drafts", () => {

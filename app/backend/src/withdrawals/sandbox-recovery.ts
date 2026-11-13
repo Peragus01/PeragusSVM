@@ -1,21 +1,25 @@
 import type {AuthenticatedUser} from "../auth/customer-access.js";
+import type {MoneyMode} from "../config/money-environment.js";
 import {OzavSandboxWithdrawalProvider} from "../providers/ozav-sandbox-withdrawal.js";
 import {authorizeWithdrawalOperator} from "./operator-approvals.js";
-import {SandboxExecutionError,executionView,validateWithdrawal,type SandboxExecutionRepository} from "./sandbox-execution.js";
+import {SandboxExecutionError,executionView,reconcileExecution,type DeliveryCheck,type SandboxExecutionRepository} from "./sandbox-execution.js";
 
-type RecoveryRepository=Pick<SandboxExecutionRepository,"read"|"bind"|"save">;
+type RecoveryRepository=Pick<SandboxExecutionRepository,"read"|"bind"|"save"|"recordDelivery"|"recordDeliveryPending"|"flagRefusedTransfer"|"markRefusedFindClear"|"recordSendEnded">;
 type RecoveryReader=Pick<OzavSandboxWithdrawalProvider,"find"|"transfer">;
 
 /** Exposes GET operations only; no send operation reaches the recovery service. */
-export function createSandboxRecoveryReader(key:string):RecoveryReader {
- const provider=new OzavSandboxWithdrawalProvider(key);
+export function createSandboxRecoveryReader(key:string,mode:MoneyMode):RecoveryReader {
+ const provider=new OzavSandboxWithdrawalProvider(key,{mode});
  return Object.freeze({find:provider.find.bind(provider),transfer:provider.transfer.bind(provider)});
 }
 
-/** May persist validated observations, but cannot reserve/claim or initiate a transfer. */
+/**
+ * May persist validated observations and the on-chain delivery outcome, but cannot
+ * reserve/claim or initiate a transfer.
+ */
 export class SandboxWithdrawalRecoveryService {
  constructor(private readonly repository:RecoveryRepository,private readonly provider:RecoveryReader,
-  private readonly operators:ReadonlySet<string>){}
+  private readonly operators:ReadonlySet<string>,private readonly delivery?:DeliveryCheck){}
  authorize(user:AuthenticatedUser){authorizeWithdrawalOperator(user,this.operators);}
  async read(user:AuthenticatedUser,id:string){
   this.authorize(user);const row=await this.repository.read(id);
@@ -23,19 +27,14 @@ export class SandboxWithdrawalRecoveryService {
   return executionView(row);
  }
  async reconcile(user:AuthenticatedUser,id:string){
-  this.authorize(user);return recoverSandboxWithdrawal(this.repository,this.provider,id);
+  this.authorize(user);return recoverSandboxWithdrawal(this.repository,this.provider,id,undefined,this.delivery,`operator:${user.id}`);
  }
 }
 
 /** Background callers must pass the checkpoint customer; HTTP callers authorize above. */
-export async function recoverSandboxWithdrawal(repository:RecoveryRepository,provider:RecoveryReader,id:string,customerId?:string){
+export async function recoverSandboxWithdrawal(repository:RecoveryRepository,provider:RecoveryReader,id:string,customerId?:string,
+ delivery?:DeliveryCheck,actor="system:withdrawal_recovery"){
  const row=await repository.read(id);
  if(!row || (customerId!==undefined && row.customerId!==customerId))throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_NOT_FOUND");
- if(!row.attempted || row.closedAt)return executionView(row);
- const found=row.sendTransferId??await provider.find(row.providerCustomerId,row.id);
- if(!found)return executionView(row);
- const observation=await provider.transfer(found);
- validateWithdrawal(row,observation);
- await repository.bind(row,found);row.sendTransferId=found;
- return executionView(await repository.save(row,observation));
+ return reconcileExecution(repository,provider,row,actor,delivery);
 }

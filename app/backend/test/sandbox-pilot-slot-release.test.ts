@@ -14,6 +14,7 @@ beforeAll(async()=>{
  const dir=new URL('../migrations/',import.meta.url);
  for(const name of (await readdir(dir)).filter(n=>/^\d+_.*\.sql$/.test(n)).sort())
   await db.exec(await readFile(new URL(name,dir),'utf8'));
+ await db.exec("insert into peragus_database_environment(environment) values('test')");
 },30000);
 beforeEach(async()=>{
  await db.exec('truncate peragus_customers,peragus_pilot_invites,peragus_pilot_invite_slots,peragus_sandbox_pilot_slot_releases cascade;insert into peragus_pilot_invite_slots(slot) select generate_series(1,5)');
@@ -31,8 +32,8 @@ it('previews without changing slots or audit',async()=>{
 });
 it('releases atomically and preserves customer and immutable redeemed evidence',async()=>{
  const id=randomUUID();
- await db.query(`insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,reason,duration_hours,code_hash,expires_at,state,redeemed_by,redemption_request_id,redeemed_at)
- values($1,1,$2,$3,$4,'Synthetic admission reason',1,$5,now()+interval '1 hour','redeemed',$2,$6,now())`,[id,owner,randomUUID(),randomUUID(),'a'.repeat(64),randomUUID()]);
+ await db.query(`insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,reason,duration_hours,code_hash,expires_at,state,redeemed_by,redemption_request_id,redeemed_at,environment)
+ values($1,1,$2,$3,$4,'Synthetic admission reason',1,$5,now()+interval '1 hour','redeemed',$2,$6,now(),'test')`,[id,owner,randomUUID(),randomUUID(),'a'.repeat(64),randomUUID()]);
  await db.query('update peragus_pilot_invite_slots set current_invite_id=$1 where slot=1',[id]);
  const input=plan();input.expected[0]!.current_invite_id=id as any;
  expect(await release(connection,input,true)).toMatchObject({applied:true});
@@ -59,8 +60,8 @@ it('rejects an unexpected occupant without partial changes',async()=>{
 });
 it('refuses active invitations even in otherwise unoccupied slots',async()=>{
  const id=randomUUID();
- await db.query(`insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,reason,duration_hours,code_hash,expires_at)
- values($1,2,$2,$3,$4,'Synthetic active reason',1,$5,now()+interval '1 hour')`,[id,randomUUID(),randomUUID(),randomUUID(),'b'.repeat(64)]);
+ await db.query(`insert into peragus_pilot_invites(id,slot,target_user_id,operator_user_id,request_id,reason,duration_hours,code_hash,expires_at,environment)
+ values($1,2,$2,$3,$4,'Synthetic active reason',1,$5,now()+interval '1 hour','test')`,[id,randomUUID(),randomUUID(),randomUUID(),'b'.repeat(64)]);
  await db.query('update peragus_pilot_invite_slots set current_invite_id=$1 where slot=2',[id]);
  await expect(release(connection,plan(),true)).rejects.toThrow('ACTIVE_INVITATION_PRESENT');
 });

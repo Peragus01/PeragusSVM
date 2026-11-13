@@ -116,7 +116,7 @@ describe("onboarding result notifications", () => {
         { send },
         "test@peragus.example",
         "https://staging.example/app/minha-conta",
-        async () => facts(),
+        async () => facts(),"test",
       );
     await p().process(c, "synthetic@example.test");
     await p().process(c, "synthetic@example.test");
@@ -137,7 +137,7 @@ describe("onboarding result notifications", () => {
       { send },
       "test@peragus.example",
       "https://staging.example/app/minha-conta",
-      async () => facts(),
+      async () => facts(),"test",
     );
     await expect(p.process(c, "synthetic@example.test")).rejects.toThrow();
     await db.query(
@@ -170,7 +170,7 @@ describe("onboarding result notifications", () => {
       { send },
       "test@peragus.example",
       "https://staging.example/app/minha-conta",
-      async () => f,
+      async () => f,"test",
     );
     await expect(p.process(c, "first@example.test")).rejects.toThrow();
     await p.process(c, "second@example.test");
@@ -190,7 +190,7 @@ describe("onboarding result notifications", () => {
       { send },
       "a@example.test",
       "https://example.test",
-      async () => f,
+      async () => f,"test",
     ).process(c, "b@example.test");
     expect(send).not.toHaveBeenCalled();
     await expect(
@@ -201,7 +201,7 @@ describe("onboarding result notifications", () => {
         "https://example.test",
         async () => {
           throw Error("provider");
-        },
+        },"test",
       ).process(c, "b@example.test"),
     ).rejects.toThrow();
     expect(send).not.toHaveBeenCalled();

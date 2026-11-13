@@ -1,3 +1,4 @@
+import { createReadinessChecker, type ReadinessProbes } from "./database/readiness.js";
 import { registerInviteDeliveryRoute, type InviteDeliveryOptions } from "./routes/invite-email-delivery.js";
 import { registerCustomerDocumentRoutes } from "./routes/customer-documents.js";
 import type { CustomerDocumentService } from "./onboarding/customer-documents.js";
@@ -6,6 +7,8 @@ import type { PilotInviteService } from "./invites/pilot-invites.js";
 import { registerCustomerReconciliationStatusRoutes } from "./routes/customer-reconciliation-status.js";
 import type { CustomerReconciliationStatusService } from "./jobs/customer-reconciliation.js";
 import { registerManualRefundRoutes } from "./routes/manual-refunds.js";
+import { registerOperatorResolutionRoutes } from "./routes/operator-resolutions.js";
+import type { OperatorResolutionService } from "./operations/operator-resolutions.js";
 import type { ManualRefundService } from "./refunds/manual-refunds.js";
 import type { SandboxWithdrawalRecoveryService } from "./withdrawals/sandbox-recovery.js";
 import { registerOperatorWithdrawalAuditRoutes } from "./routes/operator-withdrawal-audit.js";
@@ -23,9 +26,10 @@ import type { WithdrawalOperatorApprovalService } from "./withdrawals/operator-a
 import { registerCustomerWithdrawalRequestRoutes } from "./routes/customer-withdrawal-requests.js";
 import type { CustomerWithdrawalRequestService } from "./withdrawals/customer-withdrawal-requests.js";
 import { registerCustomerSandboxPixRoutes } from "./routes/customer-sandbox-pix.js";
-import type { CustomerSandboxPixService } from "./purchases/customer-sandbox-pix.js";
+import type { CustomerPixService } from "./purchases/customer-sandbox-pix.js";
 import { registerCustomerPurchaseIntentRoutes } from "./routes/customer-purchase-intents.js";
 import type { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
+import type { CustomerPurchaseCancelService } from "./purchases/customer-purchase-cancel.js";
 import { registerCustomerQuoteRoutes } from "./routes/customer-quotes.js";
 import type { CustomerQuoteService } from "./quotes/customer-quotes.js";
 import { registerCustomerWalletRoutes } from "./routes/customer-wallet.js";
@@ -56,8 +60,15 @@ import {
 import type { ApiRateLimiter } from "./auth/api-rate-limits.js";
 import type { OperatorAlertService } from "./operations/operator-alerts.js";
 import { registerOperatorAlertRoutes } from "./routes/operator-alerts.js";
+import type { OperatorNotificationListService } from "./operations/operator-notification-list.js";
+import { registerOperatorNotificationRoutes } from "./routes/operator-notifications.js";
+import type { RuntimeControlService } from "./operations/runtime-controls.js";
+import { registerRuntimeControlRoutes } from "./routes/runtime-controls.js";
+import type { DailyReviewService } from "./operations/daily-review.js";
+import { registerDailyReviewRoutes } from "./routes/daily-reviews.js";
 import type { SandboxClosureService } from "./withdrawals/sandbox-closure.js";
 import { registerSandboxClosureRoutes } from "./routes/sandbox-withdrawal-closure.js";
+import {moneyNetworkFor,type MoneyMode} from "./config/money-environment.js";
 import sensible from "@fastify/sensible";
 import Fastify, {
   type FastifyInstance,
@@ -86,8 +97,12 @@ import { registerSettlementAuditRoutes } from "./routes/settlement-audit.js";
 import { registerSettlementRoutes } from "./routes/settlements.js";
 
 export interface BuildAppOptions {
+  /** Configured money mode; sandbox-only simulation routes exist only in "test". Defaults to "test". */
+  moneyMode?: MoneyMode;
   inviteDelivery?: InviteDeliveryOptions;
   manualRefundService?: ManualRefundService;
+  /** Ruling 39 operator resolutions (close unpaid review, re-verify delivery, approved -> review, reconcile Pix). */
+  operatorResolutionService?: OperatorResolutionService;
   sandboxWithdrawalRecoveryService?: SandboxWithdrawalRecoveryService;
   operatorWithdrawalAuditService?: OperatorWithdrawalAuditService;
   operatorWithdrawalQueueService?: OperatorWithdrawalQueueService;
@@ -96,10 +111,14 @@ export interface BuildAppOptions {
   customerWithdrawalResultService?: CustomerWithdrawalResultService;
   sandboxWithdrawalExecutionService?: SandboxWithdrawalExecutionService;
   withdrawalOperatorApprovalService?: WithdrawalOperatorApprovalService;
+  /** WITHDRAWAL_OPERATOR_USER_IDS, for GET /v1/admin/operator-status only. */
+  operatorUserIds?: ReadonlySet<string>;
   customerWithdrawalRequestService?: CustomerWithdrawalRequestService;
-  customerSandboxPixService?: CustomerSandboxPixService;
+  customerSandboxPixService?: CustomerPixService;
   customerSandboxPixSimulationEnabled?: boolean;
   customerPurchaseIntentService?: CustomerPurchaseIntentService;
+  /** POST /v1/me/purchase-intents/:id/cancel (refund policy 7.1). */
+  customerPurchaseCancelService?: CustomerPurchaseCancelService;
   customerQuoteService?: CustomerQuoteService;
   customerWalletService?: CustomerWalletService;
   customerOnboardingOverview?: CustomerOnboardingOverview;
@@ -112,8 +131,18 @@ export interface BuildAppOptions {
   individualDraftService?: IndividualDraftService;
   customerWebhooks?: CustomerWebhookOptions;
   customerAccess?: CustomerAccess;
+  /** Reverse-proxy hops to trust for request.ip (TRUST_PROXY_HOPS); 0 trusts none. */
+  trustProxyHops?: number;
   apiRateLimiter?: ApiRateLimiter;
   operatorAlertService?: OperatorAlertService;
+  /** GET /v1/admin/operator-notifications (uncertain/failed e-mail alerts; operator + AAL2). */
+  operatorNotificationListService?: OperatorNotificationListService;
+  /** GET /ready dependency probes (public, outside /v1). Without database and queue probes it reports not_ready. */
+  readiness?: ReadinessProbes;
+  /** GET/PUT /v1/admin/runtime-controls (kill switches; operator + fresh MFA). */
+  runtimeControlService?: RuntimeControlService;
+  /** POST /v1/admin/daily-reviews (daily review gate of new operations; operator + fresh MFA). */
+  dailyReviewService?: DailyReviewService;
   sandboxClosureService?: SandboxClosureService;
   pilotInviteService?: PilotInviteService;
   ozavSandboxCustomerService?: OzavSandboxCustomerService;
@@ -137,10 +166,19 @@ export interface BuildAppOptions {
 export async function buildApp(
   options: BuildAppOptions = {},
 ): Promise<FastifyInstance> {
-  const app = Fastify({
+  const mode: MoneyMode = options.moneyMode ?? "test";
+  if (mode !== "test" && mode !== "live")
+    throw Object.assign(new Error("MONEY_ENVIRONMENT_INVALID"), { code: "MONEY_ENVIRONMENT_INVALID" });
+  const sandboxOnly = mode === "test";
+  const serverOptions: FastifyServerOptions = {
     logger: options.logger ?? false,
     bodyLimit: 64 * 1024,
-  });
+    // Only the configured number of proxy hops is trusted for request.ip; with 0 every
+    // X-Forwarded-For value is ignored.
+    trustProxy: (_address: string, hop: number) => hop < (options.trustProxyHops ?? 0),
+  };
+  const app = Fastify(serverOptions);
+
 
   await app.register(sensible);
   await registerInviteDeliveryRoute(app, options.inviteDelivery);
@@ -156,20 +194,39 @@ export async function buildApp(
       options.apiRateLimiter,
     );
 
+  if (options.customerAccess) {
+    const access = options.customerAccess;
+    const operators = options.operatorUserIds ?? new Set<string>();
+    // Any authenticated user (AAL1 is enough: it runs before MFA enrollment) learns only
+    // whether it is an operator, so the frontend offers MFA enrollment to operators only.
+    app.get("/v1/admin/operator-status", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      const user = request.authenticatedUser;
+      if (!user) return reply.code(401).send({ error: { code: "AUTH_REQUIRED" } });
+      if (Object.keys(request.query as object).length)
+        return reply.code(400).send({ error: { code: "VALIDATION_ERROR" } });
+      // A customer account is never an operator (account separation).
+      const operator =
+        operators.has(user.id.toLowerCase()) &&
+        !(await access.customers.findByOwner(user.id));
+      return { data: { operator, mfa_enrolled_required: true as const } };
+    });
+  }
+
   app.get("/v1/me/purchase-capabilities", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
     if (!request.authenticatedUser || !request.authenticatedCustomer)
       return reply.code(401).send({ error: { code: "AUTH_REQUIRED" } });
     return {
       data: {
-        environment: "test",
+        environment: mode,
         operations_enabled: false,
-        real_purchase: false,
+        real_purchase: mode === "live",
         required_costs_complete: false,
         quote: Boolean(options.customerQuoteService),
         record: Boolean(options.customerPurchaseIntentService),
         pix: Boolean(options.customerSandboxPixService),
-        network: "solana:devnet",
+        network: moneyNetworkFor(mode),
       },
     };
   });
@@ -180,6 +237,18 @@ export async function buildApp(
   await registerOperatorAlertRoutes(
     app,
     options.customerAccess ? options.operatorAlertService : undefined,
+  );
+  await registerOperatorNotificationRoutes(
+    app,
+    options.customerAccess ? options.operatorNotificationListService : undefined,
+  );
+  await registerRuntimeControlRoutes(
+    app,
+    options.customerAccess ? options.runtimeControlService : undefined,
+  );
+  await registerDailyReviewRoutes(
+    app,
+    options.customerAccess ? options.dailyReviewService : undefined,
   );
   await registerPilotInviteRoutes(
     app,
@@ -203,6 +272,10 @@ export async function buildApp(
   await registerManualRefundRoutes(
     app,
     options.customerAccess ? options.manualRefundService : undefined,
+  );
+  await registerOperatorResolutionRoutes(
+    app,
+    options.customerAccess ? options.operatorResolutionService : undefined,
   );
   await registerOperatorWithdrawalAuditRoutes(
     app,
@@ -239,11 +312,13 @@ export async function buildApp(
   await registerCustomerSandboxPixRoutes(
     app,
     options.customerAccess ? options.customerSandboxPixService : undefined,
-    options.customerSandboxPixSimulationEnabled ?? false,
+    sandboxOnly && (options.customerSandboxPixSimulationEnabled ?? false),
+    sandboxOnly,
   );
   await registerCustomerPurchaseIntentRoutes(
     app,
     options.customerAccess ? options.customerPurchaseIntentService : undefined,
+    options.customerAccess ? options.customerPurchaseCancelService : undefined,
   );
   await registerCustomerQuoteRoutes(
     app,
@@ -265,7 +340,8 @@ export async function buildApp(
   await registerCustomerVerificationRoutes(
     app,
     options.customerAccess ? options.customerVerificationService : undefined,
-    options.verificationSimulationEnabled,
+    sandboxOnly && (options.verificationSimulationEnabled ?? false),
+    sandboxOnly,
   );
   await registerCustomerSubmissionRoutes(
     app,
@@ -278,12 +354,15 @@ export async function buildApp(
   await registerIndividualOnboardingRoutes(
     app,
     options.customerAccess ? options.individualDraftService : undefined,
+    mode,
   );
 
-  registerOzavSandboxCustomerRoutes(
-    app,
-    options.customerAccess ? options.ozavSandboxCustomerService : undefined,
-  );
+  // Synthetic OZAV customers are a sandbox fixture; the routes do not exist outside test mode.
+  if (sandboxOnly)
+    registerOzavSandboxCustomerRoutes(
+      app,
+      options.customerAccess ? options.ozavSandboxCustomerService : undefined,
+    );
 
   app.get("/health", async () => ({
     status: "ok",
@@ -292,6 +371,15 @@ export async function buildApp(
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
   }));
+
+  // Readiness (vs /health liveness): public and outside /v1, so auth, the legal gate and rate
+  // limits never apply. Reports only ok/failed per dependency.
+  const checkReadiness = createReadinessChecker(options.readiness ?? {});
+  app.get("/ready", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const report = await checkReadiness();
+    return reply.code(report.status === "ready" ? 200 : 503).send(report);
+  });
 
   await registerSettlementDraftRoutes(app, {
     repositoryForCustomer: options.customerAccess
@@ -311,7 +399,9 @@ export async function buildApp(
 
   await registerOzavOnrampRoutes(app, {
     reader: options.ozavOnrampReader,
-    sandboxPaymentSimulator: options.sandboxPixPaymentSimulator,
+    sandboxPaymentSimulator: sandboxOnly
+      ? options.sandboxPixPaymentSimulator
+      : undefined,
     now: options.now ?? (() => new Date()),
   });
 

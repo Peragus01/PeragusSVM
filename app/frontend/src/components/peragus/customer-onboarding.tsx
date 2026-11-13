@@ -1,9 +1,11 @@
+import { useMoneyMode } from "@/lib/peragus/config";
 import { CustomerDocumentSummary } from "./customer-document-summary";
 import { OnboardingReceipt, type OnboardingReview } from "./onboarding-receipt";
 import { useEffect, useRef, useState } from "react";
 import { CustomerNotice, CustomerPanel } from "./customer-ui";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import { journeyRequest, journeyMessage, JourneyError } from "@/lib/peragus/journey";
+import { browserNavigation, hostedSessionUrl } from "@/lib/peragus/hosted-session";
 
 type Draft = { version: number; individual: Individual };
 type Individual = {
@@ -38,8 +40,8 @@ type Verification = {
   status: string | null;
   identity_outcome: string | null;
   session_url: string | null;
-  environment: "test";
-  sandbox_only: true;
+  environment: "test" | "live";
+  sandbox_only: boolean;
 };
 const empty: Individual = {
   legal_name: "",
@@ -81,8 +83,13 @@ const fieldMessages: Record<string, string> = {
   "individual.residential_address.postal_code": "Informe um CEP com 8 dígitos.",
 };
 const fieldSummary = "Corrija os campos destacados para continuar.";
+const sessionUnavailable =
+  "A sessão de verificação de identidade está indisponível no momento. Tente novamente em alguns minutos.";
+const verificationOpen = (value: Verification | null | undefined) =>
+  value?.status === "pending" || value?.status === "in_progress";
 export function CustomerOnboarding() {
   const { accessToken, identity } = useCustomerSession();
+  const test = useMoneyMode() === "test";
   const [individual, setIndividual] = useState<Individual>(empty);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [terms, setTerms] = useState<Terms | null>(null);
@@ -203,8 +210,16 @@ export function CustomerOnboarding() {
       else if (path.startsWith("onboarding/terms")) {
         setTerms(result as Terms);
         setAccepted(false);
-      } else if (path.includes("verification")) setVerification(result as Verification);
-      else if (path.includes("screening"))
+      } else if (path.includes("verification")) {
+        setVerification(result as Verification);
+        // Live: starting sends the person to OZAV's hosted session, only to a validated OZAV URL.
+        if (path === "onboarding/verification" && !test) {
+          const started = result as Verification | null;
+          const url = verificationOpen(started) ? hostedSessionUrl(started?.session_url) : null;
+          if (url) browserNavigation.assign(url);
+          else if (verificationOpen(started)) setError(sessionUnavailable);
+        }
+      } else if (path.includes("screening"))
         setScreening(result as { status: string; result: string });
       else if (path.startsWith("onboarding")) setRegistration(result as { state: string });
       if (path.startsWith("onboarding")) {
@@ -285,7 +300,9 @@ export function CustomerOnboarding() {
   );
   const stateLabel =
     verification?.identity_outcome === "approved"
-      ? "Aprovado em teste"
+      ? test
+        ? "Aprovado em teste"
+        : "Aprovado"
       : verification?.identity_outcome === "rejected"
         ? "Não aprovado"
         : verification?.status === "expired"
@@ -298,8 +315,9 @@ export function CustomerOnboarding() {
   return (
     <div className="journey-onboarding" id="dados-cadastrais">
       <CustomerNotice kind="warning">
-        Cadastro e KYC obrigatórios · ambiente de testes. Use apenas dados sintéticos. Não envie
-        documentos reais neste ambiente.
+        {test
+          ? "Cadastro e KYC obrigatórios · ambiente de testes. Use apenas dados sintéticos. Não envie documentos reais neste ambiente."
+          : "Cadastro e verificação de identidade (KYC) são obrigatórios."}
       </CustomerNotice>
       <ol className="journey-step-list customer-kyc-stepper" aria-label="Etapas do cadastro">
         <li data-complete="true">
@@ -540,8 +558,9 @@ export function CustomerOnboarding() {
                           checked={synthetic}
                           onChange={(e) => setSynthetic(e.target.checked)}
                         />
-                        Confirmo que os dados usados neste ambiente são sintéticos, sem documentos
-                        reais.
+                        {test
+                          ? "Confirmo que os dados usados neste ambiente são sintéticos, sem documentos reais."
+                          : "Confirmo que os dados informados são meus e verdadeiros."}
                       </label>
                       <button
                         className="customer-button"
@@ -550,7 +569,10 @@ export function CustomerOnboarding() {
                           void act("onboarding/submit", {
                             draft_version: draft.version,
                             terms_session_id: terms.session_id,
-                            sandbox_data_confirmed: true,
+                            // Test confirms synthetic data; live confirms the data are the person's own and true.
+                            ...(test
+                              ? { sandbox_data_confirmed: true }
+                              : { data_truthfulness_confirmed: true }),
                           })
                         }
                       >
@@ -597,14 +619,37 @@ export function CustomerOnboarding() {
                   </button>
                 ) : (
                   <>
-                    <details>
-                      <summary>Sobre a verificação no ambiente de testes</summary>
-                      <p>
-                        O envio de arquivos, quando disponível, aparece na seção de documentos. A
-                        verificação permanece pendente até a análise; não envie documentos reais
-                        neste ambiente.
-                      </p>
-                    </details>
+                    {test ? (
+                      <details>
+                        <summary>Sobre a verificação no ambiente de testes</summary>
+                        <p>
+                          O envio de arquivos, quando disponível, aparece na seção de documentos. A
+                          verificação permanece pendente até a análise; não envie documentos reais
+                          neste ambiente.
+                        </p>
+                      </details>
+                    ) : (
+                      <>
+                        <p className="customer-muted">
+                          A verificação de identidade é feita na página segura da OZAV, com seu
+                          documento e uma selfie. Depois de concluir, volte aqui e atualize a
+                          verificação.
+                        </p>
+                        {verificationOpen(verification) &&
+                          hostedSessionUrl(verification.session_url) && (
+                            <button
+                              className="customer-button"
+                              disabled={busy}
+                              onClick={() => {
+                                const url = hostedSessionUrl(verification.session_url);
+                                if (url) browserNavigation.assign(url);
+                              }}
+                            >
+                              Continuar verificação de identidade
+                            </button>
+                          )}
+                      </>
+                    )}
                     <button
                       className="customer-button-secondary"
                       disabled={busy}
@@ -618,7 +663,9 @@ export function CustomerOnboarding() {
                   <span>Análise de conformidade</span>
                   <b>
                     {screening?.status === "completed" && screening.result === "clear"
-                      ? "Concluída em teste"
+                      ? test
+                        ? "Concluída em teste"
+                        : "Concluída"
                       : screening
                         ? "Em acompanhamento"
                         : "Não iniciada"}
@@ -640,7 +687,7 @@ export function CustomerOnboarding() {
                 </button>
                 <p className="customer-muted">
                   Seu cadastro permanece pendente até a conclusão das verificações obrigatórias.
-                  Este ambiente não permite operações reais.
+                  {test && " Este ambiente não permite operações reais."}
                 </p>
               </CustomerPanel>
             </>
