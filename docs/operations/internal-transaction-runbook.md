@@ -7,13 +7,34 @@ a conta de operador nunca é a conta do cliente (o sistema recusa com `OPERATOR_
 Este é dinheiro real. Em qualquer dúvida: **pare e pause** (`operator-runbook.md` seção 1). Parar nunca custa dinheiro; seguir às cegas, sim.
 Para cada etapa, colete a evidência indicada e guarde-a em uma pasta privada (nunca no repositório): IDs, hashes, capturas sem segredos.
 
+## Sequência de liberação em produção (ordem obrigatória)
+
+Seguir exatamente esta ordem; cada etapa só começa quando a anterior tem evidência arquivada.
+
+1. **Probe das capabilities live (primeiro passo).** Com a chave live apenas no terminal do responsável (nunca no repositório, nunca nos serviços):
+   ```
+   cd app/backend
+   OZAV_LIVE_PROBE_API_KEY=<chave live> node scripts/ozav-live-capabilities.mjs
+   ```
+   O script faz somente `GET /v2/capabilities` e nunca imprime a chave. Saída: ambiente, scopes, entitlements e um checklist (presente / ausente / não informado) de on-ramp BRL→USDT/Solana,
+   custódia, envio `crypto_address` com Travel Rule, facility de trava de câmbio, KYC hospedado (`session_url`) e webhooks. Código de saída diferente de zero (ambiente ≠ `live` ou capacidade ausente) = **NO-GO**: não siga.
+   Itens "não informado" (Travel Rule, facility e a rota BRL→USDT/Solana não aparecem em `/capabilities`) exigem resposta escrita da OZAV. Arquive a saída (critério 1).
+2. **Arquivar as respostas escritas da OZAV:** facility contratado, host do `session_url`, devolução de Pix somente por solicitação manual, taxa de rede descontada do USDT, criação da ATA.
+3. **Promover `develop → main`** (somente com staging verde e CI verde; `main` protegida).
+4. **Deploy em produção com todas as chaves de runtime desligadas** (`new_operations`, `usdt_sends`, `onboarding`).
+5. **Confirmar o boot:** `deployment_configuration_audit` / `money_environment_verified` com `money_mode=live`, `network=solana:mainnet`, e `/ready` 200.
+6. **Ligar o envio do worker de e-mails de onboarding** (`ONBOARDING_EMAILS_ENABLED=true`, allowlist com a pessoa de confiança; `configuration-checklist.md` seções 1.1 e 4).
+7. **Transação interna de R$ 1.000** (passos 1 a 4 abaixo): `onboarding`, depois `new_operations`, depois `usdt_sends` somente durante o envio.
+8. **Coletar o pacote de evidências** (IDs OZAV, `tx_hash`, Explorer, conciliação, auditoria, e-mails, capturas).
+9. **Revisão Go/No-Go** (16 critérios abaixo). NO-GO se qualquer item faltar.
+
 ## Pré-requisitos (todos devem estar verdadeiros antes do passo 1)
 
 - [ ] `configuration-checklist.md` conferido para produção, item a item (Railway API/workers, Vercel, Supabase, OZAV, GitHub).
 - [ ] Staging verde: CI e smoke ponta a ponta concluídos.
 - [ ] Produção implantada com **todas as chaves de runtime desligadas** (`new_operations`, `usdt_sends`, `onboarding`); boot sem erro;
       logs com `money_environment_verified` (`money_mode: live`, `network: solana:mainnet`, `ozav_probed: true`); `/ready` retorna 200.
-- [ ] Capabilities live da OZAV registradas (`GET /v2/capabilities` com a chave live): on-ramp BRL→USDT/Solana, custódia, envio externo,
+- [ ] Capabilities live da OZAV registradas (saída de `node scripts/ozav-live-capabilities.mjs` com `OZAV_LIVE_PROBE_API_KEY`, que faz `GET /v2/capabilities`): on-ramp BRL→USDT/Solana, custódia, envio externo,
       Travel Rule, facility de trava, `session_url` de KYC, webhooks. Respostas escritas da OZAV arquivadas (facility contratado, KYC hospedado,
       devolução de Pix somente manual, taxa de rede descontada, criação da ATA).
 - [ ] Endpoint de webhook registrado na OZAV de produção (`/webhooks/customer-updates`) e `CUSTOMER_WEBHOOK_SECRET` conferido.

@@ -88,7 +88,7 @@ Legenda das colunas: **Variável/ajuste**, **Valor esperado** (formato, nunca se
 | `INVITE_EMAIL_WEBHOOK_SECRET` | `whsec_...` (segredo do webhook de e-mail do Resend) | Entrega/rejeição de e-mails de convite. |
 | `PILOT_INVITE_EMAIL_HASH_KEY` | 64 caracteres hex (segredo); estável | HMAC do e-mail vinculado ao convite; trocar invalida convites pendentes. |
 | `RESEND_API_KEY` | `re_...` (segredo) | Envio de convites e alertas via Resend. |
-| `ONBOARDING_EMAILS_ENABLED` | `false` até haver decisão (ver seção 4) | E-mail de resultado de onboarding; em produção exige `RESEND_FROM`, `ONBOARDING_EMAIL_ACCOUNT_URL` https e allowlist. |
+| `ONBOARDING_EMAILS_ENABLED` | `false` no deploy inicial; vira `true` só depois do boot conferido (passo 4 da liberação em `internal-transaction-runbook.md`), com a pessoa de confiança na allowlist (ver seção 4) | E-mail de resultado de onboarding; em produção exige `RESEND_FROM`, `ONBOARDING_EMAIL_ACCOUNT_URL` https e allowlist. |
 | `RESEND_FROM` | remetente `@peragus.com.br` | Remetente do e-mail de onboarding (só se o flag acima estiver ligado). |
 | `ONBOARDING_EMAIL_ACCOUNT_URL` | `https://www.peragus.com.br/app/minha-conta` (https, sem query/hash) | Link no e-mail de onboarding. |
 | `ONBOARDING_EMAIL_TEST_USER_IDS` | até 5 UUIDs de usuários consentidos | Allowlist do e-mail de onboarding. |
@@ -300,15 +300,15 @@ Mesma lista da seção 1.6 para as variáveis legadas (`OZAV_ONRAMP_WRITES_ENABL
   aprovações/reembolsos/convites), `RESEND_API_KEY` e as variáveis `INVITE_EMAIL_*`/`PILOT_INVITE_EMAIL_HASH_KEY`,
   `CUSTOMER_RECONCILIATION_ENABLED` (worker), `OZAV_RECONCILIATION_*`, `JOB_*`, `API_RATE_LIMITS_ENABLED`,
   `PILOT_INVITES_ENABLED` e todas as flags `CUSTOMER_*_ENABLED` do caminho live.
-- **`ONBOARDING_EMAILS_ENABLED`:** o código (`notifications/config.ts`) exige `ONBOARDING_EMAIL_TEST_USER_IDS` com
+- **`ONBOARDING_EMAILS_ENABLED`:** a liberação liga o flag após o deploy com as chaves desligadas e antes do cadastro da pessoa de confiança, com o UUID dela em `ONBOARDING_EMAIL_TEST_USER_IDS`. O código (`notifications/config.ts`) exige `ONBOARDING_EMAIL_TEST_USER_IDS` com
   1 a 5 UUIDs quando ligado; ou seja, o e-mail de resultado de onboarding só chega à allowlist. A spec pede o worker
-  de onboarding ligado em produção; decida (ou ajuste o código) antes do piloto externo. Até lá, deixe desligado.
+  de onboarding ligado em produção; para clientes externos, decida (ou ajuste o código) antes do piloto externo. Até lá, só a allowlist recebe.
 - **Origem da sessão de KYC:** o host do `session_url` precisa ser `ozav.io` ou `*.ozav.io`; se a OZAV usar outro domínio,
   o KYC live falha fechado até a lista ser atualizada (pendência registrada).
 - **ATA do destinatário:** pendência com a OZAV (criação da conta de token); enquanto aberta, o envio é bloqueado pelo
   blocker `DESTINATION_TOKEN_ACCOUNT_MISSING` e `DESTINATION_TOKEN_ACCOUNT_FROZEN` (conta congelada).
 - **Piso R$ 50:** redução negociada com a OZAV é apenas configuração (`PURCHASE_MIN_BRL`/`PURCHASE_MAX_BRL`); o lançamento não depende dela.
 - Variáveis de uso local/legado que não pertencem a nenhum ambiente hospedado: `SANDBOX_SLOT_RELEASE_CONFIRMATION`,
-  `PERAGUS_DEMO_RECIPIENT`, `PERAGUS_DEMO_CORRIDOR_ID`, `OZAV_READINESS_EXPECTED_ENVIRONMENT`, `OZAV_READINESS_API_KEY`
-  (scripts de linha de comando; nunca definir nos serviços).
+  `PERAGUS_DEMO_RECIPIENT`, `PERAGUS_DEMO_CORRIDOR_ID`, `OZAV_READINESS_EXPECTED_ENVIRONMENT`, `OZAV_READINESS_API_KEY`, `OZAV_LIVE_PROBE_API_KEY`
+  (scripts de linha de comando; nunca definir nos serviços; `OZAV_LIVE_PROBE_API_KEY` só no terminal do responsável, durante o probe `scripts/ozav-live-capabilities.mjs`).
 - **Monitor externo de uptime:** `/health` e `/ready` da produção, alertando o operador (evidência: captura da configuração).
