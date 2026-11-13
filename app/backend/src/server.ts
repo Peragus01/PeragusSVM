@@ -60,7 +60,12 @@ import { PostgresCustomerWebhookProcessor } from "./repositories/postgres-custom
 import { OzavSandboxCustomerService } from "./application/ozav-sandbox-customer.js";
 import { PostgresSandboxCustomerLinkRepository } from "./repositories/postgres-sandbox-customer-link.js";
 import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
-import { verifyDatabaseConnection } from "./database/readiness.js";
+import {
+  READINESS_OZAV_TIMEOUT_MS,
+  databaseReadinessProbe,
+  queueReadinessProbe,
+  verifyDatabaseConnection,
+} from "./database/readiness.js";
 import { randomUUID } from "node:crypto";
 import { INVITE_STAGING_ORIGIN } from "./invites/invite-email-template.js";
 import { createSupabaseAuthenticator } from "./auth/supabase-authenticator.js";
@@ -517,6 +522,34 @@ const app = await buildApp({
   // GET /v1/admin/operator-status answers only whether the caller is allowlisted.
   operatorUserIds: new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
   moneyMode,
+  // GET /ready (public): database, queue schema and OZAV capabilities, each ok/failed only.
+  ...(pool
+    ? {
+        readiness: {
+          database: databaseReadinessProbe(
+            pool,
+            process.env.RAILWAY_ENVIRONMENT_NAME || env.PERAGUS_DEPLOYMENT_ENV === "production"
+              ? () => assertDatabaseEnvironment(pool!, moneyModeFor(env))
+              : undefined,
+          ),
+          queue: queueReadinessProbe(pool),
+          // No OZAV key in this process: the check is skipped and reported "ok".
+          ...(env.OZAV_API_KEY
+            ? {
+                ozav: async () => {
+                  const capabilities = await new OzavClient({
+                    apiKey: env.OZAV_API_KEY!,
+                    mode: moneyModeFor(env),
+                    timeoutMs: READINESS_OZAV_TIMEOUT_MS,
+                    attempts: 1,
+                  }).getCapabilities();
+                  if (capabilities.environment !== moneyModeFor(env)) throw new Error("OZAV_ENVIRONMENT_MISMATCH");
+                },
+              }
+            : {}),
+        },
+      }
+    : {}),
   ...(pool
     ? {
         sandboxClosureService: new SandboxClosureService(

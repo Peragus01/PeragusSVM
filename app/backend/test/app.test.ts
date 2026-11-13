@@ -2,6 +2,7 @@ import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import { createReadinessChecker, type ReadinessProbes } from "../src/database/readiness.js";
 
 const applications: Awaited<ReturnType<typeof buildApp>>[] = [];
 
@@ -175,5 +176,98 @@ describe("money mode drives customer-facing environment", () => {
     });
     expect(sandboxCustomer.statusCode).not.toBe(404);
     expect(sandboxCustomer.statusCode).toBe(503);
+  });
+});
+
+describe("GET /ready", () => {
+  const ok = async () => undefined;
+  const boom = async () => {
+    throw new Error("secret-host.internal: password authentication failed");
+  };
+
+  async function ready(readiness: ReadinessProbes) {
+    const app = await buildApp({ readiness });
+    applications.push(app);
+    return app.inject({ method: "GET", url: "/ready" });
+  }
+
+  it("is 200 when all pass", async () => {
+    const response = await ready({ database: ok, queue: ok, ozav: ok });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      status: "ready",
+      checks: { database: "ok", queue: "ok", ozav: "ok" },
+    });
+  });
+
+  it("is 200 and skips OZAV when no OZAV probe is configured", async () => {
+    const response = await ready({ database: ok, queue: ok });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.ozav).toBe("ok");
+  });
+
+  it("is 503 when the database probe fails, without leaking the error", async () => {
+    const response = await ready({ database: boom, queue: ok, ozav: ok });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      status: "not_ready",
+      checks: { database: "failed", queue: "ok", ozav: "ok" },
+    });
+    expect(response.body).not.toContain("secret-host");
+  });
+
+  it("is 503 when the queue probe fails", async () => {
+    const response = await ready({ database: ok, queue: boom, ozav: ok });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks).toEqual({ database: "ok", queue: "failed", ozav: "ok" });
+  });
+
+  it("is 503 when OZAV capabilities fails", async () => {
+    const response = await ready({ database: ok, queue: ok, ozav: boom });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks).toEqual({ database: "ok", queue: "ok", ozav: "failed" });
+    expect(response.body).not.toContain("secret-host");
+  });
+
+  it("is 503 when the database probe hangs past the timeout", async () => {
+    const response = await ready({ database: () => new Promise<void>(() => undefined), queue: ok });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks.database).toBe("failed");
+  }, 6_000);
+
+  it("is not_ready when no database or queue probe is wired", async () => {
+    const app = await buildApp();
+    applications.push(app);
+    expect((await app.inject({ method: "GET", url: "/ready" })).statusCode).toBe(503);
+  });
+
+  it("caches the OZAV result for 30 seconds", async () => {
+    let calls = 0;
+    let clock = 1_000;
+    const checker = createReadinessChecker(
+      { database: ok, queue: ok, ozav: async () => { calls += 1; } },
+      { now: () => clock },
+    );
+    await checker();
+    await checker();
+    expect(calls).toBe(1);
+    clock += 30_001;
+    await checker();
+    expect(calls).toBe(2);
+  });
+
+  it("is reachable with auth and rate limiting configured, and /health is unchanged", async () => {
+    const app = await buildApp({
+      readiness: { database: ok, queue: ok, ozav: ok },
+      customerAccess: {
+        legal: allAcceptedLegal,
+        authenticate: async () => { throw new Error("must not run"); },
+        customers: { findByOwner: async () => undefined, createOrGet: async () => { throw new Error("x"); }, ownsSettlement: async () => false },
+      } as never,
+      apiRateLimiter: { consume: async () => ({ allowed: false }) } as never,
+    });
+    applications.push(app);
+    expect((await app.inject({ method: "GET", url: "/ready" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
   });
 });

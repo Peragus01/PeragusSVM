@@ -1,3 +1,4 @@
+import { createReadinessChecker, type ReadinessProbes } from "./database/readiness.js";
 import { registerInviteDeliveryRoute, type InviteDeliveryOptions } from "./routes/invite-email-delivery.js";
 import { registerCustomerDocumentRoutes } from "./routes/customer-documents.js";
 import type { CustomerDocumentService } from "./onboarding/customer-documents.js";
@@ -128,6 +129,8 @@ export interface BuildAppOptions {
   trustProxyHops?: number;
   apiRateLimiter?: ApiRateLimiter;
   operatorAlertService?: OperatorAlertService;
+  /** GET /ready dependency probes (public, outside /v1). Without database and queue probes it reports not_ready. */
+  readiness?: ReadinessProbes;
   /** GET/PUT /v1/admin/runtime-controls (kill switches; operator + fresh MFA). */
   runtimeControlService?: RuntimeControlService;
   /** POST /v1/admin/daily-reviews (daily review gate of new operations; operator + fresh MFA). */
@@ -352,6 +355,15 @@ export async function buildApp(
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
   }));
+
+  // Readiness (vs /health liveness): public and outside /v1, so auth, the legal gate and rate
+  // limits never apply. Reports only ok/failed per dependency.
+  const checkReadiness = createReadinessChecker(options.readiness ?? {});
+  app.get("/ready", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const report = await checkReadiness();
+    return reply.code(report.status === "ready" ? 200 : 503).send(report);
+  });
 
   await registerSettlementDraftRoutes(app, {
     repositoryForCustomer: options.customerAccess
