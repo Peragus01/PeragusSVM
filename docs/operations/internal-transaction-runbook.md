@@ -50,7 +50,7 @@ Critérios: 7, 8. **NO-GO imediato** se o valor pago/travado divergir (`LOCKED_A
 
 1. Ligue `usdt_sends` (a aprovação não depende dela; a execução sim).
 2. Operador revisa a trilha (`/audit`), aprova com TOTP fresco; a pessoa de confiança recebe o e-mail de **aprovação**.
-3. Espere o intervalo mínimo (**15 min**); tentar antes devolve `EXECUTION_TOO_EARLY`. Refaça o TOTP e **execute** com `confirmation: "LIVE_USDT_SEND"`.
+3. Espere o intervalo mínimo (`OPERATOR_EXECUTION_MIN_DELAY_SECONDS`, padrão 15 min); tentar antes devolve `EXECUTION_TOO_EARLY`. Refaça o TOTP e **execute** com `confirmation: "LIVE_USDT_SEND"`.
    A pessoa de confiança recebe o e-mail de **execução**. Verifique o bloqueio de ATA (`DESTINATION_TOKEN_ACCOUNT_MISSING`/`_FROZEN`) antes de insistir.
 4. Acompanhe `sending → sent → delivered_verified`. **Um único POST** de envio: confirme nos logs da API que só existe um `peragus-send-<id>`
    e nenhuma repetição. Em resposta 202 (`recovery_required`) **não repita** o POST; use a reconciliação.

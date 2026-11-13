@@ -17,6 +17,27 @@ const legalJson = readFileSync(
 const keys = Object.keys(envSchema.shape);
 const mentions = (text: string, key: string) =>
   new RegExp(`(?<![A-Z0-9_])${key}(?![A-Z0-9_])`).test(text);
+/** Backticked UPPER_SNAKE names in the first cell of every table row of `text`. */
+const firstColumnNames = (text: string) => {
+  const names = new Set<string>();
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("|")) continue;
+    const firstCell = line.split("|")[1] ?? "";
+    for (const match of firstCell.matchAll(/`([A-Z][A-Z0-9_]*)`/g)) names.add(match[1]!);
+  }
+  return names;
+};
+// Variables the checklist documents that are not keys of env.ts: platform-only or read outside the schema.
+const PLATFORM_ONLY = new Set([
+  "PERAGUS_BACKEND_URL",
+  "RAILWAY_ENVIRONMENT_NAME",
+  "RESEND_API_KEY",
+  "RESEND_FROM",
+  "ONBOARDING_EMAILS_ENABLED",
+  "ONBOARDING_EMAIL_ACCOUNT_URL",
+  "ONBOARDING_EMAIL_TEST_USER_IDS",
+  "ONBOARDING_EMAIL_DEPLOYMENT_ENV",
+]);
 const section = (from: string, to: string) => {
   const start = checklist.indexOf(from);
   const end = checklist.indexOf(to, start + 1);
@@ -31,10 +52,18 @@ describe("docs/operations/configuration-checklist.md cannot drift from env.ts", 
     expect(keys).toContain("PERAGUS_DEPLOYMENT_ENV");
   });
 
-  it("mentions every env.ts key in the production section", () => {
-    const production = section("## 1. Produção", "## 2. Staging");
-    const missing = keys.filter((key) => !mentions(production, key));
+  it("lists every env.ts key in the first column of a production table row", () => {
+    const documented = firstColumnNames(section("## 1. Produção", "## 2. Staging"));
+    const missing = keys.filter((key) => !documented.has(key));
     expect(missing, `undocumented in production: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("does not document a variable that env.ts no longer declares", () => {
+    const stale = [...firstColumnNames(checklist)].filter(
+      // Names without an underscore (e.g. the workflow name "CI") are not variables.
+      (name) => name.includes("_") && !keys.includes(name) &&!name.startsWith("VITE_") && !PLATFORM_ONLY.has(name),
+    );
+    expect(stale, `documented but not in env.ts: ${stale.join(", ")}`).toEqual([]);
   });
 
   it("covers the keys that gate staging boot in the staging section", () => {

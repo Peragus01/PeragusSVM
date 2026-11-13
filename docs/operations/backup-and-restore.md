@@ -37,11 +37,12 @@ pg_dump "$PROD_DATABASE_URL" \
 
 # 3) Checagem de integridade do arquivo e inventário.
 pg_restore --list "peragus-prod-$STAMP.dump" | head -20
-sha256sum "peragus-prod-$STAMP.dump" > "peragus-prod-$STAMP.dump.sha256"
+sha256sum "peragus-prod-$STAMP.dump" > "peragus-prod-$STAMP.dump.sha256"   # hash do dump em claro (verificado após decifrar)
 
 # 4) Cifrar e enviar para o armazenamento externo (exemplo com age; use a chave pública do responsável).
 age -r <CHAVE-PUBLICA-AGE> -o "peragus-prod-$STAMP.dump.age" "peragus-prod-$STAMP.dump"
-# envie "peragus-prod-$STAMP.dump.age" e o .sha256 para <DESTINO-EXTERNO> com a ferramenta do provedor
+sha256sum "peragus-prod-$STAMP.dump.age" > "peragus-prod-$STAMP.dump.age.sha256"   # hash do arquivo cifrado (verificado antes de decifrar)
+# envie "peragus-prod-$STAMP.dump.age", "peragus-prod-$STAMP.dump.age.sha256" e "peragus-prod-$STAMP.dump.sha256" para <DESTINO-EXTERNO> com a ferramenta do provedor
 
 # 5) Apague a cópia local em claro e limpe a variável.
 shred -u "peragus-prod-$STAMP.dump" 2>/dev/null || rm -f "peragus-prod-$STAMP.dump"
@@ -76,8 +77,9 @@ docker run -d --name peragus-restore-test -e POSTGRES_PASSWORD=<SENHA-TEMPORARIA
 export RESTORE_DATABASE_URL="postgresql://postgres:<SENHA-TEMPORARIA>@127.0.0.1:55432/postgres"
 
 # B) Traga o dump do armazenamento externo, confira o hash e decifre.
-sha256sum -c "peragus-prod-<STAMP>.dump.age.sha256"   # confira o hash do arquivo cifrado conforme gerado
+sha256sum -c "peragus-prod-<STAMP>.dump.age.sha256"   # hash do arquivo cifrado, antes de decifrar
 age -d -i <ARQUIVO-DE-CHAVE-PRIVADA-AGE> -o "peragus-prod-<STAMP>.dump" "peragus-prod-<STAMP>.dump.age"
+sha256sum -c "peragus-prod-<STAMP>.dump.sha256"       # hash do dump em claro, depois de decifrar
 
 # C) Prepare papéis exigidos pelo dump (o Supabase usa estes papéis em GRANTs; sem eles aparecem avisos).
 psql "$RESTORE_DATABASE_URL" -c "create role anon nologin; create role authenticated nologin; create role service_role nologin;" || true

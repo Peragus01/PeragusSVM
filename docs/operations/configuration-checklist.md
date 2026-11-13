@@ -113,7 +113,7 @@ Legenda das colunas: **Variável/ajuste**, **Valor esperado** (formato, nunca se
 | `OZAV_RECONCILIATION_INTERVAL_SECONDS` | `30` (1 a 3600) | Intervalo do polling de fallback. |
 | `OZAV_RECONCILIATION_MAX_ATTEMPTS` | `120` (1 a 10000) | Limite de tentativas antes de alertar. |
 | `JOB_POLL_INTERVAL_SECONDS` / `JOB_CONCURRENCY` | `2` / `3` | Parâmetros do pg-boss. |
-| `OPERATOR_NOTIFICATIONS_ENABLED` | `true` | O worker só envia alertas e roda o scanner de operações paradas com este flag. |
+| `OPERATOR_NOTIFICATIONS_ENABLED` | `true` | O worker só envia alertas e roda o scanner de operações paradas com este flag. A API (`server.ts`) não lê estas variáveis: não precisam estar na API. Se forem definidas lá, a validação compartilhada de `env.ts` se aplica igual (e-mails distintos, remetente `@peragus.com.br`, `DATABASE_URL`), então mantenha os mesmos valores nos dois ou omita-os na API. |
 | `OPERATOR_ALERT_EMAIL` | e-mail do operador | Destinatário dos alertas; validado, nunca logado. |
 | `TRUSTED_ALERT_EMAIL` | e-mail da pessoa de confiança — **diferente** do anterior | Controle compensatório do operador único; o boot recusa e-mails iguais. |
 | `OPERATOR_NOTIFICATIONS_FROM` | `alertas@peragus.com.br` (domínio `@peragus.com.br`) | Remetente dos alertas. |
@@ -205,7 +205,7 @@ Staging é o ambiente `test`/devnet. Mesmo código, outra chave, outro banco, ou
 | `OZAV_API_KEY` | `ozav_sk_test_...` | Prefixo `test` obrigatório em staging; a chave live nunca entra aqui. |
 | `CUSTOMER_WEBHOOKS_ENABLED` / `CUSTOMER_WEBHOOK_SECRET` | `true` / `ozav_whsec_...` do endpoint de staging | Webhook de teste; eventos `livemode:true` são ignorados. |
 | `SOLANA_RPC_URL` | RPC da **Devnet** (ex.: `https://api.devnet.solana.com`) | Genesis hash da Devnet conferido no boot. |
-| `SOLANA_USDT_MINT` | mint de teste da devnet (base58, 32 a 44 caracteres) | **Obrigatório em staging** quando cotação/compra/Pix/envio estão ligados (o schema recusa sem ele). |
+| `SOLANA_USDT_MINT` | mint de teste da devnet (base58, 32 a 44 caracteres) | **Obrigatório em qualquer processo de staging** (`resolveMoneyEnvironment` recusa com `MONEY_ENVIRONMENT_INVALID` sem ele; o schema o exige ainda por validação quando cotação/compra/Pix/envio estão ligados). Só em produção ele é opcional (o mint canônico é fixo). |
 | Conta de token USDT devnet | uma conta de token (ATA) do mint de teste para **cada carteira de teste** de cliente | O envio recusa `DESTINATION_TOKEN_ACCOUNT_MISSING` se a carteira de destino não tiver ATA do mint configurado. Criar a ATA antes do smoke. |
 | `LEGAL_REQUIRED_DOCUMENTS` | JSON da seção 0 | Gate jurídico idêntico à produção. |
 | `TRUST_PROXY_HOPS` | `1` | Railway. |
@@ -230,7 +230,7 @@ Staging é o ambiente `test`/devnet. Mesmo código, outra chave, outro banco, ou
 | `PERAGUS_DEPLOYMENT_ENV` | `staging` | Idem API. |
 | `DATABASE_URL` / `DATABASE_SSL` / `SUPABASE_URL` | staging / `true` / `https://lybdkqkbwlfwvmmvstzi.supabase.co` | Guarda de ambiente. |
 | `OZAV_API_KEY` | `ozav_sk_test_...` | Reconciliação em test. |
-| `SOLANA_RPC_URL` / `SOLANA_USDT_MINT` | Devnet / mint de teste | Verificação on-chain; sandbox cujo `tx_hash` não existe na devnet fica simulado, nunca `delivered_verified`. |
+| `SOLANA_RPC_URL` / `SOLANA_USDT_MINT` | Devnet / mint de teste (obrigatório no worker de staging também) | Verificação on-chain; sandbox cujo `tx_hash` não existe na devnet fica simulado, nunca `delivered_verified`. |
 | `USDT_DELIVERY_TOLERANCE_UNITS` | `100000` | Idem. |
 | `CUSTOMER_RECONCILIATION_ENABLED` | `true` | Reconciliação. |
 | `OZAV_RECONCILIATION_INTERVAL_SECONDS` / `OZAV_RECONCILIATION_MAX_ATTEMPTS` | `30` / `120` | Polling. |
@@ -256,7 +256,7 @@ Staging é o ambiente `test`/devnet. Mesmo código, outra chave, outro banco, ou
 | Variável/ajuste | Valor esperado | Por quê |
 |---|---|---|
 | Auth › SMTP | Resend (`smtp.resend.com`), remetente `@peragus.com.br` | Confirmação/recuperação. |
-| Auth › Site URL / Redirect URLs | origem pública do frontend de staging (domínio atual da Vercel de staging) | Links dos e-mails. |
+| Auth › Site URL / Redirect URLs | origem pública do frontend de staging (domínio atual da Vercel de staging) | Links dos e-mails. A origem do app de staging e o domínio da prova de carteira (`peragussvm-staging.up.railway.app`) são constantes em `app/backend/src/config/money-environment.ts` (`appOrigin`, `walletProofDomain`); a Site URL e o domínio real de staging precisam coincidir com elas, senão convites e provas de carteira falham. |
 | Auth › Leaked password protection | ligada | Paridade com produção. |
 | Auth › MFA (TOTP) | habilitado | Operador exige AAL2. |
 | Banco › migrations | `db:migrate` com `PERAGUS_DEPLOYMENT_ENV=staging` | Linha de ambiente do banco. |

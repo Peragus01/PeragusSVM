@@ -21,8 +21,8 @@ registro e o aviso à pessoa de confiança obrigatórios.
 
 1. Entre no painel do Supabase com a conta dona do projeto (a conta do painel tem MFA próprio; não use a conta de operador da Peragus aqui).
 2. Abra o projeto de produção › **Authentication › Users** e localize o usuário pelo e-mail/UUID. Confira o UUID.
-3. Abra o menu do usuário e remova o(s) fator(es) MFA (opção de remover/excluir fatores MFA do usuário). Se o painel não oferecer a
-   opção, use o **SQL Editor** com uma consulta restrita ao UUID conferido (rode primeiro o `select` para ver o que será removido):
+3. Abra o menu do usuário e remova o(s) fator(es) MFA (opção de remover/excluir fatores MFA do usuário). **Último recurso, só manual:** se o painel não oferecer a
+   opção, e somente nesse caso, use o **SQL Editor** com uma consulta restrita ao UUID conferido (rode primeiro o `select` para ver o que será removido):
 
 ```sql
 -- Conferir (substitua o UUID pelo valor conferido; nunca rode sem o filtro).
