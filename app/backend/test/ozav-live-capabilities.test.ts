@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 // Standalone operator script; never imported by the API or workers.
-import { createGetOnlyHttp, main, probe, PRESENT, ABSENT, UNKNOWN } from '../scripts/ozav-live-capabilities.mjs';
+import { createGetOnlyHttp, main, probe, PRESENT, ABSENT, UNKNOWN, ACCESS } from '../scripts/ozav-live-capabilities.mjs';
 
 const KEY = 'ozav_sk_live_Zq81KpWm3xTrV7nDcY40hB';
 const fullScopes = ['quotes:write', 'transfers:write', 'transfers:read', 'wallets:read', 'verifications:read',
   'verifications:write', 'webhooks:read', 'webhooks:write'];
 const full = (over: Record<string, unknown> = {}) => ({
   environment: 'live',
-  entitlements: ['customers', 'compliance', 'liquidity', 'custody'],
+  entitlements: ['customers', 'compliance', 'liquidity', 'custody', 'developer'],
   scopes: fullScopes,
   features: { quotes: 'live', transfers: 'live', wallets: 'live', verifications: 'live', screenings: 'live' },
   ...over,
@@ -40,7 +40,7 @@ describe('OZAV live capability probe', () => {
     const fetcher = vi.fn().mockResolvedValue(Response.json(full()));
     const code = await main({ OZAV_LIVE_PROBE_API_KEY: KEY }, { fetcher, out: (s: string) => out.push(s), err: (s: string) => err.push(s) });
     const text = out.join('\n');
-    expect(code).toBe(0);
+    expect(code).toBe(2);
     expect(text).toContain('Ambiente: live');
     expect(text).toContain('liquidity');
     expect(text).toContain('quotes:write');
@@ -70,9 +70,9 @@ describe('OZAV live capability probe', () => {
   it('classifies present, absent and unknown from the response', async () => {
     const fetcher = (body: unknown) => vi.fn().mockResolvedValue(Response.json(body));
     const ok = await probe({ key: KEY, fetcher: fetcher(full()) });
-    expect(status(ok, 'onramp_brl_usdt_solana')).toBe(PRESENT);
+    expect(status(ok, 'onramp_brl_usdt_solana')).toBe(ACCESS);
     expect(status(ok, 'custody_wallet_transfers')).toBe(PRESENT);
-    expect(status(ok, 'hosted_kyc_session_url')).toBe(PRESENT);
+    expect(status(ok, 'hosted_kyc_session_url')).toBe(ACCESS);
     expect(status(ok, 'webhooks')).toBe(PRESENT);
     expect(status(ok, 'crypto_address_travel_rule')).toBe(UNKNOWN);
     expect(status(ok, 'fx_rate_lock_facility')).toBe(UNKNOWN);
@@ -106,13 +106,40 @@ describe('OZAV live capability probe', () => {
     }
   });
 
-  it('exits non-zero when a required capability is clearly absent and zero with only unknowns', async () => {
+  it('exits non-zero when a required capability is clearly absent and 2 with only pending items', async () => {
     const out: string[] = [];
     const absent = vi.fn().mockResolvedValue(Response.json(full({ scopes: ['quotes:write'] })));
     expect(await main({ OZAV_LIVE_PROBE_API_KEY: KEY }, { fetcher: absent, out: (s: string) => out.push(s), err: () => {} })).toBe(1);
     const out2: string[] = [];
     const unknownOnly = vi.fn().mockResolvedValue(Response.json(full()));
-    expect(await main({ OZAV_LIVE_PROBE_API_KEY: KEY }, { fetcher: unknownOnly, out: (s: string) => out2.push(s), err: () => {} })).toBe(0);
-    expect(out2.join('\n')).toContain('Não informado');
+    expect(await main({ OZAV_LIVE_PROBE_API_KEY: KEY }, { fetcher: unknownOnly, out: (s: string) => out2.push(s), err: () => {} })).toBe(2);
+    const text2 = out2.join('\n');
+    expect(text2).toContain('Não informado');
+    expect(text2).toContain('acesso concedido — rota não comprovada');
+    expect(text2).toContain('a rota BRL->USDT/Solana em si não aparece');
+    expect(text2).toContain('o session_url só existe por verificação');
+    expect(text2).toContain('acesso concedido pelo /capabilities; não prova a rota');
+  });
+
+  it('requires the developer entitlement for webhooks', async () => {
+    const r = await probe({ key: KEY, fetcher: vi.fn().mockResolvedValue(Response.json(full({ entitlements: ['customers', 'compliance', 'liquidity', 'custody'] }))) });
+    expect(status(r, 'webhooks')).toBe(ABSENT);
+    expect(r.ok).toBe(false);
+  });
+
+  it('refuses non-https or non-OZAV base URLs unless explicitly allowed, before sending the key', async () => {
+    for (const baseUrl of ['http://developers.ozav.io/v2', 'https://evil.test/v2', 'https://developers.ozav.io.evil.test/v2', 'not a url']) {
+      const fetcher = vi.fn();
+      await expect(probe({ key: KEY, baseUrl, fetcher })).rejects.toThrow('OZAV_PROBE_BASE_URL_REFUSED');
+      expect(fetcher).not.toHaveBeenCalled();
+    }
+    const fetcher = vi.fn().mockResolvedValue(Response.json(full()));
+    await probe({ key: KEY, baseUrl: 'http://127.0.0.1:9/v2', fetcher, allowCustomBase: true });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const err: string[] = [];
+    const f2 = vi.fn();
+    expect(await main({ OZAV_LIVE_PROBE_API_KEY: KEY, OZAV_BASE_URL: 'https://evil.test/v2' }, { fetcher: f2, out: () => {}, err: (s: string) => err.push(s) })).toBe(1);
+    expect(f2).not.toHaveBeenCalled();
+    expect(err.join('')).toContain('OZAV_PROBE_BASE_URL_REFUSED');
   });
 });

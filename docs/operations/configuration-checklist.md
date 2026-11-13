@@ -88,7 +88,7 @@ Legenda das colunas: **Variável/ajuste**, **Valor esperado** (formato, nunca se
 | `INVITE_EMAIL_WEBHOOK_SECRET` | `whsec_...` (segredo do webhook de e-mail do Resend) | Entrega/rejeição de e-mails de convite. |
 | `PILOT_INVITE_EMAIL_HASH_KEY` | 64 caracteres hex (segredo); estável | HMAC do e-mail vinculado ao convite; trocar invalida convites pendentes. |
 | `RESEND_API_KEY` | `re_...` (segredo) | Envio de convites e alertas via Resend. |
-| `ONBOARDING_EMAILS_ENABLED` | `false` no deploy inicial; vira `true` só depois do boot conferido (passo 4 da liberação em `internal-transaction-runbook.md`), com a pessoa de confiança na allowlist (ver seção 4) | E-mail de resultado de onboarding; em produção exige `RESEND_FROM`, `ONBOARDING_EMAIL_ACCOUNT_URL` https e allowlist. |
+| `ONBOARDING_EMAILS_ENABLED` | `false` no deploy inicial; vira `true` só depois do boot conferido **e** de a conta da pessoa de confiança existir (cadastro feito, sem KYC) e o UUID dela estar em `ONBOARDING_EMAIL_TEST_USER_IDS` (passos 6 e 7 da liberação em `internal-transaction-runbook.md`; ver seção 4) | E-mail de resultado de onboarding; em produção exige `RESEND_FROM`, `ONBOARDING_EMAIL_ACCOUNT_URL` https e allowlist. |
 | `RESEND_FROM` | remetente `@peragus.com.br` | Remetente do e-mail de onboarding (só se o flag acima estiver ligado). |
 | `ONBOARDING_EMAIL_ACCOUNT_URL` | `https://www.peragus.com.br/app/minha-conta` (https, sem query/hash) | Link no e-mail de onboarding. |
 | `ONBOARDING_EMAIL_TEST_USER_IDS` | até 5 UUIDs de usuários consentidos | Allowlist do e-mail de onboarding. |
@@ -300,7 +300,7 @@ Mesma lista da seção 1.6 para as variáveis legadas (`OZAV_ONRAMP_WRITES_ENABL
   aprovações/reembolsos/convites), `RESEND_API_KEY` e as variáveis `INVITE_EMAIL_*`/`PILOT_INVITE_EMAIL_HASH_KEY`,
   `CUSTOMER_RECONCILIATION_ENABLED` (worker), `OZAV_RECONCILIATION_*`, `JOB_*`, `API_RATE_LIMITS_ENABLED`,
   `PILOT_INVITES_ENABLED` e todas as flags `CUSTOMER_*_ENABLED` do caminho live.
-- **`ONBOARDING_EMAILS_ENABLED`:** a liberação liga o flag após o deploy com as chaves desligadas e antes do cadastro da pessoa de confiança, com o UUID dela em `ONBOARDING_EMAIL_TEST_USER_IDS`. O código (`notifications/config.ts`) exige `ONBOARDING_EMAIL_TEST_USER_IDS` com
+- **`ONBOARDING_EMAILS_ENABLED`:** a ordem da liberação é: deploy com as chaves desligadas, conta da pessoa de confiança criada (convite, e-mail confirmado, sem KYC), UUID do usuário coletado no Supabase, **só então** `ONBOARDING_EMAIL_TEST_USER_IDS` + flag ligado, e depois o KYC dela. O código (`notifications/config.ts`) exige `ONBOARDING_EMAIL_TEST_USER_IDS` com
   1 a 5 UUIDs quando ligado; ou seja, o e-mail de resultado de onboarding só chega à allowlist. A spec pede o worker
   de onboarding ligado em produção; para clientes externos, decida (ou ajuste o código) antes do piloto externo. Até lá, só a allowlist recebe.
 - **Origem da sessão de KYC:** o host do `session_url` precisa ser `ozav.io` ou `*.ozav.io`; se a OZAV usar outro domínio,

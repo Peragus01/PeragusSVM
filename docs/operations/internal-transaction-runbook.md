@@ -17,16 +17,18 @@ Seguir exatamente esta ordem; cada etapa só começa quando a anterior tem evid�
    OZAV_LIVE_PROBE_API_KEY=<chave live> node scripts/ozav-live-capabilities.mjs
    ```
    O script faz somente `GET /v2/capabilities` e nunca imprime a chave. Saída: ambiente, scopes, entitlements e um checklist (presente / ausente / não informado) de on-ramp BRL→USDT/Solana,
-   custódia, envio `crypto_address` com Travel Rule, facility de trava de câmbio, KYC hospedado (`session_url`) e webhooks. Código de saída diferente de zero (ambiente ≠ `live` ou capacidade ausente) = **NO-GO**: não siga.
-   Itens "não informado" (Travel Rule, facility e a rota BRL→USDT/Solana não aparecem em `/capabilities`) exigem resposta escrita da OZAV. Arquive a saída (critério 1).
+   custódia, envio `crypto_address` com Travel Rule, facility de trava de câmbio, KYC hospedado (`session_url`) e webhooks. Códigos de saída: **0** = tudo comprovado; **1** = ambiente ≠ `live`, capacidade ausente ou falha do probe = **NO-GO**, não siga; **2** = OK com pendências (nada ausente, mas há itens sem prova). Na prática a saída esperada é 2:
+   "presente" significa só **acesso concedido** (entitlement/scope/feature), nunca rota provada. On-ramp BRL→USDT/Solana e KYC `session_url` saem como "acesso concedido — rota não comprovada"; Travel Rule e facility saem como "não informado" (não aparecem em `/capabilities`). Webhooks exigem o entitlement `developer` além de `webhooks:read`/`webhooks:write`.
+   Todo item pendente exige resposta escrita da OZAV. Arquive a saída (critério 1). Por segurança o probe só aceita `https://developers.ozav.io/v2`; outro host só com `OZAV_PROBE_ALLOW_CUSTOM_BASE=1` (uso de teste local).
 2. **Arquivar as respostas escritas da OZAV:** facility contratado, host do `session_url`, devolução de Pix somente por solicitação manual, taxa de rede descontada do USDT, criação da ATA.
 3. **Promover `develop → main`** (somente com staging verde e CI verde; `main` protegida).
 4. **Deploy em produção com todas as chaves de runtime desligadas** (`new_operations`, `usdt_sends`, `onboarding`).
 5. **Confirmar o boot:** `deployment_configuration_audit` / `money_environment_verified` com `money_mode=live`, `network=solana:mainnet`, e `/ready` 200.
-6. **Ligar o envio do worker de e-mails de onboarding** (`ONBOARDING_EMAILS_ENABLED=true`, allowlist com a pessoa de confiança; `configuration-checklist.md` seções 1.1 e 4).
-7. **Transação interna de R$ 1.000** (passos 1 a 4 abaixo): `onboarding`, depois `new_operations`, depois `usdt_sends` somente durante o envio.
-8. **Coletar o pacote de evidências** (IDs OZAV, `tx_hash`, Explorer, conciliação, auditoria, e-mails, capturas).
-9. **Revisão Go/No-Go** (16 critérios abaixo). NO-GO se qualquer item faltar.
+6. **Criar a conta da pessoa de confiança primeiro:** ligar só `onboarding`, emitir o convite, ela cria a conta e confirma o e-mail (ainda sem KYC) e o responsável anota o UUID do usuário dela no Supabase (Auth → Users).
+7. **Ligar o envio do worker de e-mails de onboarding:** só agora, com o UUID coletado, definir `ONBOARDING_EMAIL_TEST_USER_IDS` (allowlist com esse UUID) e `ONBOARDING_EMAILS_ENABLED=true` (`configuration-checklist.md` seções 1.1 e 4); o código exige a allowlist com 1 a 5 UUIDs quando o flag está ligado.
+8. **Transação interna de R$ 1.000** (passos 1 a 4 abaixo; o passo 1 continua do cadastro já criado: KYC e carteira): `onboarding` (já ligado), depois `new_operations`, depois `usdt_sends` somente durante o envio.
+9. **Coletar o pacote de evidências** (IDs OZAV, `tx_hash`, Explorer, conciliação, auditoria, e-mails, capturas).
+10. **Revisão Go/No-Go** (16 critérios abaixo). NO-GO se qualquer item faltar.
 
 ## Pré-requisitos (todos devem estar verdadeiros antes do passo 1)
 

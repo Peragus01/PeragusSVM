@@ -1,7 +1,8 @@
 // Read-only probe of the OZAV live key: GET /v2/capabilities only. Never prints the key.
 // Usage: OZAV_LIVE_PROBE_API_KEY=<live key> node scripts/ozav-live-capabilities.mjs
-// Exit codes: 0 = environment live and no required capability clearly absent;
-//             1 = wrong environment, required capability absent, or probe failure.
+// Exit codes: 0 = environment live and every required capability proven present;
+//             1 = wrong environment, required capability absent, or probe failure;
+//             2 = OK with pending items (nothing absent, but some access-only or "não informado" items).
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_BASE_URL = 'https://developers.ozav.io/v2';
@@ -12,6 +13,8 @@ const LABEL = /^[a-z][a-z0-9_:.-]{0,79}$/;
 export const PRESENT = 'presente';
 export const ABSENT = 'ausente';
 export const UNKNOWN = 'não informado';
+// Access granted by entitlement/scope/feature, but /capabilities cannot prove the route or the hosted flow.
+export const ACCESS = 'acesso concedido';
 
 // GET-only HTTP layer: refuses any other method at code level, never follows redirects.
 export function createGetOnlyHttp(fetcher = fetch, timeoutMs = TIMEOUT_MS) {
@@ -31,6 +34,7 @@ function labels(value) {
 export const REQUIRED_CAPABILITIES = [
   { id: 'onramp_brl_usdt_solana', label: 'On-ramp BRL (Pix) para USDT na Solana',
     entitlements: ['liquidity'], scopes: ['quotes:write', 'transfers:write', 'transfers:read'], features: ['quotes', 'transfers'],
+    accessOnly: true,
     note: 'a rota BRL->USDT/Solana em si não aparece em /capabilities; confirmar por escrito com a OZAV' },
   { id: 'custody_wallet_transfers', label: 'Custódia gerenciada / transferências de carteira',
     entitlements: ['custody'], scopes: ['wallets:read'], features: ['wallets'] },
@@ -42,9 +46,10 @@ export const REQUIRED_CAPABILITIES = [
     note: 'facility só aparece na resposta da cotação (facility_preview), não em /capabilities; confirmar contratação por escrito' },
   { id: 'hosted_kyc_session_url', label: 'KYC hospedado (session_url)',
     entitlements: ['compliance'], scopes: ['verifications:read', 'verifications:write'], features: ['verifications'],
+    accessOnly: true,
     note: 'o session_url só existe por verificação; o host é conferido no passo seguinte' },
   { id: 'webhooks', label: 'Webhooks',
-    entitlements: [], scopes: ['webhooks:read', 'webhooks:write'], features: [] },
+    entitlements: ['developer'], scopes: ['webhooks:read', 'webhooks:write'], features: [] },
 ];
 
 export function classify(caps) {
@@ -73,6 +78,7 @@ export function classify(caps) {
     let status = PRESENT;
     if (missing.length) status = ABSENT;
     else if (unknown) status = UNKNOWN;
+    else if (def.accessOnly) status = ACCESS;
     return { id: def.id, label: def.label, status, missing, details, note: def.note ?? null };
   });
 }
@@ -94,8 +100,17 @@ async function readCapped(response) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export async function probe({ key, baseUrl = DEFAULT_BASE_URL, fetcher = fetch, timeoutMs = TIMEOUT_MS }) {
+export function checkBaseUrl(baseUrl, allowCustom = false) {
+  if (allowCustom) return;
+  let url;
+  try { url = new URL(baseUrl); } catch { throw new Error('OZAV_PROBE_BASE_URL_REFUSED'); }
+  if (url.protocol !== 'https:' || url.hostname !== 'developers.ozav.io' || url.port || url.username || url.password)
+    throw new Error('OZAV_PROBE_BASE_URL_REFUSED');
+}
+
+export async function probe({ key, baseUrl = DEFAULT_BASE_URL, fetcher = fetch, timeoutMs = TIMEOUT_MS, allowCustomBase = false }) {
   if (typeof key !== 'string' || key.length < 8) throw new Error('OZAV_PROBE_KEY_REQUIRED');
+  checkBaseUrl(baseUrl, allowCustomBase);
   const request = createGetOnlyHttp(fetcher, timeoutMs);
   let response;
   try {
@@ -112,7 +127,8 @@ export async function probe({ key, baseUrl = DEFAULT_BASE_URL, fetcher = fetch, 
   const failures = [];
   if (environment !== 'live') failures.push('ambiente diferente de live (chave errada)');
   for (const c of capabilities) if (c.status === ABSENT) failures.push(`ausente: ${c.label}`);
-  return { environment, entitlements, scopes, capabilities, failures, ok: failures.length === 0 };
+  const pending = capabilities.filter(c => c.status === UNKNOWN || c.status === ACCESS);
+  return { environment, entitlements, scopes, capabilities, failures, pending, ok: failures.length === 0 };
 }
 
 export function render(report) {
@@ -120,20 +136,23 @@ export function render(report) {
   lines.push(`Ambiente: ${report.environment ?? 'inválido/não informado'}`);
   lines.push(`Entitlements: ${report.entitlements.join(', ') || '(nenhum)'}`);
   lines.push(`Scopes: ${report.scopes.join(', ') || '(nenhum)'}`);
-  lines.push('', 'Capacidades exigidas pelo MVP:');
+  lines.push('', 'Capacidades exigidas pelo MVP ("presente" = acesso concedido pelo /capabilities; não prova a rota nem o fluxo):');
   for (const c of report.capabilities) {
-    const mark = c.status === PRESENT ? '[x]' : c.status === ABSENT ? '[!]' : '[?]';
+    const mark = c.status === PRESENT ? '[x]' : c.status === ABSENT ? '[!]' : c.status === ACCESS ? '[~]' : '[?]';
     const why = [...c.missing, ...c.details].join('; ');
-    lines.push(`${mark} ${c.label}: ${c.status}${why ? ` (${why})` : ''}`);
+    const tail = c.status === ACCESS ? ' — rota não comprovada pelo /capabilities' : '';
+    lines.push(`${mark} ${c.label}: ${c.status}${tail}${why ? ` (${why})` : ''}`);
+    if (c.status === ACCESS && c.note) lines.push(`    nota: ${c.note}`);
   }
   const unknown = report.capabilities.filter(c => c.status === UNKNOWN);
   if (unknown.length) {
     lines.push('', 'Não informado: pedir à OZAV, por escrito, e arquivar a resposta:');
     for (const c of unknown) lines.push(`- ${c.label}${c.note ? ` — ${c.note}` : ''}`);
   }
+  const pending = report.pending ?? [];
   lines.push('');
   if (!report.ok) lines.push('RESULTADO: FALHA', ...report.failures.map(f => `- ${f}`));
-  else lines.push(unknown.length ? 'RESULTADO: OK COM PENDÊNCIAS (itens "não informado" ainda sem prova)' : 'RESULTADO: OK');
+  else lines.push(pending.length ? 'RESULTADO: OK COM PENDÊNCIAS (saída 2): itens "acesso concedido"/"não informado" ainda sem prova da rota' : 'RESULTADO: OK');
   return lines.join('\n');
 }
 
@@ -144,12 +163,13 @@ function redact(text, key) {
 export async function main(env = process.env, { fetcher = fetch, out = console.log, err = console.error } = {}) {
   const key = env.OZAV_LIVE_PROBE_API_KEY;
   try {
-    const report = await probe({ key, baseUrl: env.OZAV_BASE_URL || DEFAULT_BASE_URL, fetcher });
+    const report = await probe({ key, baseUrl: env.OZAV_BASE_URL || DEFAULT_BASE_URL, fetcher, allowCustomBase: env.OZAV_PROBE_ALLOW_CUSTOM_BASE === '1' });
     out(redact(render(report), key));
-    return report.ok ? 0 : 1;
+    if (!report.ok) return 1;
+    return report.pending.length ? 2 : 0;
   } catch (error) {
     const allowed = new Set(['OZAV_PROBE_KEY_REQUIRED', 'OZAV_PROBE_METHOD_REFUSED', 'OZAV_PROBE_CONNECTION_UNCONFIRMED',
-      'OZAV_PROBE_REQUEST_REFUSED', 'OZAV_CAPABILITIES_INVALID']);
+      'OZAV_PROBE_REQUEST_REFUSED', 'OZAV_CAPABILITIES_INVALID', 'OZAV_PROBE_BASE_URL_REFUSED']);
     err(JSON.stringify({ error: allowed.has(error?.message) ? error.message : 'OZAV_PROBE_UNCONFIRMED' }));
     return 1;
   }
