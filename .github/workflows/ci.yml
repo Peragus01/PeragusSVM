@@ -42,6 +42,7 @@ jobs:
       - run: npm ci
       - run: node --check scripts/ozav-pix-expiry-demo.mjs
       - run: node --check scripts/settlement-audit-demo.mjs
+      - run: node --check scripts/staging-e2e-smoke.mjs
       - run: npm run typecheck
       - run: npm test -- --maxWorkers=2
       - run: npm run build
