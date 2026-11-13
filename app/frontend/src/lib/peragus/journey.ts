@@ -60,6 +60,16 @@ export async function journeyRequest<T = Record<string, unknown>>(
 /** A runtime kill switch is off (HTTP 503 OPERATIONS_PAUSED): nothing was created or moved. */
 export const OPERATIONS_PAUSED_MESSAGE =
   "Operações temporariamente pausadas. Nada foi registrado; tente novamente mais tarde.";
+/** The previous day's operator review is pending (HTTP 503 DAILY_REVIEW_REQUIRED): nothing was created. */
+export const DAILY_REVIEW_REQUIRED_MESSAGE =
+  "Operações temporariamente indisponíveis enquanto concluímos a revisão diária. Nada foi registrado; tente novamente mais tarde.";
+/** Customer copy for a new-operation refusal that created nothing, or null for other codes. */
+export const pausedMessage = (code: unknown) =>
+  code === "OPERATIONS_PAUSED"
+    ? OPERATIONS_PAUSED_MESSAGE
+    : code === "DAILY_REVIEW_REQUIRED"
+      ? DAILY_REVIEW_REQUIRED_MESSAGE
+      : null;
 export function journeyMessage(error: unknown) {
   const code = error instanceof JourneyError ? error.code : "UNAVAILABLE";
   return (
@@ -76,6 +86,7 @@ export function journeyMessage(error: unknown) {
         PILOT_INVITES_UNAVAILABLE: "O serviço de convites está indisponível.",
         VALIDATION_ERROR: "Confira os campos informados.",
         OPERATIONS_PAUSED: OPERATIONS_PAUSED_MESSAGE,
+        DAILY_REVIEW_REQUIRED: DAILY_REVIEW_REQUIRED_MESSAGE,
         PROFILE_VERSION_CONFLICT:
           "Os dados mudaram em outra sessão. Atualize a página antes de salvar.",
         VERIFICATION_SESSION_UNAVAILABLE:

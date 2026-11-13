@@ -70,15 +70,18 @@ describe("live customer Pix", () => {
       expect(document.body.textContent ?? "").not.toMatch(/teste/i);
     },
   );
-  it("explains paused operations and shows no Pix", async () => {
+  it.each([
+    ["OPERATIONS_PAUSED", "Operações temporariamente pausadas"],
+    ["DAILY_REVIEW_REQUIRED", "Operações temporariamente indisponíveis"],
+  ])("explains %s and shows no Pix", async (code, text) => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json(
-        { error: { code: "OPERATIONS_PAUSED", key: "new_operations", automatic_retry: false } },
+        { error: { code, key: "new_operations", automatic_retry: false } },
         { status: 503 },
       ),
     );
     await open();
-    expect(screen.getByRole("alert")).toHaveTextContent("Operações temporariamente pausadas");
+    expect(screen.getByRole("alert")).toHaveTextContent(text);
     expect(screen.queryByLabelText("Pix copia e cola")).toBeNull();
   });
   it("shows no instructions for a failed operation", async () => {

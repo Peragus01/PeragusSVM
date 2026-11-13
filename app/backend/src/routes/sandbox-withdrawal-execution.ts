@@ -30,7 +30,7 @@ export async function registerSandboxWithdrawalExecutionRoutes(app:FastifyInstan
     }catch(error){
      if(replyIfPaused(error,reply))return reply;
      if(error instanceof OperatorApprovalError)return reply.code(403).send({error:{code:error.code}});
-     if(error instanceof SandboxExecutionError)return reply.code(error.code.endsWith("NOT_FOUND")?404:409).send({error:{code:error.code,...(error.providerCode?{provider_code:error.providerCode}:{}),...(error.providerStatus!==null?{provider_http_status:error.providerStatus}:{}),automatic_retry:false}});
+     if(error instanceof SandboxExecutionError)return reply.code(error.code.endsWith("NOT_FOUND")?404:409).send({error:{code:error.code,...(error.providerCode?{provider_code:error.providerCode}:{}),...(error.providerStatus!==null?{provider_http_status:error.providerStatus}:{}),...(error.remainingDelaySeconds!==null?{remaining_delay_seconds:error.remainingDelaySeconds}:{}),automatic_retry:false}});
      request.log.warn({event:"sandbox_withdrawal_execution_recovery_required"});return reply.code(503).send({error:{code:"WITHDRAWAL_EXECUTION_REQUIRES_RECOVERY",provider_http_status:error instanceof OzavClientError?error.statusCode??null:null,provider_code:error instanceof SandboxWithdrawalProviderError?error.providerCode:null,automatic_retry:false}});
     }
    }

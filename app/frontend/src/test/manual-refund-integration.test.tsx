@@ -60,12 +60,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("refund bridge", () => {
-  it("exposes exact refund resources and keeps completion/execution closed", () => {
+  it("exposes exact refund resources and keeps execution closed", () => {
     expect(refundMethods(path)).toEqual(["GET", "POST"]);
     expect(refundMethods("v1/admin/refund-requests")).toEqual(["GET"]);
     expect(refundMethods(`v1/admin/refund-requests/${id}/decision`)).toEqual(["POST"]);
+    // Task 19b: the operator console records completions (record-only, fresh MFA).
+    expect(refundMethods(`v1/admin/refund-requests/${id}/completion`)).toEqual(["POST"]);
     for (const p of [
-      `v1/admin/refund-requests/${id}/completion`,
+      `v1/admin/refund-requests/${id}/completion/extra`,
       `v1/admin/withdrawal-requests/${id}/execution`,
       path + "/extra",
       "v1/admin/anything",
@@ -102,7 +104,7 @@ describe("refund bridge", () => {
     expect((await forwardRefund(req("POST", "x".repeat(4097)), target, path)).status).toBe(413);
     expect((await forwardRefund(req("POST", "{"), target, path)).status).toBe(400);
     expect(
-      (await forwardRefund(req(), target, `v1/admin/refund-requests/${id}/completion`)).status,
+      (await forwardRefund(req(), target, `v1/admin/withdrawal-requests/${id}/execution`)).status,
     ).toBe(404);
     expect(fetcher).not.toHaveBeenCalled();
   });

@@ -224,20 +224,23 @@ describe("automatic BRL/USDT purchase", () => {
     expect(posts()).toHaveLength(2);
     expect(JSON.parse(String(posts()[1]![1]!.body))).toEqual(first);
   });
-  it("explains paused operations and keeps the same request_id for the retry", async () => {
+  it.each([
+    ["OPERATIONS_PAUSED", "Operações temporariamente pausadas"],
+    ["DAILY_REVIEW_REQUIRED", "Operações temporariamente indisponíveis"],
+  ])("explains %s and keeps the same request_id for the retry", async (code, text) => {
     let calls = 0;
     custom = async (_url, init) => {
       calls++;
       if (calls === 1)
         return Response.json(
-          { error: { code: "OPERATIONS_PAUSED", key: "new_operations", automatic_retry: false } },
+          { error: { code, key: "new_operations", automatic_retry: false } },
           { status: 503 },
         );
       return Response.json({ data: quote(JSON.parse(String(init?.body)).request_id) });
     };
     await open();
     await type("BRL", "1000");
-    expect(screen.getByRole("alert")).toHaveTextContent("Operações temporariamente pausadas");
+    expect(screen.getByRole("alert")).toHaveTextContent(text);
     const first = JSON.parse(String(posts()[0]![1]!.body));
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Conferir solicitação salva" }));

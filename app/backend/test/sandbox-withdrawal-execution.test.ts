@@ -181,7 +181,7 @@ describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
  it("execution 899s after approval is refused; 900s passes",async()=>{
   const f=await executionFixture({minDelaySeconds:900});
   await approvedSecondsAgo(f.wr.data.id,899);
-  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("EXECUTION_TOO_EARLY");
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toMatchObject({code:"EXECUTION_TOO_EARLY",remainingDelaySeconds:1});
   expect(f.sends()).toBe(0);expect(await f.repo.read(f.wr.data.id)).toBeNull();
   await approvedSecondsAgo(f.wr.data.id,900);
   const r=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
@@ -199,6 +199,9 @@ describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
   const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
   const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"},payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
   expect(r.statusCode).toBe(409);expect(r.json().error.code).toBe("EXECUTION_TOO_EARLY");expect(f.sends()).toBe(0);
+  // The remaining delay comes from the database clock and the configured policy, never the client.
+  const remaining=r.json().error.remaining_delay_seconds;
+  expect(Number.isInteger(remaining)).toBe(true);expect(remaining).toBeGreaterThan(800);expect(remaining).toBeLessThanOrEqual(900);
  });
  it("four-eyes enabled refuses same operator; disabled allows",async()=>{
   const f=await executionFixture({minDelaySeconds:0,fourEyes:true});

@@ -58,6 +58,8 @@ import {
 import type { ApiRateLimiter } from "./auth/api-rate-limits.js";
 import type { OperatorAlertService } from "./operations/operator-alerts.js";
 import { registerOperatorAlertRoutes } from "./routes/operator-alerts.js";
+import type { OperatorNotificationListService } from "./operations/operator-notification-list.js";
+import { registerOperatorNotificationRoutes } from "./routes/operator-notifications.js";
 import type { RuntimeControlService } from "./operations/runtime-controls.js";
 import { registerRuntimeControlRoutes } from "./routes/runtime-controls.js";
 import type { DailyReviewService } from "./operations/daily-review.js";
@@ -129,6 +131,8 @@ export interface BuildAppOptions {
   trustProxyHops?: number;
   apiRateLimiter?: ApiRateLimiter;
   operatorAlertService?: OperatorAlertService;
+  /** GET /v1/admin/operator-notifications (uncertain/failed e-mail alerts; operator + AAL2). */
+  operatorNotificationListService?: OperatorNotificationListService;
   /** GET /ready dependency probes (public, outside /v1). Without database and queue probes it reports not_ready. */
   readiness?: ReadinessProbes;
   /** GET/PUT /v1/admin/runtime-controls (kill switches; operator + fresh MFA). */
@@ -229,6 +233,10 @@ export async function buildApp(
   await registerOperatorAlertRoutes(
     app,
     options.customerAccess ? options.operatorAlertService : undefined,
+  );
+  await registerOperatorNotificationRoutes(
+    app,
+    options.customerAccess ? options.operatorNotificationListService : undefined,
   );
   await registerRuntimeControlRoutes(
     app,

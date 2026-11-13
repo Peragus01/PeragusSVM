@@ -114,6 +114,9 @@ function parseRefund(
     throw new RefundError("INVALID_RESPONSE", 200);
   return value as unknown as RefundRequest | OperatorRefund;
 }
+/** Validates an operator refund record (same checks as the list), bound to its id. */
+export const parseOperatorRefund = (value: unknown, id: string) =>
+  parseRefund(value, true, { id }) as OperatorRefund;
 async function call(
   token: string,
   path: string,

@@ -10,8 +10,13 @@ import {OzavClientError} from "../providers/ozav-client.js";
 import type {DestinationTokenAccountReader,TokenAccountState} from "../providers/solana-token-accounts.js";
 import {isSolanaSignature,verifyUsdtDelivery,type DeliveryVerification,type DeliveryVerificationInput} from "../solana/usdt-delivery-verifier.js";
 export class SandboxExecutionError extends Error {
- /** providerStatus: the provider's HTTP status, when the refusal came from a provider answer. */
- constructor(public readonly code:string,public readonly providerCode:string|null=null,public readonly providerStatus:number|null=null){super(code);}
+ /**
+  * providerStatus: the provider's HTTP status, when the refusal came from a provider answer.
+  * remainingDelaySeconds: for EXECUTION_TOO_EARLY, whole seconds left until the minimum delay
+  * (database clock, configured policy) lets the execution through.
+  */
+ constructor(public readonly code:string,public readonly providerCode:string|null=null,public readonly providerStatus:number|null=null,
+  public readonly remainingDelaySeconds:number|null=null){super(code);}
 }
 export interface ExecutionContext {
  withdrawalId:string;customerId:string;approvalId:string;approverId:string;pixId:string;
@@ -243,7 +248,7 @@ export class SandboxWithdrawalExecutionService {
   // Elapsed time since the persisted approval, measured by the database clock; never client input.
   const age=c.approvalAgeSeconds;
   if(typeof age!=="number" || !Number.isFinite(age))throw new SandboxExecutionError("WITHDRAWAL_EXECUTION_PREREQUISITES_REQUIRED");
-  if(age<this.policy.minDelaySeconds)throw new SandboxExecutionError("EXECUTION_TOO_EARLY");
+  if(age<this.policy.minDelaySeconds)throw new SandboxExecutionError("EXECUTION_TOO_EARLY",null,null,Math.max(1,Math.ceil(this.policy.minDelaySeconds-age)));
   // Fail fast; the claim re-checks the status under the purchase row lock.
   if(c.operationStatus!=="approved")throw new SandboxExecutionError("WITHDRAWAL_OPERATION_NOT_APPROVED");
   // OZAV deducts the network fee from the sent amount; the send is the immutable locked amount.

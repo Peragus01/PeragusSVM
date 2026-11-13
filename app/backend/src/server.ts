@@ -6,6 +6,7 @@ import { notificationConfig } from "./notifications/config.js";
 import { emailNotificationReady } from "./notifications/onboarding-email.js";
 import { SandboxClosureService } from "./withdrawals/sandbox-closure.js";
 import { OperatorAlertService } from "./operations/operator-alerts.js";
+import { OperatorNotificationListService } from "./operations/operator-notification-list.js";
 import { PostgresApiRateLimiter } from "./auth/api-rate-limits.js";
 import { PilotInviteService } from "./invites/pilot-invites.js";
 import { CustomerReconciliationStatusService } from "./jobs/customer-reconciliation.js";
@@ -582,6 +583,10 @@ const app = await buildApp({
   ...(pool
     ? {
         operatorAlertService: new OperatorAlertService(
+          pool,
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
+        ),
+        operatorNotificationListService: new OperatorNotificationListService(
           pool,
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
         ),
