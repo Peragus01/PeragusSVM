@@ -33,7 +33,21 @@ export interface PurchaseProgressionDeps {
   pix?: {repo: Pick<CustomerPixRepository, "read" | "bind" | "save">; provider: PixProvider};
   /** A live create younger than this may still be finishing; an accepted operation is left alone. */
   ambiguousGraceMs?: number;
+  /**
+   * Final review I9: an unpaid GET expires awaiting_pix only this long after min(Pix expiry,
+   * lock deadline) (PIX_EXPIRY_GRACE_MINUTES; the customer stopped seeing instructions earlier).
+   */
+  expiryGraceMs?: number;
+  /**
+   * Final review I3: a claimed Pix create for which OZAV lists no transfer (list by metadata)
+   * this long after the claim expires the accepted operation (never when a transfer exists).
+   */
+  createNotFoundGraceMs?: number;
+  /** Customer-facing instruction margin (PIX_INSTRUCTIONS_HIDE_MARGIN_MINUTES) for the views returned. */
+  instructionsMarginMs?: number;
 }
+/** Defaults used when the deps do not configure them (env defaults are wired by the factories). */
+export const DEFAULT_CREATE_NOT_FOUND_GRACE_MS = 30 * 60_000;
 
 export {systemRequestId};
 const REFUND_REASON = SYSTEM_REFUND_REASON;
@@ -126,7 +140,15 @@ export class PurchaseProgression {
         // Note events (from_status = to_status, e.g. a customer cancel request) are not transitions.
         "select from_status,reason from peragus_operation_status_events where purchase_id=$1 and from_status is distinct from to_status order by id desc limit 1", [purchaseId]);
       const event = last.rows[0];
-      if (event?.reason !== OZAV_REVIEW || s === "needs_review") return status;
+      if (event?.reason !== OZAV_REVIEW || s === "needs_review") {
+        // An unpaid review entered before any payment (e.g. PIX_LOCK_OUTCOME_UNKNOWN) closes as
+        // failed once OZAV reports the transfer terminal and unpaid (Ruling 39).
+        const entered = event?.from_status ? RANK[event.from_status] : undefined;
+        if (CLOSED.has(s) && observed.sourceLegStatus !== "completed" && entered !== undefined && entered < 2) {
+          await move("failed", `PIX_TRANSFER_${s.toUpperCase()}_UNPAID: review closed by GET`);
+        }
+        return status;
+      }
       // Never move backwards: resume relative to the stage the review was entered from.
       // (prior - 0.5) lets the operation return to that same stage but not to an earlier one.
       const prior = (event.from_status ? RANK[event.from_status] : undefined) ?? 1;
@@ -178,7 +200,8 @@ export class PurchaseProgression {
         ctx.lock_deadline_at ? new Date(ctx.lock_deadline_at).getTime() : NaN].filter(v => !Number.isNaN(v));
       if (!limits.length) return status;
       const deadline = Math.min(...limits);
-      if (deadline <= Date.now()) {
+      // Expire only after the grace period: a payment made right at the deadline is still seen.
+      if (deadline + (this.deps.expiryGraceMs ?? 0) <= Date.now()) {
         await move("expired", `PIX_EXPIRED_UNPAID: deadline=${new Date(deadline).toISOString()}${ctx.cancel_requested_at ? `; ${CUSTOMER_CANCEL_REQUESTED}` : ""}`);
       }
       return status;
@@ -231,7 +254,46 @@ export class PurchaseProgression {
   /** GET (list by metadata when unbound, never re-POST), persist, then progress. */
   async refreshPix(customerId: string, pixId: string, actor: ProgressionActor = "system:reconciliation") {
     if (!this.deps.pix) throw new Error("PIX_READER_REQUIRED");
-    return refreshPixAndProgress(this.deps.pix.repo, this.deps.pix.provider, this, customerId, pixId, this.deps.mode, actor);
+    return refreshPixAndProgress(this.deps.pix.repo, this.deps.pix.provider, this, customerId, pixId, this.deps.mode, actor,
+      this.deps.instructionsMarginMs ?? 0);
+  }
+
+  /**
+   * Final review I3: a claimed Pix create for which the list by metadata found no transfer.
+   * Expires the accepted operation once the claim is older than the grace period. Under the
+   * purchase row lock, only while the operation is still accepted and the Pix has no transfer.
+   */
+  async expireCreateNotFound(purchaseId: string, actor: ProgressionActor = "system:reconciliation"): Promise<boolean> {
+    const grace = this.deps.createNotFoundGraceMs ?? DEFAULT_CREATE_NOT_FOUND_GRACE_MS;
+    const r = await this.deps.pool.query(`with c as (
+       select p.id,p.customer_id from peragus_customer_purchase_intents p
+       join peragus_customer_sandbox_pix x on x.purchase_intent_id=p.id and x.customer_id=p.customer_id and x.environment=p.environment
+       where p.id=$1 and p.environment='${this.e.mode}' and p.status='accepted' and x.create_attempted and x.provider_transfer_id is null
+        and x.updated_at<=now()-make_interval(secs=>$2::double precision/1000)
+       for update of p
+     ), u as (update peragus_customer_purchase_intents p set status='expired' from c where p.id=c.id and p.status='accepted' returning p.id,p.customer_id)
+     insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
+     select id,customer_id,'accepted','expired',$3,'PIX_CREATE_NOT_FOUND_AFTER_GRACE: no OZAV transfer listed by metadata','${this.e.mode}' from u
+     returning purchase_id`, [purchaseId, grace, actor]);
+    return r.rows.length === 1;
+  }
+
+  /**
+   * Final review I3: accepted operations whose Pix create was never claimed expire after the
+   * TTL (ACCEPTED_OPERATION_TTL_MINUTES). The purchase row lock is the one the Pix claim
+   * takes: a claim in flight is skipped (skip locked), a committed claim excludes the row.
+   */
+  async expireAbandonedAccepted(ttlMs: number, actor: ProgressionActor = "system:reconciliation"): Promise<number> {
+    const r = await this.deps.pool.query(`with c as (
+       select p.id,p.customer_id from peragus_customer_purchase_intents p
+       where p.environment='${this.e.mode}' and p.status='accepted' and p.status_changed_at<=now()-make_interval(secs=>$1::double precision/1000)
+        and not exists(select 1 from peragus_customer_sandbox_pix x where x.purchase_intent_id=p.id and x.customer_id=p.customer_id and x.create_attempted)
+       order by p.status_changed_at,p.id limit 50 for update of p skip locked
+     ), u as (update peragus_customer_purchase_intents p set status='expired' from c where p.id=c.id and p.status='accepted' returning p.id,p.customer_id)
+     insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
+     select id,customer_id,'accepted','expired',$2,'ACCEPTED_TTL_EXPIRED_NO_PIX','${this.e.mode}' from u
+     returning purchase_id`, [ttlMs, actor]);
+    return r.rows.length;
   }
 
   /**
@@ -254,14 +316,20 @@ export class PurchaseProgression {
 /** Shared by reconciliation and webhooks: GET-only recovery followed by progression. */
 export async function refreshPixAndProgress(
   repo: Pick<CustomerPixRepository, "read" | "bind" | "save">, provider: PixProvider,
-  progression: Pick<PurchaseProgression, "applyTransferObservation">,
-  customerId: string, pixId: string, mode: MoneyMode, actor: ProgressionActor = "system:reconciliation",
+  progression: Pick<PurchaseProgression, "applyTransferObservation"> & Partial<Pick<PurchaseProgression, "expireCreateNotFound">>,
+  customerId: string, pixId: string, mode: MoneyMode, actor: ProgressionActor = "system:reconciliation", marginMs = 0,
 ) {
-  const view = await reconcileCustomerPix(repo, provider, customerId, pixId, mode);
+  const view = await reconcileCustomerPix(repo, provider, customerId, pixId, mode, marginMs);
   const row = await repo.read(customerId, pixId);
   const t = row?.observation;
-  if (!row || !t) return view;
+  if (!row) return view;
+  if (!t) {
+    // Claimed create, no transfer listed by metadata: expire after the grace period (I3).
+    if (row.attempted && !row.transferId && row.operationStatus === "accepted" && progression.expireCreateNotFound
+      && await progression.expireCreateNotFound(row.purchaseId, actor)) return pixView((await repo.read(customerId, pixId)) ?? row, mode, marginMs);
+    return view;
+  }
   await progression.applyTransferObservation(row.purchaseId,
     {status: t.status, amountUsdt: t.amounts.target.amount, sourceLegStatus: t.sourceLegStatus}, actor);
-  return pixView((await repo.read(customerId, pixId)) ?? row, mode);
+  return pixView((await repo.read(customerId, pixId)) ?? row, mode, marginMs);
 }

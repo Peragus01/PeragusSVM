@@ -58,10 +58,11 @@ describe("USDT delivery verifier (no real RPC)",()=>{
   expect(await verifyUsdtDelivery(input(connection(parsed({credited:"199899999"})),200000000n,100000n))).toEqual({verified:false,reason:"AMOUNT_MISMATCH"});
   expect(await verifyUsdtDelivery(input(connection(parsed({credited:"199900000"})),200000000n,100000n))).toEqual({verified:true,deliveredUnits:199900000n});
  });
- it("a transaction older than notBeforeUnix, or without a block time, → TX_PREDATES_SEND",async()=>{
+ it("a transaction older than notBeforeUnix → TX_PREDATES_SEND; without a block time → BLOCK_TIME_MISSING",async()=>{
   const at=(blockTime:number|null)=>{const tx=parsed();tx.blockTime=blockTime;return connection(tx);};
   expect(await verifyUsdtDelivery({...input(at(999)),notBeforeUnix:1000})).toEqual({verified:false,reason:"TX_PREDATES_SEND"});
-  expect(await verifyUsdtDelivery({...input(at(null)),notBeforeUnix:1000})).toEqual({verified:false,reason:"TX_PREDATES_SEND"});
+  // Missing block time is not a mismatch: the caller keeps the delivery pending and retries.
+  expect(await verifyUsdtDelivery({...input(at(null)),notBeforeUnix:1000})).toEqual({verified:false,reason:"BLOCK_TIME_MISSING"});
   expect(await verifyUsdtDelivery({...input(at(1000)),notBeforeUnix:1000})).toEqual({verified:true,deliveredUnits:199500000n});
  });
  it("a credit above the expected amount is a mismatch, not a verified delivery",async()=>{

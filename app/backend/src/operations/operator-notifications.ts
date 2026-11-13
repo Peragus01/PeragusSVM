@@ -18,7 +18,8 @@ import {rowEnvironment} from "../repositories/row-environment.js";
  */
 export const OPERATOR_NOTIFICATION_KINDS=["approval","execution","needs_review","refund_pending","refund_completed",
  "operator_refund_decision","runtime_control_changed","stuck_operation","webhook_signature_invalid",
- "reconciliation_mismatch","pix_open_after_close","withdrawal_refused_transfer_found","daily_review_missing"] as const;
+ "reconciliation_mismatch","pix_open_after_close","withdrawal_refused_transfer_found","daily_review_missing",
+ "awaiting_approval","operator_resolution"] as const;
 export type OperatorNotificationKind=(typeof OPERATOR_NOTIFICATION_KINDS)[number];
 
 export interface OperatorNotificationConfig {
@@ -76,6 +77,7 @@ const TITLES:Record<OperatorNotificationKind,string>={
  stuck_operation:"Operação parada",webhook_signature_invalid:"Webhook com assinatura inválida",reconciliation_mismatch:"Divergência na conciliação",
  pix_open_after_close:"Pix em aberto após encerramento",withdrawal_refused_transfer_found:"Envio recusado com transferência encontrada",
  daily_review_missing:"Revisão diária pendente",
+ awaiting_approval:"Cliente pagou — aprovar o envio",operator_resolution:"Resolução do operador",
 };
 const SEVERITY:Record<string,string>={high:"alta",warn:"atenção",info:"informativa"};
 /** pt-BR labels for operation statuses (the raw codes go in the "Código:" line). */

@@ -10,6 +10,7 @@ import {reconcileCustomerPix} from "./customer-sandbox-pix.js";
 import type {CustomerReconciliationReader} from "../jobs/customer-reconciliation.js";
 import {refreshPixAndProgress,type PurchaseProgression} from "./purchase-progression.js";
 
+const FUNDING_STAGES=new Set(["accepted","awaiting_pix","pix_confirmed","converted"]);
 /** Returns two GET-only functions. There is no send, reserve, claim or simulation capability. */
 export function createCustomerReconciliationReader(pool:Pool,key:string,mode:MoneyMode,read?:OzavTransport,
  progression?:Pick<PurchaseProgression,"applyTransferObservation">,delivery?:DeliveryCheck):CustomerReconciliationReader{
@@ -26,6 +27,14 @@ export function createCustomerReconciliationReader(pool:Pool,key:string,mode:Mon
    const view=progression?await refreshPixAndProgress(pixRepository,pixProvider,progression,customerId,id,mode,"system:reconciliation")
     :await reconcileCustomerPix(pixRepository,pixProvider,customerId,id,mode);
    const failed=["failed","cancelled","expired"].includes(view.state);
+   if(progression){
+    // Final review I5: keep polling (with backoff) until OZAV's transfer is terminal AND the
+    // operation left the funding stages. OZAV's needs_review is not terminal: never end there.
+    // Review only for a real inconsistency; ordinary unpaid or refunded Pix have their own alerts.
+    const terminal=failed || view.state==="completed";
+    const funding=view.status!==null && FUNDING_STAGES.has(view.status);
+    return {status:view.state,complete:terminal && !funding,review:view.state==="completed" && !view.custody_conversion_completed};
+   }
    return {status:view.state,complete:view.custody_conversion_completed || failed,
     review:view.state==="needs_review" || (view.state==="completed" && !view.custody_conversion_completed) || (failed && view.source_leg_status==="completed")};
   },

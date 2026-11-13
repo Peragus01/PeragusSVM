@@ -7,7 +7,7 @@ import type {Pool} from "pg";
 import {beforeAll,beforeEach,afterAll,describe,it,expect,vi} from "vitest";
 import {buildApp} from "../src/app.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
-import {CustomerReconciliationService,CustomerReconciliationStatusService,registerCustomerReconciliationWorker,assertCustomerReconciliationSafety} from "../src/jobs/customer-reconciliation.js";
+import {CustomerReconciliationService,CustomerReconciliationStatusService,registerCustomerReconciliationWorker,assertCustomerReconciliationSafety,backoffMinutes} from "../src/jobs/customer-reconciliation.js";
 import {createCustomerReconciliationReader} from "../src/purchases/customer-reconciliation-reader.js";
 const db=new PGlite();
 const query=async(sql:string,args?:unknown[])=>{const r=await db.query(sql,args);return {...r,rowCount:r.rows.length};};
@@ -128,10 +128,29 @@ describe("durable GET-only customer reconciliation",()=>{
   expect(await service.run()).toEqual({processed:false});expect(pix).not.toHaveBeenCalled();
   expect(await checkpoint()).toMatchObject({state:"needs_review",last_error_code:"ATTEMPTS_EXHAUSTED",lease_token:null});
  });
- it("flags fifteen-minute pending orders without stopping GET recovery prematurely",async()=>{
+ it("an ordinary unpaid Pix pending for 16 minutes is not a mismatch; polling continues with backoff (I5/I6)",async()=>{
   await fixture();const service=new CustomerReconciliationService(pool,reader(),"test");await service.discover();
   await db.query("update peragus_customer_reconciliation set created_at=now()-interval '16 minutes'");
-  expect(await service.run()).toMatchObject({state:"pending",manualReviewRequired:true});
+  expect(await service.run()).toMatchObject({state:"pending",manualReviewRequired:false});
+  expect((await db.query<{m:number}>("select round(extract(epoch from next_check_at-last_checked_at)/60)::int m from peragus_customer_reconciliation")).rows[0]!.m).toBe(1);
+  await db.query("update peragus_customer_reconciliation set attempts=44,next_check_at=now()");
+  await service.run();
+  expect((await db.query<{m:number}>("select round(extract(epoch from next_check_at-last_checked_at)/60)::int m from peragus_customer_reconciliation")).rows[0]!.m).toBe(15);
+  expect(backoffMinutes(0)).toBe(1);expect(backoffMinutes(15)).toBe(5);expect(backoffMinutes(45)).toBe(15);
+ });
+ it("with progression: OZAV needs_review and a still-funding operation keep the checkpoint pending",async()=>{
+  const f=await fixture(),body=rawPix(f);body.status="needs_review";
+  const apply=vi.fn(async()=>"needs_review" as const);
+  const service=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",async()=>({statusCode:200,body}),{applyTransferObservation:apply}),"test");
+  expect(await service.run()).toMatchObject({kind:"pix",state:"pending",manualReviewRequired:false});
+  // Terminal at OZAV and the operation left the funding stages: complete.
+  await db.query("update peragus_customer_reconciliation set next_check_at=now()");
+  await db.query("update peragus_customer_purchase_intents set status='awaiting_pix' where id=$1",[f.purchase]);
+  await db.query("update peragus_customer_purchase_intents set status='pix_confirmed' where id=$1",[f.purchase]);
+  await db.query("update peragus_customer_purchase_intents set status='converted' where id=$1",[f.purchase]);
+  await db.query("update peragus_customer_purchase_intents set status='awaiting_approval' where id=$1",[f.purchase]);
+  const done=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",async()=>({statusCode:200,body:rawPix(f)}),{applyTransferObservation:apply}),"test");
+  expect(await done.run()).toMatchObject({kind:"pix",state:"provider_terminal",manualReviewRequired:false});
  });
  it("keeps browser roles unprivileged",async()=>{
   for(const role of ["anon","authenticated"]){
@@ -182,7 +201,8 @@ describe("durable GET-only customer reconciliation",()=>{
   const f=await fixture();const transport=vi.fn(async()=>({statusCode:200,body:rawPix(f)}));
   const apply=vi.fn(async()=>"awaiting_approval" as const);
   const service=new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,"ozav_sk_test_example","test",transport,{applyTransferObservation:apply}),"test");
-  expect(await service.run()).toMatchObject({kind:"pix",state:"provider_terminal"});
+  // The (mocked) progression left the operation accepted: still funding, keep polling (I5).
+  expect(await service.run()).toMatchObject({kind:"pix",state:"pending"});
   expect(apply).toHaveBeenCalledWith(f.purchase,{status:"completed",amountUsdt:"200.000000",sourceLegStatus:"completed"},"system:reconciliation");
   expect(transport).toHaveBeenCalledTimes(1);
  });

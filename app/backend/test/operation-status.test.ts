@@ -53,7 +53,9 @@ describe("canTransition",()=>{
    expect(canTransition(to,"quoted")).toBe(false);
    expect(canTransition(to,to)).toBe(false);
   }
-  expect(canTransition("needs_review","delivered_verified")).toBe(false);
+  // Ruling 39 (056): re-verification out of a delivery review; the SQL guard checks the origin.
+  expect(canTransition("needs_review","delivered_verified")).toBe(true);
+  expect(canTransition("needs_review","sent")).toBe(false);
   expect(canTransition("pix_confirmed","failed")).toBe(false);
  });
  it("sends an ambiguous accepted operation to review (lock outcome unknown), never to refund",()=>{

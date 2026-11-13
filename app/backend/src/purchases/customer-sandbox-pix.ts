@@ -4,6 +4,7 @@ import {onboardingExternalRef} from "../onboarding/submission-types.js";
 import type {OperationStatus} from "./operation-status.js";
 import type {PurchaseIntentRepository} from "./customer-purchase-intents.js";
 import {usdtMicroUnits} from "../quotes/customer-quotes.js";
+import type {PurchaseProgression} from "./purchase-progression.js";
 
 export class CustomerPixError extends Error {
   constructor(public readonly code: string) { super(code); }
@@ -65,7 +66,11 @@ export function validatePixTransfer(row: Pick<CustomerPixRecord, "providerCustom
   }
   if (t.status === "awaiting_payment" && !t.source.paymentInstructions) throw new CustomerPixError("PIX_INSTRUCTIONS_MISSING");
 }
-export function pixView(row: CustomerPixRecord, mode: MoneyMode = "test") {
+/**
+ * `marginMs` (PIX_INSTRUCTIONS_HIDE_MARGIN_MINUTES, final review I9): instructions stop being
+ * shown this long before min(Pix expiry, lock deadline), so a customer never pays at the edge.
+ */
+export function pixView(row: CustomerPixRecord, mode: MoneyMode = "test", marginMs = 0) {
   const t = row.observation, instructions = t?.source.paymentInstructions;
   const status = row.operationStatus ?? null, closed = status === "failed" || status === "expired";
   // Live instructions only after the FX lock was accepted and verified (operation awaiting_pix),
@@ -74,13 +79,13 @@ export function pixView(row: CustomerPixRecord, mode: MoneyMode = "test") {
   const locked = mode === "test" || (status === "awaiting_pix" && deadline !== null && !Number.isNaN(deadline));
   const until = instructions ? Math.min(Date.parse(instructions.expiresAt), deadline ?? Infinity) : NaN;
   const cancelRequestedAt = row.cancelRequestedAt ?? null;
-  const payable = !closed && locked && !cancelRequestedAt && !row.simulationAttempted && t?.status === "awaiting_payment" && instructions && until > Date.now();
+  const payable = !closed && locked && !cancelRequestedAt && !row.simulationAttempted && t?.status === "awaiting_payment" && instructions && until - marginMs > Date.now();
   return {id: row.id, purchase_intent_id: row.purchaseId, request_id: row.requestId,
     state: t?.status ?? (closed ? status : row.attempted ? "uncertain" : "reserved"), status, environment: mode,
     source: {currency: "BRL", amount: row.amountBrl},
     funding_destination: {type: "provider_managed_wallet"},
     subsequent_delivery: {wallet_address: row.walletAddress, proof_network: moneyNetworkFor(mode), started: false},
-    payment_instructions: payable ? {br_code: instructions.brCode, qr_code_image: instructions.qrCodeImage, expires_at: new Date(until).toISOString()} : null,
+    payment_instructions: payable ? {br_code: instructions.brCode, qr_code_image: instructions.qrCodeImage, expires_at: new Date(until - marginMs).toISOString()} : null,
     simulation_attempted: row.simulationAttempted, cancel_requested_at: cancelRequestedAt,
     source_leg_status: t?.sourceLegStatus ?? null, destination_leg_status: t?.destinationLegStatus ?? null,
     payment_confirmed: t?.sourceLegStatus === "completed" && ["payment_confirmed", "converting", "payout_initiated", "completed"].includes(t.status),
@@ -94,9 +99,18 @@ export function pixView(row: CustomerPixRecord, mode: MoneyMode = "test") {
  * lock acceptance; instructions are shown only when OZAV locked the rate at the
  * purchase's locked USDT amount. A refused or unverifiable lock fails the operation.
  */
+/** Options of the customer Pix service (env-configured in the API). */
+export interface CustomerPixOptions {
+  /** Instructions hidden this long before min(Pix expiry, lock deadline) (I9). */
+  instructionsMarginMs?: number;
+  /** The customer reconcile runs progression (GET + local moves) instead of only refreshing (I5). */
+  progression?: Pick<PurchaseProgression, "refreshPix">;
+}
 export class CustomerPixService {
+  private readonly marginMs: number;
   constructor(private readonly repo: CustomerPixRepository, private readonly provider: Provider,
-    private readonly mode: MoneyMode = "test", private readonly operations?: PixOperations) {}
+    private readonly mode: MoneyMode = "test", private readonly operations?: PixOperations,
+    private readonly options: CustomerPixOptions = {}) {this.marginMs = options.instructionsMarginMs ?? 0;}
   private async fail(row: CustomerPixRecord, reason: string, code: string): Promise<never> {
     await this.operations!.transitionOperation(row.purchaseId, "failed", PIX_ACTOR, reason);
     throw new CustomerPixError(code);
@@ -125,14 +139,16 @@ export class CustomerPixService {
   async read(customerId: string, id: string) {
     const row = await this.repo.read(customerId, id);
     if (!row) throw new CustomerPixError("PIX_NOT_FOUND");
-    return pixView(row, this.mode);
+    return pixView(row, this.mode, this.marginMs);
   }
   async create(customerId: string, requestId: string, purchaseId: string) {
     const prior = await this.repo.findRequest(customerId, requestId);
     if (prior) {
       if (prior.purchaseId !== purchaseId) throw new CustomerPixError("PIX_IDEMPOTENCY_CONFLICT");
       // Never POST again, even after timeout, failed save or provider refusal.
-      return {data: pixView(prior, this.mode), replayed: true};
+      if (prior.attempted) return {data: pixView(prior, this.mode, this.marginMs), replayed: true};
+      // Reserved but never claimed (e.g. paused between reserve and claim): validate again
+      // below and claim this same row instead of replaying it forever (final review I3).
     }
     // Only an accepted operation can fund a new Pix: refuse before any provider call.
     const context = await this.repo.context(customerId, purchaseId, "create");
@@ -150,11 +166,11 @@ export class CustomerPixService {
     // Live: no FX lock to accept, or nothing to record its outcome with, means no Pix at all.
     if (live && (!context.facilityTermsVersion || !this.operations)) throw new CustomerPixError("PIX_RATE_LOCK_REQUIRED");
     const walletId = await this.provider.getCustomerManagedWallet(context.providerCustomerId);
-    const row = await this.repo.reserve(customerId, requestId, context, walletId);
+    const row = prior ?? await this.repo.reserve(customerId, requestId, context, walletId);
     if (!await this.repo.claim(row.id)) {
       const current = await this.repo.read(customerId, row.id);
       if (!current?.attempted) throw new CustomerPixError("PIX_PURCHASE_NOT_ELIGIBLE");
-      return {data: pixView(current, this.mode), replayed: true};
+      return {data: pixView(current, this.mode, this.marginMs), replayed: true};
     }
     row.attempted = true;
     let result: Awaited<ReturnType<Provider["createCustomerPixTransfer"]>>;
@@ -175,7 +191,7 @@ export class CustomerPixService {
     // exposed until a complete response is verified against the frozen context.
     await this.repo.bind(row, result.id);
     row.transferId = result.id;
-    if (!result.transfer) return {data: pixView(row, this.mode), replayed: false};
+    if (!result.transfer) return {data: pixView(row, this.mode, this.marginMs), replayed: false};
     validatePixTransfer(row, result.transfer);
     const saved = await this.repo.save(row, result.transfer);
     // The lock outcome exists only on this response (GET never returns it).
@@ -184,9 +200,9 @@ export class CustomerPixService {
     const reason = lock?.reason ?? "pix_instructions_issued";
     if (this.operations && saved.observation?.status === "awaiting_payment" && saved.observation.source.paymentInstructions) {
       await this.operations.transitionOperation(row.purchaseId, "awaiting_pix", PIX_ACTOR, reason);
-      return {data: pixView((await this.repo.read(customerId, row.id)) ?? saved, this.mode), replayed: false};
+      return {data: pixView((await this.repo.read(customerId, row.id)) ?? saved, this.mode, this.marginMs), replayed: false};
     }
-    return {data: pixView(saved, this.mode), replayed: false};
+    return {data: pixView(saved, this.mode, this.marginMs), replayed: false};
   }
   async simulatePayment(customerId: string, id: string) {
     // Sandbox only: live payments are real Pix transfers made by the customer.
@@ -201,9 +217,9 @@ export class CustomerPixService {
     const current = await this.provider.getTransfer(row.transferId);
     validatePixTransfer(row, current);
     row = await this.repo.save(row, current);
-    if (row.simulationAttempted) return {data: pixView(row, this.mode), replayed: true};
+    if (row.simulationAttempted) return {data: pixView(row, this.mode, this.marginMs), replayed: true};
     if (["payment_confirmed", "converting", "payout_initiated", "completed"].includes(current.status)) {
-      return {data: pixView(row, this.mode), replayed: true};
+      return {data: pixView(row, this.mode, this.marginMs), replayed: true};
     }
     if (current.status !== "awaiting_payment" || !current.source.paymentInstructions
       || Date.parse(current.source.paymentInstructions.expiresAt) <= Date.now()) {
@@ -226,16 +242,23 @@ export class CustomerPixService {
     if (!await this.repo.claimSimulation(row)) {
       const latest = await this.repo.read(customerId, id);
       if (!latest?.simulationAttempted) throw new CustomerPixError("PIX_SIMULATION_NOT_READY");
-      return {data: pixView(latest, this.mode), replayed: true};
+      return {data: pixView(latest, this.mode, this.marginMs), replayed: true};
     }
     row.simulationAttempted = true;
     await this.provider.simulateCustomerPixPayment(row.transferId!);
     const after = await this.provider.getTransfer(row.transferId!);
     validatePixTransfer(row, after);
-    return {data: pixView(await this.repo.save(row, after), this.mode), replayed: false};
+    return {data: pixView(await this.repo.save(row, after), this.mode, this.marginMs), replayed: false};
   }
+  /** Customer "atualizar": with progression wired, the GET also moves the operation (I5). */
   async reconcile(customerId: string, id: string) {
-    return reconcileCustomerPix(this.repo,this.provider,customerId,id,this.mode);
+    if (this.options.progression) {
+      const row = await this.repo.read(customerId, id);
+      if (!row) throw new CustomerPixError("PIX_NOT_FOUND");
+      await this.options.progression.refreshPix(customerId, id, "system:reconciliation");
+      return pixView((await this.repo.read(customerId, id)) ?? row, this.mode, this.marginMs);
+    }
+    return reconcileCustomerPix(this.repo,this.provider,customerId,id,this.mode,this.marginMs);
   }
 }
 
@@ -251,17 +274,17 @@ export type CustomerSandboxPixService = CustomerPixService;
 export async function reconcileCustomerPix(
   repo: Pick<CustomerPixRepository,"read"|"bind"|"save">,
   provider: Pick<Provider,"findCustomerPixTransfer"|"getTransfer">,
-  customerId: string, id: string, mode: MoneyMode = "test",
+  customerId: string, id: string, mode: MoneyMode = "test", marginMs = 0,
 ) {
   const row = await repo.read(customerId, id);
   if (!row) throw new CustomerPixError("PIX_NOT_FOUND");
-  if (!row.attempted) return pixView(row, mode);
+  if (!row.attempted) return pixView(row, mode, marginMs);
   const transferId = row.transferId ?? await provider.findCustomerPixTransfer(row.providerCustomerId, row.id);
   // An empty listing does not prove that no transfer exists. Never clear claim.
-  if (!transferId) return pixView(row, mode);
+  if (!transferId) return pixView(row, mode, marginMs);
   const t = await provider.getTransfer(transferId);
   validatePixTransfer(row, t);
   await repo.bind(row, transferId);
   row.transferId = transferId;
-  return pixView(await repo.save(row, t), mode);
+  return pixView(await repo.save(row, t), mode, marginMs);
 }

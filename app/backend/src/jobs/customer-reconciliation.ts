@@ -43,6 +43,11 @@ function classifyError(error:unknown){
  return "PROVIDER_READ_UNAVAILABLE";
 }
 
+/**
+ * Minutes until the next GET of a pending checkpoint: 1 for the first 15 attempts, 5 up to 45,
+ * then 15 (the 120 attempts then cover about 21 h, inside the 24 h commitment).
+ */
+export const backoffMinutes=(attempts:number)=>attempts<15?1:attempts<45?5:15;
 /** Discovers existing requests only. Every provider call is a read, never a retry of a send. */
 export class CustomerReconciliationService {
  private readonly e:RowEnvironment;
@@ -87,16 +92,18 @@ export class CustomerReconciliationService {
   const permanent=errorCode==="EVIDENCE_MISMATCH" || errorCode==="RESOURCE_NOT_FOUND";
   const state=permanent || result?.review || exhausted?"needs_review":result?.complete?"provider_terminal":"pending";
   const aged=Date.now()-new Date(row.created_at).getTime()>=15*60*1000;
-  const review=state==="needs_review" || (unresolved && aged);
+  // An ordinary unpaid Pix is not a mismatch (final review I6): only a send left unresolved is
+  // flagged by age; a Pix is flagged only when the checkpoint itself needs review.
+  const review=state==="needs_review" || (unresolved && aged && !row.pix_id);
   if(exhausted)errorCode="ATTEMPTS_EXHAUSTED";
   const saved=await this.pool.query<{id:string}>(`with saved as (
    update peragus_customer_reconciliation set state=$3,last_status=$4,last_error_code=$5,
-    manual_review_required=$6,last_checked_at=now(),next_check_at=now()+interval '1 minute',
+    manual_review_required=$6,last_checked_at=now(),next_check_at=now()+make_interval(mins=>$7),
     lease_token=null,lease_until=null,updated_at=now()
    where id=$1 and lease_token=$2 returning *
   ) insert into peragus_customer_reconciliation_events(reconciliation_id,attempt,state,provider_status,error_code,manual_review_required)
    select id,attempts,state,last_status,last_error_code,manual_review_required from saved
-   on conflict do nothing returning reconciliation_id as id`,[row.id,row.lease_token,state,result?.status??null,errorCode,review]);
+   on conflict do nothing returning reconciliation_id as id`,[row.id,row.lease_token,state,result?.status??null,errorCode,review,backoffMinutes(row.attempts)]);
   return {processed:true as const,checkpointId:row.id,kind:row.pix_id?"pix":"withdrawal",state,
    attempts:row.attempts,manualReviewRequired:review,saved:saved.rows.length===1,errorCode};
  }

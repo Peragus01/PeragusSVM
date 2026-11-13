@@ -253,6 +253,47 @@ describe("ambiguous live Pix create recovered by GET",()=>{
   await db.query("update peragus_customer_sandbox_pix set created_at=now()-interval '10 minutes' where id=$1",[f.pixId]);
   await f.refresh();expect(await statusOf(f.p.id)).toBe("accepted");expect(f.gets).toHaveLength(0);
  });
+ it("final review I3: still no transfer listed 30 minutes after the claim expires the accepted operation (never with a transfer)",async()=>{
+  const f=await fixture({create:"timeout"});
+  await db.query("update peragus_customer_sandbox_pix set updated_at=now()-interval '29 minutes' where id=$1",[f.pixId]);
+  await f.refresh();expect(await statusOf(f.p.id)).toBe("accepted");
+  await db.query("update peragus_customer_sandbox_pix set updated_at=now()-interval '31 minutes' where id=$1",[f.pixId]);
+  await f.refresh();expect(await statusOf(f.p.id)).toBe("expired");
+  expect((await eventsOf(f.p.id)).at(-1)).toMatchObject({from_status:"accepted",to_status:"expired",reason:expect.stringMatching(/^PIX_CREATE_NOT_FOUND_AFTER_GRACE/)});
+  expect(f.posts()).toBe(1);
+  // A listed transfer is never expired by the grace rule.
+  const g=await fixture({create:"timeout"});g.setListed(g.awaiting.id);
+  await db.query("update peragus_customer_sandbox_pix set updated_at=now()-interval '31 minutes',created_at=now()-interval '31 minutes' where id=$1",[g.pixId]);
+  await g.refresh();expect(await statusOf(g.p.id)).toBe("needs_review");
+  expect(await g.progression.expireCreateNotFound(g.p.id)).toBe(false);
+ });
+ it("final review I3: accepted operations without a claimed Pix expire after the TTL",async()=>{
+  const s=await setup(),idle=(await purchases.record(s.customer.id,randomUUID(),s.quoteId)).record;
+  const progression=new PurchaseProgression({pool,mode:"live",operations:purchases,withdrawals:new PostgresCustomerWithdrawalRequestRepository(pool,"live"),refunds});
+  expect(await progression.expireAbandonedAccepted(30*60_000)).toBe(0);
+  // Fixture only: the status guard keeps status_changed_at, so age it with triggers off.
+  const age=async(id:string)=>{await db.exec("set session_replication_role=replica");
+   try{await db.query("update peragus_customer_purchase_intents set status_changed_at=now()-interval '31 minutes' where id=$1",[id]);}finally{await db.exec("set session_replication_role=origin");}};
+  await age(idle.id);
+  // A claimed (attempted) Pix keeps its operation: only the grace rule above may expire it.
+  const claimed=await fixture({create:"timeout"});
+  await age(claimed.p.id);
+  expect(await progression.expireAbandonedAccepted(30*60_000)).toBe(1);
+  expect(await statusOf(idle.id)).toBe("expired");expect(await statusOf(claimed.p.id)).toBe("accepted");
+  expect((await eventsOf(idle.id)).at(-1)).toMatchObject({from_status:"accepted",to_status:"expired",reason:"ACCEPTED_TTL_EXPIRED_NO_PIX"});
+ });
+ it("Ruling 39: an unpaid PIX_LOCK_OUTCOME_UNKNOWN review closes as failed when OZAV reports the transfer terminal and unpaid",async()=>{
+  const f=await fixture({create:"timeout"});f.setListed(f.awaiting.id);
+  await db.query("update peragus_customer_sandbox_pix set created_at=now()-interval '10 minutes' where id=$1",[f.pixId]);
+  await f.refresh();expect(await statusOf(f.p.id)).toBe("needs_review");
+  f.set({status:"expired",source:{type:"fiat_payment",currency:"BRL",rail:"pix"}});await f.refresh();
+  expect(await statusOf(f.p.id)).toBe("failed");
+  expect((await eventsOf(f.p.id)).at(-1)).toMatchObject({from_status:"needs_review",to_status:"failed",reason:expect.stringMatching(/^PIX_TRANSFER_EXPIRED_UNPAID/)});
+  // A paid ending is never auto-closed.
+  const g=await fixture({create:"timeout"});g.setListed(g.awaiting.id);
+  await db.query("update peragus_customer_sandbox_pix set created_at=now()-interval '10 minutes' where id=$1",[g.pixId]);
+  await g.refresh();g.paid("failed");await g.refresh();expect(await statusOf(g.p.id)).toBe("needs_review");
+ });
  it("a not_locked transfer that stays payable at OZAV raises an operator alert (OZAV has no cancel endpoint)",async()=>{
   const f=await fixture({facility:{locked:false,state:"not_locked",reason:null,amount:null,currency:null,deadlineAt:null}});
   expect(await statusOf(f.p.id)).toBe("failed");

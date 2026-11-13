@@ -27,7 +27,9 @@ const select=`select r.*,to_char(r.created_at at time zone 'UTC','YYYY-MM-DD"T"H
  c.id as completion_id,c.request_id as completion_request_id,c.operator_user_id as completion_operator,c.amount_brl as returned_amount,c.reference,c.created_at as completion_at,
  e.observation->>'status' as withdrawal_state,e.create_attempted as withdrawal_attempted
  from peragus_customer_refund_requests r
+ -- The current decision: an approval may supersede a rejection (056); never both shown.
  left join peragus_manual_refund_decisions d on d.refund_request_id=r.id and d.customer_id=r.customer_id
+  and not exists(select 1 from peragus_manual_refund_decisions s where s.supersedes_decision_id=d.id)
  left join peragus_manual_refund_completions c on c.refund_request_id=r.id and c.customer_id=r.customer_id
  left join peragus_customer_withdrawal_requests w on w.purchase_intent_id=r.purchase_intent_id and w.customer_id=r.customer_id
  left join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=w.id and e.customer_id=r.customer_id`;
@@ -74,8 +76,11 @@ export class ManualRefundService {
   * enforces it too). The lock, checks, decision record, status change and audit event
   * are ONE statement. Idempotent per operator + request_id; creates (or reuses) the
   * manual refund request, recorded even when MANUAL_REFUNDS_ENABLED is off.
-  * Ruling 23: refused with REFUND_WITHDRAWAL_IN_PROGRESS when a withdrawal approval or
-  * execution exists (checked under the same purchase row lock the approval takes).
+  * Ruling 38 (refines 23): refused with REFUND_WITHDRAWAL_IN_PROGRESS when the operation is
+  * approved/sending/sent/delivered_verified, or when a send was claimed and it is not BOTH
+  * definitively refused by OZAV and confirmed by a GET-only metadata find to have left no
+  * transfer (refused_find_clear_at). Checked under the same purchase row lock the approval and
+  * the send claim take. An approval or an unclaimed reservation alone no longer blocks.
   * Requires a fresh TOTP. The statement, the refund request and the read run in ONE
   * transaction on a dedicated connection.
   */
@@ -122,10 +127,12 @@ export class ManualRefundService {
      select exists(select 1 from peragus_customer_sandbox_pix x join p on x.purchase_intent_id=p.id and x.customer_id=p.customer_id
       where x.environment='${this.e.mode}' and x.observation->>'sourceLegStatus'='completed') as ok
     ), w as (
-     -- Ruling 23: never a refund decision once a withdrawal approval or execution exists.
+     -- Ruling 38: a claimed send blocks unless definitively refused AND a GET-only find
+     -- confirmed that no transfer exists.
      select exists(select 1 from peragus_customer_withdrawal_requests wr join p on wr.purchase_intent_id=p.id and wr.customer_id=p.customer_id
-      where exists(select 1 from peragus_withdrawal_operator_approvals a where a.withdrawal_request_id=wr.id)
-       or exists(select 1 from peragus_sandbox_withdrawal_executions e where e.withdrawal_request_id=wr.id)) as busy
+      join peragus_sandbox_withdrawal_executions e on e.withdrawal_request_id=wr.id and e.customer_id=wr.customer_id
+      where e.create_attempted and not (e.provider_refusal_code is not null and e.refused_transfer_id is null
+       and e.refused_find_clear_at is not null)) as busy
     ), d as (
      insert into peragus_operator_refund_decisions(id,purchase_id,customer_id,operator_user_id,request_id,reason,from_status,environment)
      select $4,p.id,p.customer_id,$2,$3,$5,p.status,'${this.e.mode}' from p,paid,w

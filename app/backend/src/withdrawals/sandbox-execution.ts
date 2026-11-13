@@ -87,6 +87,8 @@ export interface SandboxExecution extends ExecutionContext {
  deliveryPendingReason?:string|null;
  /** When the send was claimed; the verified transaction must not predate it. */
  sendAttemptedAt?:string|null;
+ /** Ruling 38: when a GET-only find confirmed no transfer exists for a refused send. */
+ refusedFindClearAt?:string|null;
 }
 /** Outcome of the claim transaction. */
 export type ExecutionClaim="claimed"|"taken"|"not_approved";
@@ -116,6 +118,19 @@ export interface SandboxExecutionRepository {
  flagRefusedTransfer(row:SandboxExecution,transferId:string):Promise<void>;
  /** Stores why an undecided completed send is still pending (no status change). */
  recordDeliveryPending(row:SandboxExecution,reason:string):Promise<SandboxExecution>;
+ /** Ruling 38: a GET-only metadata find for a refused send returned no transfer. */
+ markRefusedFindClear(row:SandboxExecution):Promise<void>;
+ /**
+  * OZAV reported the send failed/cancelled/expired: under the purchase row lock a `sending` or
+  * `sent` operation moves to needs_review (OZAV_SEND_<STATUS>); never silently pending.
+  */
+ recordSendEnded(row:SandboxExecution,status:string,actor:string):Promise<void>;
+ /**
+  * Ruling 39 re-verification: like recordDelivery, but also from needs_review entered from `sent`
+  * and over an earlier review outcome. verified -> delivered_verified; review keeps/moves to
+  * needs_review with the new reason. Returns the row unchanged when nothing applied.
+  */
+ reverifyDelivery(row:SandboxExecution,outcome:DeliveryOutcome,actor:string):Promise<SandboxExecution>;
 }
 /** The amount that was (or will be) POSTed: the locked amount, or amount_usdt for pre-Task-10 rows. */
 export const sendAmount=(row:Pick<ExecutionContext,"sendAmountUsdt"|"amountUsdt">)=>row.sendAmountUsdt??row.amountUsdt;
@@ -129,6 +144,7 @@ export function executionView(r:SandboxExecution){
  const live=r.environment==="live";
  return{id:r.id,withdrawal_request_id:r.withdrawalId,request_id:r.requestId,
  state:r.observation?`provider_${r.observation.status}`:r.refusalCode?"provider_refused":r.attempted?"uncertain":"reserved",environment:r.environment,real_money:live,
+ refused_find_clear:r.refusedFindClearAt!=null,
  source:{currency:"USDT",amount:sendAmount(r)},destination:{wallet_address:r.walletAddress,network:"solana",proof_network:moneyNetworkFor(r.environment)},
  provider_target_amount:r.observation?.targetAmount??null,provider_transaction_reference:r.observation?.transactionReference??r.txHash??null,
  provider_refusal_code:r.refusalCode,
@@ -192,9 +208,13 @@ export async function decideDelivery(row:SandboxExecution,delivery:DeliveryCheck
    reason:`VERIFIED_ONCHAIN: credit ${formatUsdt(result.deliveredUnits)} equals settled target ${o.targetAmount}, within locked ${sent} minus tolerance`};
  }
  if(result.reason==="NOT_FINALIZED")return live?{status:"pending",reason:"NOT_FINALIZED"}:{status:"simulated",reason:"SIMULATED: test transaction not found on devnet"};
+ // The RPC returned no block time: nothing contradicts the delivery yet. Stays `sent` and is
+ // retried (the 30 min sent alert escalates; an operator can re-run the check).
+ if(result.reason==="BLOCK_TIME_MISSING")return{status:"pending",reason:"BLOCK_TIME_MISSING"};
  return{status:"review",reason:result.reason};
 }
-type ReconcileRepository=Pick<SandboxExecutionRepository,"bind"|"save"|"recordDelivery"|"recordDeliveryPending"|"flagRefusedTransfer">;
+type ReconcileRepository=Pick<SandboxExecutionRepository,"bind"|"save"|"recordDelivery"|"recordDeliveryPending"|"flagRefusedTransfer"|"markRefusedFindClear"|"recordSendEnded">;
+const SEND_ENDED=new Set(["failed","cancelled","expired"]);
 type ReconcileReader=Pick<OzavSandboxWithdrawalProvider,"find"|"transfer">;
 /**
  * GET-only reconciliation of one attempted execution (operator route and background job):
@@ -209,6 +229,8 @@ export async function reconcileExecution(repository:ReconcileRepository,provider
   if(!row.refusedTransferId){
    const stray=await provider.find(row.providerCustomerId,row.id);
    if(stray){await repository.flagRefusedTransfer(row,stray);row.refusedTransferId=stray;}
+   // Ruling 38: the GET-only find confirmed no transfer; the refund decision may proceed.
+   else await repository.markRefusedFindClear(row);
   }
   return executionView(row);
  }
@@ -216,6 +238,7 @@ export async function reconcileExecution(repository:ReconcileRepository,provider
  const observed=await provider.transfer(found);validateWithdrawal(row,observed);
  await repository.bind(row,found,null,actor);row.sendTransferId=found;
  let saved=await repository.save(row,observed);
+ if(SEND_ENDED.has(observed.status))await repository.recordSendEnded(saved,observed.status,actor);
  if(delivery && saved.deliveryStatus!=="verified" && saved.deliveryStatus!=="review"){
   const outcome=await decideDelivery(saved,delivery);
   if(outcome?.status==="pending"){
@@ -223,6 +246,24 @@ export async function reconcileExecution(repository:ReconcileRepository,provider
   }else if(outcome && !(outcome.status==="simulated" && saved.deliveryStatus==="simulated"))saved=await repository.recordDelivery(saved,outcome,actor);
  }
  return executionView(saved);
+}
+/**
+ * Ruling 39: re-runs the delivery check of a `sent` operation or of a delivery review (current
+ * tolerance and RPC, the same Ruling 30 checks), after a GET refresh of the send. Never sends.
+ * Returns the resulting view and the outcome (null when the send is not completed).
+ */
+export async function reverifyExecution(repository:Pick<SandboxExecutionRepository,"save"|"reverifyDelivery"|"recordDeliveryPending">,
+ provider:Pick<OzavSandboxWithdrawalProvider,"transfer">,row:SandboxExecution,actor:string,delivery:DeliveryCheck){
+ if(!row.attempted || !row.sendTransferId || row.refusalCode)throw new SandboxExecutionError("WITHDRAWAL_DELIVERY_NOT_VERIFIABLE");
+ const observed=await provider.transfer(row.sendTransferId);validateWithdrawal(row,observed);
+ let saved=await repository.save(row,observed);
+ // A previous review must not short-circuit the new check.
+ const outcome=await decideDelivery({...saved,deliveryStatus:null},delivery);
+ if(!outcome)return{view:executionView(saved),outcome:null};
+ if(outcome.status==="pending"){saved=await repository.recordDeliveryPending(saved,outcome.reason);return{view:executionView(saved),outcome};}
+ if(outcome.status==="simulated")return{view:executionView(saved),outcome};
+ saved=await repository.reverifyDelivery(saved,outcome,actor);
+ return{view:executionView(saved),outcome};
 }
 export class SandboxWithdrawalExecutionService {
  private readonly policy:ExecutionPolicy;

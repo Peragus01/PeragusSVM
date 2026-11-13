@@ -10,7 +10,7 @@ import {CustomerSandboxPixService} from "../src/purchases/customer-sandbox-pix.j
 import type {OperationStatus} from "../src/purchases/operation-status.js";
 import {RuntimeControlService} from "../src/operations/runtime-controls.js";
 import {DRAIN_MAX,drainOperatorNotifications,operatorNotificationConfig,SEND_TIMEOUT_MS,OperatorNotificationSendError,recordWebhookSignatureInvalid,
- ResendOperatorNotificationSender,type OperatorNotificationSender} from "../src/operations/operator-notifications.js";
+ renderOperatorNotification,ResendOperatorNotificationSender,type OperatorNotificationSender} from "../src/operations/operator-notifications.js";
 import {OPERATOR_JOB_EXPIRE_SECONDS,OPERATOR_NOTIFICATIONS_QUEUE,registerOperatorNotificationJobs,STUCK_OPERATIONS_QUEUE,StuckOperationScanner} from "../src/jobs/stuck-operations.js";
 import {enableRuntimeControls} from "./helpers/runtime-controls.js";
 import {migrateAll,pglitePool,purchaseReadyCustomer} from "./helpers/operation-fixture.js";
@@ -32,14 +32,19 @@ const PATH:OperationStatus[]=["awaiting_pix","pix_confirmed","converted","awaiti
 async function operation(to:OperationStatus[]=[]){
  const s=await purchaseReadyCustomer(db,pool);
  const accepted=await purchases.record(s.customer.id,s.requestId,s.quoteId);
- for(const status of to)await repository.transitionOperation(accepted.data.id,status,"system:test",`SYNTHETIC_${status.toUpperCase()}: test`);
+ for(const status of to){
+  await repository.transitionOperation(accepted.data.id,status,"system:test",`SYNTHETIC_${status.toUpperCase()}: test`);
+  // "Cliente pagou — aprovar" (056) is covered by its own test; send it here so the
+  // tests below see only the notifications of the later transitions.
+  if(status==="awaiting_approval")await drainOperatorNotifications(pool,fakeSender().sender,config,1000);
+ }
  return{...s,purchaseId:accepted.data.id};
 }
 const until=(status:OperationStatus)=>PATH.slice(0,PATH.indexOf(status)+1);
 type Note={kind:string;recipient:string;severity:string;status:string;dedupe_key:string;idempotency_key:string;payload:any;attempts:number;id:string};
 const notes=async(where:string,params:unknown[]=[])=>(await db.query<Note>(`select id,kind,recipient,severity,status,dedupe_key,idempotency_key,payload,attempts
  from peragus_operator_notifications where ${where} order by kind,dedupe_key,recipient`,params)).rows;
-const forPurchase=(id:string)=>notes("purchase_id=$1",[id]);
+const forPurchase=(id:string)=>notes("purchase_id=$1 and kind<>'awaiting_approval'",[id]);
 const at=(minutes:number)=>new Date(Date.now()+minutes*60_000);
 function fakeSender(behaviour:()=>Promise<string>|string=()=>`email-${randomUUID()}`){
  const calls:{key:string;message:{from:string;to:string[];subject:string;text:string}}[]=[];
@@ -59,6 +64,16 @@ function pixFixture(){
 }
 
 describe("operator notifications",()=>{
+ it("a paid operation reaching awaiting_approval notifies the operator to approve (warn)",async()=>{
+  const s=await purchaseReadyCustomer(db,pool),accepted=await purchases.record(s.customer.id,s.requestId,s.quoteId);
+  for(const status of until("converted"))await repository.transitionOperation(accepted.data.id,status,"system:test",`SYNTHETIC_${status.toUpperCase()}: test`);
+  expect(await notes("purchase_id=$1 and kind='awaiting_approval'",[accepted.data.id])).toEqual([]);
+  await repository.transitionOperation(accepted.data.id,"awaiting_approval","system:reconciliation","withdrawal_request_recorded");
+  const rows=await notes("purchase_id=$1 and kind='awaiting_approval'",[accepted.data.id]);
+  expect(rows.map(r=>[r.recipient,r.severity])).toEqual([["operator","warn"],["trusted","warn"]]);
+  const email=renderOperatorNotification(rows[0]!.payload,"test");
+  expect(email.subject).toContain("Cliente pagou");
+ });
  it("approval enqueues one notification per recipient, in the transition's transaction",async()=>{
   const op=await operation(until("approved"));
   const rows=await forPurchase(op.purchaseId);
@@ -108,7 +123,7 @@ describe("operator notifications",()=>{
   expect((await forPurchase(third.purchaseId)).map(r=>r.status)).toEqual(["failed","failed"]);
   // A worker that died after recording the attempt (row left 'sending') is never re-sent.
   const fourth=await operation(until("approved"));
-  await db.query("update peragus_operator_notifications set status='sending',attempts=1,first_attempt_at=now(),updated_at=now()-interval '10 minutes' where purchase_id=$1",[fourth.purchaseId]);
+  await db.query("update peragus_operator_notifications set status='sending',attempts=1,first_attempt_at=now(),updated_at=now()-interval '10 minutes' where purchase_id=$1 and status='pending'",[fourth.purchaseId]);
   const after=fakeSender();
   await drainOperatorNotifications(pool,after.sender,config);
   expect(after.calls).toHaveLength(0);
@@ -130,6 +145,23 @@ describe("operator notifications",()=>{
   const sent=await operation(until("sent"));
   await scanner.scan(at(31));await scanner.scan(at(35));
   expect((await notes("purchase_id=$1 and kind='stuck_operation'",[sent.purchaseId])).map(r=>r.payload.threshold)).toEqual(["sent_30m_unverified","sent_30m_unverified"]);
+ });
+
+ it("stage thresholds: pix_confirmed/approved warn 2 h and high 8 h, awaiting_approval warn 1 h and high 4 h, each once",async()=>{
+  const paid=await operation(["awaiting_pix","pix_confirmed"]),waiting=await operation(until("awaiting_approval")),approved=await operation(until("approved"));
+  const stage=async(id:string)=>(await notes("purchase_id=$1 and kind='stuck_operation' and recipient='operator'",[id])).map(r=>`${r.payload.threshold}:${r.severity}`).sort();
+  await scanner.scan(at(59));
+  expect([await stage(paid.purchaseId),await stage(waiting.purchaseId),await stage(approved.purchaseId)]).toEqual([[],[],[]]);
+  await scanner.scan(at(61));await scanner.scan(at(66));
+  expect(await stage(waiting.purchaseId)).toEqual(["awaiting_approval_1h:warn"]);
+  expect(await stage(paid.purchaseId)).toEqual([]);
+  await scanner.scan(at(2*60+1));
+  expect(await stage(paid.purchaseId)).toEqual(["pix_confirmed_2h:warn"]);
+  expect(await stage(approved.purchaseId)).toEqual(["approved_2h:warn"]);
+  await scanner.scan(at(8*60+1));await scanner.scan(at(8*60+6));
+  expect(await stage(paid.purchaseId)).toEqual(["pix_confirmed_2h:warn","pix_confirmed_8h:high"]);
+  expect(await stage(waiting.purchaseId)).toEqual(["awaiting_approval_1h:warn","awaiting_approval_4h:high"]);
+  expect(await stage(approved.purchaseId)).toEqual(["approved_2h:warn","approved_8h:high"]);
  });
 
  it("needs_review alerts at 4 h and 12 h, refund_pending at 12 h and 20 h, awaiting_pix past its deadline, each once",async()=>{

@@ -1,6 +1,6 @@
 import type {Connection} from "@solana/web3.js";
 
-export type DeliveryMismatch="NOT_FINALIZED"|"TX_FAILED"|"TX_PREDATES_SEND"|"MINT_MISMATCH"|"RECIPIENT_MISMATCH"|"AMOUNT_MISMATCH";
+export type DeliveryMismatch="NOT_FINALIZED"|"BLOCK_TIME_MISSING"|"TX_FAILED"|"TX_PREDATES_SEND"|"MINT_MISMATCH"|"RECIPIENT_MISMATCH"|"AMOUNT_MISMATCH";
 export type DeliveryVerification={verified:true;deliveredUnits:bigint}|{verified:false;reason:DeliveryMismatch};
 export interface DeliveryVerificationInput {
  /** Read-only RPC; tests inject a fake, production passes the configured Connection. */
@@ -15,7 +15,8 @@ export interface DeliveryVerificationInput {
  toleranceUnits:bigint;
  /**
   * Unix seconds the transaction's block time must not precede (the send attempt minus a clock
-  * allowance). A transaction without a block time cannot prove it and fails as TX_PREDATES_SEND.
+  * allowance). A transaction without a block time cannot prove it yet: BLOCK_TIME_MISSING (the
+  * caller keeps the delivery pending and retries; an RPC without blockTime is a config issue).
   */
  notBeforeUnix?:number;
 }
@@ -58,8 +59,8 @@ export async function verifyUsdtDelivery(input:DeliveryVerificationInput):Promis
  const tx=await input.connection.getParsedTransaction(input.txHash,{commitment:"finalized",maxSupportedTransactionVersion:0});
  if(!tx || !tx.meta)return{verified:false,reason:"NOT_FINALIZED"};
  if(tx.meta.err!==null && tx.meta.err!==undefined)return{verified:false,reason:"TX_FAILED"};
- if(input.notBeforeUnix!==undefined && (typeof tx.blockTime!=="number" || tx.blockTime<input.notBeforeUnix))
-  return{verified:false,reason:"TX_PREDATES_SEND"};
+ if(input.notBeforeUnix!==undefined && typeof tx.blockTime!=="number")return{verified:false,reason:"BLOCK_TIME_MISSING"};
+ if(input.notBeforeUnix!==undefined && tx.blockTime!<input.notBeforeUnix)return{verified:false,reason:"TX_PREDATES_SEND"};
  // Net change per token account (a missing pre balance is an account created by this transaction).
  const changes=new Map<number,{mint:string;owner:string|undefined;delta:bigint}>();
  for(const post of (tx.meta.postTokenBalances??[]) as TokenBalance[])changes.set(post.accountIndex,{mint:post.mint,owner:post.owner,delta:units(post)});

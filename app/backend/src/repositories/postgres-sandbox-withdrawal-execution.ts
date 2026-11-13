@@ -66,7 +66,7 @@ interface ContextRow {withdrawal_request_id:string;customer_id:string;approval_i
 interface Row extends ContextRow {id:string;operator_id:string;request_id:string;create_attempted:boolean;provider_send_id:string|null;observation:WithdrawalObservation|null;closed_at:Date|string|null;
  environment:MoneyMode;provider_tx_hash:string|null;provider_refusal_code:string|null;
  delivery_status?:DeliveryStatus|null;delivery_reason?:string|null;delivered_amount_usdt?:string|null;refused_transfer_id?:string|null;slot_released_at?:Date|string|null;
- delivery_pending_reason?:string|null;send_attempted_at?:Date|string|null;created_at?:Date|string|null;}
+ delivery_pending_reason?:string|null;send_attempted_at?:Date|string|null;created_at?:Date|string|null;refused_find_clear_at?:Date|string|null;}
 const formatUnits=(units:bigint)=>`${units/1000000n}.${String(units%1000000n).padStart(6,"0")}`;
 const contextMap=(r:ContextRow):ExecutionContext=>({withdrawalId:r.withdrawal_request_id,customerId:r.customer_id,approvalId:r.approval_id,approverId:r.approver_id,pixId:r.pix_id,purchaseId:r.purchase_id,
  providerCustomerId:r.provider_customer_id,providerWalletId:r.provider_wallet_id,providerQuoteId:r.provider_quote_id,transferId:r.funding_transfer_id,
@@ -79,6 +79,7 @@ const map=(r:Row):SandboxExecution=>({...contextMap(r),id:r.id,operatorId:r.oper
  deliveryStatus:r.delivery_status??null,deliveryReason:r.delivery_reason??null,deliveredAmountUsdt:r.delivered_amount_usdt==null?null:String(r.delivered_amount_usdt),
  refusedTransferId:r.refused_transfer_id??null,slotReleasedAt:r.slot_released_at?new Date(r.slot_released_at).toISOString():null,
  deliveryPendingReason:r.delivery_pending_reason??null,
+ refusedFindClearAt:r.refused_find_clear_at?new Date(r.refused_find_clear_at).toISOString():null,
  // Rows claimed before 050 have no send_attempted_at: the reservation time is an earlier, safe bound.
  sendAttemptedAt:r.send_attempted_at?new Date(r.send_attempted_at).toISOString():r.created_at?new Date(r.created_at).toISOString():null});
 const SEND_CLAIMED="WITHDRAWAL_SEND_CLAIMED",SEND_ACCEPTED="OZAV_SEND_ACCEPTED",SEND_REFUSED="WITHDRAWAL_SEND_REFUSED";
@@ -177,11 +178,22 @@ export class PostgresSandboxExecutionRepository implements SandboxExecutionRepos
    throw error;
   }
  }
- private async writeDelivery(row:SandboxExecution,initial:DeliveryOutcome,actor:string){
+ async reverifyDelivery(row:SandboxExecution,outcome:DeliveryOutcome,actor:string):Promise<SandboxExecution>{
+  if(outcome.status!=="verified" && outcome.status!=="review")throw new SandboxExecutionError("WITHDRAWAL_DELIVERY_PENDING_IS_NOT_AN_OUTCOME");
+  try{return await this.writeDelivery(row,outcome,actor,true);}
+  catch(error){
+   if(outcome.status==="verified" && (error as {code?:unknown})?.code==="23505")
+    return this.writeDelivery(row,{status:"review",reason:TX_ALREADY_USED},actor,true);
+   throw error;
+  }
+ }
+ private async writeDelivery(row:SandboxExecution,initial:DeliveryOutcome,actor:string,reverify=false){
   if(initial.status==="simulated" && this.e.mode!=="test")throw new SandboxExecutionError("WITHDRAWAL_DELIVERY_SIMULATION_NOT_ALLOWED");
   if(initial.status==="pending")throw new SandboxExecutionError("WITHDRAWAL_DELIVERY_PENDING_IS_NOT_AN_OUTCOME");
   return this.transaction(async client=>{
-   if(await this.lockOperation(client,row.purchaseId)!=="sent")return{commit:false,value:row};
+   const status=await this.lockOperation(client,row.purchaseId);
+   // A re-verification also applies to a delivery review (entered from `sent`; the SQL guard checks it).
+   if(status!=="sent" && !(reverify && status==="needs_review" && await this.reviewFromSent(client,row.purchaseId)))return{commit:false,value:row};
    let outcome=initial;
    // One on-chain transaction never verifies two operations (also enforced by a unique index).
    if(outcome.status==="verified"){
@@ -191,15 +203,34 @@ export class PostgresSandboxExecutionRepository implements SandboxExecutionRepos
    const reason=outcome.reason.replace(/[\u0000-\u001f\u007f]/g," ").slice(0,200);
    const delivered=outcome.status==="verified"?formatUnits(outcome.deliveredUnits):null;
    if(outcome.status==="verified")await transitionOperationInTransaction(client,this.e.mode,row.purchaseId,"delivered_verified",actor.slice(0,200),
-    `${DELIVERY_VERIFIED}: tx=${row.txHash??row.observation?.transactionReference} delivered=${delivered} ${reason}`.slice(0,500),{from:"sent"});
-   if(outcome.status==="review")await transitionOperationInTransaction(client,this.e.mode,row.purchaseId,"needs_review",actor.slice(0,200),
+    `${DELIVERY_VERIFIED}: tx=${row.txHash??row.observation?.transactionReference} delivered=${delivered} ${reason}`.slice(0,500),{from:status!});
+   if(outcome.status==="review" && status==="sent")await transitionOperationInTransaction(client,this.e.mode,row.purchaseId,"needs_review",actor.slice(0,200),
     `${DELIVERY_FAILED}: ${reason}`.slice(0,500),{from:"sent"});
    const r=await client.query<Row>(`update peragus_sandbox_withdrawal_executions set delivery_status=$2,delivery_reason=$3,delivered_amount_usdt=$4::numeric,
     delivery_checked_at=now(),delivery_pending_reason=null,updated_at=now()
     where id=$1 and environment='${this.e.mode}' and closed_at is null and create_attempted and provider_send_id is not null and observation is not null
-     and provider_refusal_code is null and (delivery_status is null or delivery_status='simulated') returning *`,[row.id,outcome.status,reason,delivered]);
+     and provider_refusal_code is null and (delivery_status is null or delivery_status='simulated'${reverify?" or delivery_status='review'":""}) returning *`,[row.id,outcome.status,reason,delivered]);
    if(!r.rows[0])return{commit:false,value:row};
    return{commit:true,value:map({...r.rows[0],purchase_id:row.purchaseId})};
+  });
+ }
+ /** The last real transition of the operation came from `sent` (a delivery review). */
+ private async reviewFromSent(client:PoolClient,purchaseId:string){
+  const r=await client.query<{from_status:string|null}>(`select from_status from peragus_operation_status_events
+   where purchase_id=$1 and from_status is distinct from to_status order by id desc limit 1`,[purchaseId]);
+  return r.rows[0]?.from_status==="sent";
+ }
+ async markRefusedFindClear(row:SandboxExecution){
+  await this.pool.query(`update peragus_sandbox_withdrawal_executions set refused_find_clear_at=coalesce(refused_find_clear_at,now()),updated_at=now()
+   where id=$1 and environment='${this.e.mode}' and provider_refusal_code is not null and refused_transfer_id is null`,[row.id]);
+ }
+ async recordSendEnded(row:SandboxExecution,status:string,actor:string){
+  await this.transaction(async client=>{
+   const current=await this.lockOperation(client,row.purchaseId);
+   if(current!=="sending" && current!=="sent")return{commit:false,value:undefined};
+   await transitionOperationInTransaction(client,this.e.mode,row.purchaseId,"needs_review",actor.slice(0,200),
+    `OZAV_SEND_${status.toUpperCase().replace(/[^A-Z]/g,"").slice(0,20)}: transfer=${row.sendTransferId??"unknown"}`.slice(0,500),{from:current});
+   return{commit:true,value:undefined};
   });
  }
  async recordDeliveryPending(row:SandboxExecution,reason:string){

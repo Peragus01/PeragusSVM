@@ -244,11 +244,13 @@ describe("withdrawal approval vs operator refund decision (ruling 23)",()=>{
   expect(await statusOf(f.p.data.id)).toBe("approved");
   expect((await db.query("select count(*)::int n from peragus_operator_refund_decisions where purchase_id=$1",[f.p.data.id])).rows[0]).toEqual({n:0});
  });
- it("refuses a refund decision even after the approved operation went to review",async()=>{
+ it("ruling 38: an approval without a claimed send no longer blocks the refund decision once the operation is in review",async()=>{
   const f=await approvalFixture();await f.approvals.approve(f.user,f.wr.data.id,f.approvalRequestId,f.reason);
-  await repo.transitionOperation(f.p.data.id,"needs_review","system:test","synthetic review after approval");
+  // Still approved: refused.
   await expect(refundsFor(f).operationDecision(f.user,f.p.data.id,randomUUID(),refundReason)).rejects.toThrow("REFUND_WITHDRAWAL_IN_PROGRESS");
-  expect(await statusOf(f.p.data.id)).toBe("needs_review");
+  await repo.transitionOperation(f.p.data.id,"needs_review","system:test","synthetic review after approval");
+  await refundsFor(f).operationDecision(f.user,f.p.data.id,randomUUID(),refundReason);
+  expect(await statusOf(f.p.data.id)).toBe("refund_pending");
  });
  it("concurrent approve vs decide: exactly one wins and the state matches the winner",async()=>{
   for(let i=0;i<4;i++){

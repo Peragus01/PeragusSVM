@@ -1,5 +1,5 @@
 // Purchase operation lifecycle. Mirrored in SQL by
-// peragus_operation_can_transition() (migrations 045, 048); a test compares both.
+// peragus_operation_can_transition() (migrations 045, 048, 056); a test compares both.
 export type OperationStatus =
   | "quoted"
   | "accepted"
@@ -61,7 +61,9 @@ const TRANSITIONS: Readonly<Record<OperationStatus, readonly OperationStatus[]>>
   sending: ["sent", "needs_review"],
   sent: ["delivered_verified", "needs_review"],
   // pix_confirmed/converted: resuming after OZAV's own (non-terminal) needs_review (048).
-  needs_review: ["pix_confirmed", "converted", "awaiting_approval", "refund_pending", "failed"],
+  // delivered_verified: an operator re-ran the delivery check of a review entered from
+  // `sent` (Ruling 39, 056; the SQL guard checks the review origin).
+  needs_review: ["pix_confirmed", "converted", "awaiting_approval", "refund_pending", "failed", "delivered_verified"],
   refund_pending: ["refunded", "needs_review"],
   delivered_verified: [],
   // Only by an operator refund decision, and only when the Pix source leg is confirmed

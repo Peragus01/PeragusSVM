@@ -4,7 +4,7 @@ import {OzavSandboxWithdrawalProvider} from "../providers/ozav-sandbox-withdrawa
 import {authorizeWithdrawalOperator} from "./operator-approvals.js";
 import {SandboxExecutionError,executionView,reconcileExecution,type DeliveryCheck,type SandboxExecutionRepository} from "./sandbox-execution.js";
 
-type RecoveryRepository=Pick<SandboxExecutionRepository,"read"|"bind"|"save"|"recordDelivery"|"recordDeliveryPending"|"flagRefusedTransfer">;
+type RecoveryRepository=Pick<SandboxExecutionRepository,"read"|"bind"|"save"|"recordDelivery"|"recordDeliveryPending"|"flagRefusedTransfer"|"markRefusedFindClear"|"recordSendEnded">;
 type RecoveryReader=Pick<OzavSandboxWithdrawalProvider,"find"|"transfer">;
 
 /** Exposes GET operations only; no send operation reaches the recovery service. */

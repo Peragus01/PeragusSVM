@@ -23,7 +23,22 @@ export const STUCK_THRESHOLDS={
  sentUnverifiedMinutes:30,
  needsReview:{warnHours:4,highHours:12},
  refundPending:{warnHours:12,highHours:20},
+ /**
+  * Operations sitting in one stage (final review I6). accepted normally expires after
+  * ACCEPTED_OPERATION_TTL_MINUTES; awaiting_approval is the operator's own queue (a paid
+  * customer waits for the approval); approved covers a permanent send blocker.
+  */
+ stages:{
+  accepted:{warnHours:2,highHours:8},
+  pix_confirmed:{warnHours:2,highHours:8},
+  converted:{warnHours:2,highHours:8},
+  awaiting_approval:{warnHours:1,highHours:4},
+  approved:{warnHours:2,highHours:8},
+ },
 } as const;
+/** SQL VALUES rows (status, threshold, severity, hours) for the stage thresholds; constants only. */
+const STAGE_ROWS=Object.entries(STUCK_THRESHOLDS.stages).flatMap(([status,h])=>[
+ `('${status}','${status}_${h.warnHours}h','warn',${h.warnHours})`,`('${status}','${status}_${h.highHours}h','high',${h.highHours})`]).join(",");
 
 /**
  * Every 5 minutes: derives stuck/overdue operations, the existing high-severity alerts
@@ -61,6 +76,10 @@ export class StuckOperationScanner {
    select 'needs_review',s.severity,'needs_review:'||s.threshold||':'||p.id||':'||${entered},p.id,jsonb_build_object('threshold',s.threshold,'status_since',p.status_changed_at)
    from peragus_customer_purchase_intents p cross join (values ('${t.needsReview.warnHours}h','warn',${t.needsReview.warnHours}),('${t.needsReview.highHours}h','high',${t.needsReview.highHours})) s(threshold,severity,hours),clock
    where p.environment=${env} and p.status='needs_review' and p.status_changed_at<=clock.now-make_interval(hours=>s.hours)
+   union all
+   select 'stuck_operation',s.severity,'stuck:'||s.threshold||':'||p.id||':'||${entered},p.id,jsonb_build_object('threshold',s.threshold,'status_since',p.status_changed_at)
+   from peragus_customer_purchase_intents p join (values ${STAGE_ROWS}) s(status,threshold,severity,hours) on s.status=p.status,clock
+   where p.environment=${env} and p.status_changed_at<=clock.now-make_interval(hours=>s.hours)
    union all
    select 'refund_pending',s.severity,'refund_pending:'||s.threshold||':'||p.id||':'||${entered},p.id,jsonb_build_object('threshold',s.threshold,'status_since',p.status_changed_at)
    from peragus_customer_purchase_intents p cross join (values ('${t.refundPending.warnHours}h','warn',${t.refundPending.warnHours}),('${t.refundPending.highHours}h','high',${t.refundPending.highHours})) s(threshold,severity,hours),clock
