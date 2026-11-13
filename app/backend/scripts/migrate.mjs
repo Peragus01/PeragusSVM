@@ -1,29 +1,19 @@
 import "dotenv/config";
 
-import { createHash } from "node:crypto";
-import {
-  readdir,
-  readFile,
-} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Pool } from "pg";
 
-import {
-  databaseEnvironmentFor,
-  recordDatabaseEnvironment,
-} from "./lib/database-environment.mjs";
+import { databaseEnvironmentFor } from "./lib/database-environment.mjs";
+import { runMigrations } from "./lib/migration-runner.mjs";
 
 const backendDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
 
-const migrationsDirectory = path.join(
-  backendDirectory,
-  "migrations",
-);
+const migrationsDirectory = path.join(backendDirectory, "migrations");
 
 const connectionString = process.env.DATABASE_URL;
 
@@ -45,126 +35,25 @@ const pool = new Pool({
   connectionTimeoutMillis: 10_000,
 });
 
-function checksum(content) {
-  return createHash("sha256")
-    .update(content)
-    .digest("hex");
-}
-
-async function migrate() {
+try {
   const client = await pool.connect();
-  let appliedCount = 0;
 
   try {
-    await client.query(
-      "select pg_advisory_lock($1, $2)",
-      [808613, 1],
-    );
-
-    await client.query(`
-      create table if not exists peragus_schema_migrations (
-        filename text primary key,
-        checksum text not null
-          check (checksum ~ '^[0-9a-f]{64}$'),
-        applied_at timestamptz not null default now()
-      )
-    `);
-
-    await client.query(`
-      alter table peragus_schema_migrations
-      enable row level security
-    `);
-
-    const filenames = (await readdir(migrationsDirectory))
-      .filter((filename) =>
-        /^\d+_[a-z0-9_]+\.sql$/.test(filename)
-      )
-      .sort();
-
-    for (const filename of filenames) {
-      const filePath = path.join(
-        migrationsDirectory,
-        filename,
-      );
-
-      const sql = await readFile(filePath, "utf8");
-      const fileChecksum = checksum(sql);
-
-      const existing = await client.query(
-        `
-          select checksum
-          from peragus_schema_migrations
-          where filename = $1
-        `,
-        [filename],
-      );
-
-      if (existing.rowCount === 1) {
-        const recordedChecksum =
-          existing.rows[0].checksum;
-
-        if (recordedChecksum !== fileChecksum) {
-          throw new Error(
-            `Migration ${filename} changed after being applied`,
-          );
-        }
-
-        console.log(`Ignorada: ${filename}`);
-        continue;
-      }
-
-      await client.query("begin");
-
-      try {
-        await client.query(sql);
-
-        await client.query(
-          `
-            insert into peragus_schema_migrations (
-              filename,
-              checksum
-            )
-            values ($1, $2)
-          `,
-          [filename, fileChecksum],
-        );
-
-        await client.query("commit");
-
-        appliedCount += 1;
-        console.log(`Aplicada: ${filename}`);
-      } catch (error) {
-        await client.query("rollback");
-        throw error;
-      }
-    }
-
-    console.log(
-      `Migrations concluídas: ${appliedCount} aplicada(s).`,
-    );
-
-    // One money environment per database; a different recorded value aborts
-    // with DATABASE_ENVIRONMENT_CONFLICT (non-zero exit below).
-    const environment = await recordDatabaseEnvironment(
+    // The environment is recorded right after 043 in the same transaction
+    // (Ruling 40) and again, idempotently, at the end; a different recorded
+    // value aborts with DATABASE_ENVIRONMENT_CONFLICT (non-zero exit below).
+    const { appliedCount, environment } = await runMigrations({
       client,
-      process.env.PERAGUS_DEPLOYMENT_ENV,
-    );
+      migrationsDirectory,
+      deploymentEnv: process.env.PERAGUS_DEPLOYMENT_ENV,
+      log: (line) => console.log(line),
+    });
 
+    console.log(`Migrations concluídas: ${appliedCount} aplicada(s).`);
     console.log(`Ambiente do banco: ${environment}.`);
   } finally {
-    try {
-      await client.query(
-        "select pg_advisory_unlock($1, $2)",
-        [808613, 1],
-      );
-    } finally {
-      client.release();
-    }
+    client.release();
   }
-}
-
-try {
-  await migrate();
 } catch (error) {
   console.error(
     "Falha ao aplicar migrations:",

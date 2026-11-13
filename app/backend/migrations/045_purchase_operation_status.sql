@@ -52,8 +52,6 @@ do $$ begin
  if exists(select 1 from pg_roles where rolname='anon') then execute 'revoke all on peragus_operation_status_events from anon'; end if;
  if exists(select 1 from pg_roles where rolname='authenticated') then execute 'revoke all on peragus_operation_status_events from authenticated'; end if;
 end $$;
-create trigger peragus_row_environment_guard before insert or update on peragus_operation_status_events
- for each row execute function peragus_enforce_row_environment();
 
 create function peragus_operation_status_events_append_only() returns trigger language plpgsql
  set search_path = pg_catalog, public as $$
@@ -65,10 +63,18 @@ create trigger peragus_operation_status_events_immutable before update or delete
 
 -- Backfill: legacy rows are record-only intents that can never progress, so all
 -- of them expire. No legacy row holds open capacity (per customer or global).
+-- Legacy rows predate 043 and were all written as 'test'; the row-environment
+-- guard is bypassed only for this in-place backfill so a database recorded as
+-- 'live' with legacy rows still migrates (the rows keep their own environment
+-- and stay invisible to live reads). The event guard is created after it.
+alter table peragus_customer_purchase_intents disable trigger peragus_row_environment_guard;
 update peragus_customer_purchase_intents set status='expired',status_changed_at=now();
+alter table peragus_customer_purchase_intents enable trigger peragus_row_environment_guard;
 insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment)
  select id,customer_id,null,'expired','system:migration_045','legacy record-only purchase intent expired by migration',environment
  from peragus_customer_purchase_intents order by created_at,id;
+create trigger peragus_row_environment_guard before insert or update on peragus_operation_status_events
+ for each row execute function peragus_enforce_row_environment();
 
 create unique index peragus_purchase_one_open_per_customer on peragus_customer_purchase_intents(customer_id)
  where status not in ('delivered_verified','expired','failed','refunded');

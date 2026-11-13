@@ -1,6 +1,7 @@
 -- One money environment per database: test+solana:devnet or live+solana:mainnet.
 -- Guards the money tables and the customer onboarding/invitation tables.
--- scripts/migrate.mjs records the environment after migrating; until then every
+-- scripts/migrate.mjs records the environment in the same transaction as this
+-- migration (Ruling 40) and again at the end; until then every
 -- insert or update on a money table is rejected (fail closed).
 create table peragus_database_environment (
  singleton boolean primary key default true check(singleton),

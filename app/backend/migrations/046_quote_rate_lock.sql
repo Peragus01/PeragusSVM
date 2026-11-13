@@ -5,19 +5,24 @@ alter table peragus_customer_indicative_quotes
   add column locked_usdt_amount numeric(20,6) check(locked_usdt_amount is null or locked_usdt_amount>0);
 
 -- Existing quotes were all test/indicative: the locked amount is the quoted target.
+-- In-place backfill of pre-043 rows: bypass the row-environment guard (see 045).
+alter table peragus_customer_indicative_quotes disable trigger peragus_row_environment_guard;
 update peragus_customer_indicative_quotes
    set locked_usdt_amount=(observation->'target'->>'amount')::numeric
  where observation is not null and locked_usdt_amount is null
    and (observation->'target'->>'amount')::numeric>0;
+alter table peragus_customer_indicative_quotes enable trigger peragus_row_environment_guard;
 
 alter table peragus_customer_purchase_intents
   add column facility_terms_version text,
   add column locked_usdt_amount numeric(20,6);
 
 -- Backfill before the trigger below locks these columns.
+alter table peragus_customer_purchase_intents disable trigger peragus_row_environment_guard;
 update peragus_customer_purchase_intents
    set locked_usdt_amount=estimated_target_amount_usdt
  where locked_usdt_amount is null;
+alter table peragus_customer_purchase_intents enable trigger peragus_row_environment_guard;
 
 drop trigger peragus_purchase_financial_immutable on peragus_customer_purchase_intents;
 create trigger peragus_purchase_financial_immutable before update on peragus_customer_purchase_intents

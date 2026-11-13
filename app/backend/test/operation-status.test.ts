@@ -1,8 +1,10 @@
 import {randomUUID} from "node:crypto";
 import {readFile,readdir} from "node:fs/promises";
+import {fileURLToPath} from "node:url";
 import {PGlite} from "@electric-sql/pglite";
 import {Keypair} from "@solana/web3.js";
 import {afterEach,describe,expect,it,vi} from "vitest";
+import {runMigrations} from "../scripts/lib/migration-runner.mjs";
 import {canTransition,OPEN_STATUSES,OPERATION_STATUSES,brlToCents,centsToBrl,purchaseLimits,type OperationStatus} from "../src/purchases/operation-status.js";
 
 vi.setConfig({testTimeout:60000});
@@ -117,10 +119,16 @@ describe("operation status in SQL (migration 045)",()=>{
   for(const row of r.rows)expect(row.ok,`${row.f}->${row.t}`).toBe(canTransition(row.f as OperationStatus,row.t as OperationStatus));
  });
  it("backfills every legacy row to expired so none holds open capacity, and the open-operation index holds",async()=>{
-  const db=await migrated(MIGRATION),a=await customer(db),b=await customer(db);
-  await db.query("insert into peragus_database_environment(environment) values('test')");
+  // Legacy rows predate 043; the real runner then applies 043 (recording the
+  // environment in the same transaction, Ruling 40), 044 and 045.
+  const db=new PGlite();dbs.push(db);
+  await db.exec("create role anon; create role authenticated;");
+  const run=(stopBefore:string)=>runMigrations({client:db,migrationsDirectory:fileURLToPath(new URL("../migrations/",import.meta.url)),deploymentEnv:"staging",executeScript:(sql:string)=>db.exec(sql),stopBefore});
+  await run("043");
+  const a=await customer(db),b=await customer(db);
   const oldA=await legacyIntent(db,a,"2026-10-01T00:00:00Z"),newA=await legacyIntent(db,a,"2026-10-02T00:00:00Z"),onlyB=await legacyIntent(db,b,"2026-10-01T00:00:00Z");
-  await db.exec(await readFile(new URL(`../migrations/${MIGRATION}`,import.meta.url),"utf8"));
+  await run("046");
+  expect((await db.query("select filename from peragus_schema_migrations where filename>='043' order by 1")).rows).toEqual([{filename:"043_money_environment_guard.sql"},{filename:"044_invite_email_idempotency_by_environment.sql"},{filename:MIGRATION}]);
   const rows=(await db.query<{id:string;status:string}>("select id,status from peragus_customer_purchase_intents")).rows;
   expect(Object.fromEntries(rows.map(r=>[r.id,r.status]))).toEqual({[oldA]:"expired",[newA]:"expired",[onlyB]:"expired"});
   const events=(await db.query<{purchase_id:string;from_status:string|null;to_status:string;actor:string}>("select purchase_id,from_status,to_status,actor from peragus_operation_status_events order by to_status")).rows;
