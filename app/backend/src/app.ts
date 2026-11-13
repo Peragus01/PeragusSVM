@@ -59,6 +59,8 @@ import type { OperatorAlertService } from "./operations/operator-alerts.js";
 import { registerOperatorAlertRoutes } from "./routes/operator-alerts.js";
 import type { RuntimeControlService } from "./operations/runtime-controls.js";
 import { registerRuntimeControlRoutes } from "./routes/runtime-controls.js";
+import type { DailyReviewService } from "./operations/daily-review.js";
+import { registerDailyReviewRoutes } from "./routes/daily-reviews.js";
 import type { SandboxClosureService } from "./withdrawals/sandbox-closure.js";
 import { registerSandboxClosureRoutes } from "./routes/sandbox-withdrawal-closure.js";
 import {moneyNetworkFor,type MoneyMode} from "./config/money-environment.js";
@@ -128,6 +130,8 @@ export interface BuildAppOptions {
   operatorAlertService?: OperatorAlertService;
   /** GET/PUT /v1/admin/runtime-controls (kill switches; operator + fresh MFA). */
   runtimeControlService?: RuntimeControlService;
+  /** POST /v1/admin/daily-reviews (daily review gate of new operations; operator + fresh MFA). */
+  dailyReviewService?: DailyReviewService;
   sandboxClosureService?: SandboxClosureService;
   pilotInviteService?: PilotInviteService;
   ozavSandboxCustomerService?: OzavSandboxCustomerService;
@@ -226,6 +230,10 @@ export async function buildApp(
   await registerRuntimeControlRoutes(
     app,
     options.customerAccess ? options.runtimeControlService : undefined,
+  );
+  await registerDailyReviewRoutes(
+    app,
+    options.customerAccess ? options.dailyReviewService : undefined,
   );
   await registerPilotInviteRoutes(
     app,

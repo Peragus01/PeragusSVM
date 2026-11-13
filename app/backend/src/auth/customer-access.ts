@@ -195,6 +195,7 @@ export function registerCustomerAccess(
         "/v1/admin/withdrawal-requests/:id/execution/closure",
         "/v1/admin/operational-alerts",
         "/v1/admin/runtime-controls",
+        "/v1/admin/daily-reviews",
         "/v1/admin/pilot-invites",
         "/v1/admin/pilot-invites/:id",
         "/v1/admin/pilot-invites/:id/revoke",

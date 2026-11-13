@@ -9,6 +9,11 @@ export interface CustomerWebhookOptions {
   now?: () => Date;
   /** Configured money mode; only events with livemode === (mode === "live") are processed. Default "test". */
   mode?: MoneyMode;
+  /**
+   * Called (awaited, errors swallowed) when a request fails signature verification:
+   * enqueues the webhook_signature_invalid operator e-mail. Never changes the 401.
+   */
+  onSignatureInvalid?: () => Promise<unknown>;
 }
 export async function registerCustomerWebhookRoutes(app: FastifyInstance, options?: CustomerWebhookOptions): Promise<void> {
   // Scope the raw-byte parser to this endpoint; all existing JSON routes keep their parser.
@@ -21,6 +26,10 @@ export async function registerCustomerWebhookRoutes(app: FastifyInstance, option
       if (!options) return reply.code(503).send({ error: { code: "CUSTOMER_WEBHOOKS_DISABLED" } });
       if (!Buffer.isBuffer(request.body)
         || !verifyCustomerSignature(request.body, request.headers["x-ozav-signature"], options.secret, (options.now ?? (() => new Date()))())) {
+        if (options.onSignatureInvalid) {
+          try { await options.onSignatureInvalid(); }
+          catch { request.log.warn({ event: "webhook_signature_alert_unrecorded" }); }
+        }
         return reply.code(401).send({ error: { code: "WEBHOOK_SIGNATURE_INVALID" } });
       }
       let input: unknown;

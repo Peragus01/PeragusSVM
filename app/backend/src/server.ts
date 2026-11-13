@@ -11,6 +11,8 @@ import { PilotInviteService } from "./invites/pilot-invites.js";
 import { CustomerReconciliationStatusService } from "./jobs/customer-reconciliation.js";
 import { ManualRefundService } from "./refunds/manual-refunds.js";
 import { RuntimeControlService } from "./operations/runtime-controls.js";
+import { DailyReviewService } from "./operations/daily-review.js";
+import { recordWebhookSignatureInvalid } from "./operations/operator-notifications.js";
 import {
   SandboxWithdrawalRecoveryService,
   createSandboxRecoveryReader,
@@ -536,6 +538,12 @@ const app = await buildApp({
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
           operatorMfaPolicy,
         ),
+        // Daily review (POST /v1/admin/daily-reviews): operator + fresh MFA; gates new operations.
+        dailyReviewService: new DailyReviewService(
+          pool,
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
+          operatorMfaPolicy,
+        ),
       }
     : {}),
   ...(pool
@@ -833,6 +841,8 @@ const app = await buildApp({
         customerWebhooks: {
           secret: env.CUSTOMER_WEBHOOK_SECRET!,
           mode: moneyModeFor(env),
+          // Operator + trusted person e-mail (outbox), at most once per hour.
+          onSignatureInvalid: () => recordWebhookSignatureInvalid(pool!, moneyModeFor(env)),
           processor: (() => {
             const client = new OzavClient({
               apiKey: env.OZAV_API_KEY!,

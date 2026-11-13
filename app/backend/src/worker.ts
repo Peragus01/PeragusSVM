@@ -2,6 +2,8 @@ import {CustomerReconciliationService,registerCustomerReconciliationWorker,asser
 import {createCustomerReconciliationReader} from "./purchases/customer-reconciliation-reader.js";
 import {createPurchaseProgression} from "./purchases/purchase-progression-factory.js";
 import { assertSmokeTestSafety, registerWorkerSmokeTest } from "./jobs/worker-smoke-test.js";
+import { OPERATOR_NOTIFICATIONS_QUEUE, STUCK_OPERATIONS_QUEUE, StuckOperationScanner, registerOperatorNotificationJobs } from "./jobs/stuck-operations.js";
+import { drainOperatorNotifications, operatorNotificationConfig, ResendOperatorNotificationSender } from "./operations/operator-notifications.js";
 import {
   Connection,
   PublicKey,
@@ -92,6 +94,12 @@ if (env.WORKER_SMOKE_TEST_ENABLED) {
 }
 
 if(env.CUSTOMER_RECONCILIATION_ENABLED)assertCustomerReconciliationSafety(env);
+
+// Operator + trusted-person e-mail alerts: e-mail only, never a money path, so the live
+// boot guard does not refuse it. Validated here (addresses never logged).
+const operatorNotifications = env.OPERATOR_NOTIFICATIONS_ENABLED
+  ? operatorNotificationConfig(env, process.env.RESEND_API_KEY)
+  : undefined;
 
 const pool = createDatabasePool(
   env.DATABASE_URL,
@@ -331,6 +339,22 @@ try {
     await boss.unschedule(CUSTOMER_RECONCILIATION_QUEUE);
   }
 
+  if (operatorNotifications) {
+    // Refuse to e-mail about a database recorded for the other money environment.
+    await assertDatabaseEnvironment(pool, operatorNotifications.mode);
+    const sender = new ResendOperatorNotificationSender(operatorNotifications.apiKey);
+    const scanner = new StuckOperationScanner(pool, operatorNotifications.mode);
+    await registerOperatorNotificationJobs(boss, {
+      drain: () => drainOperatorNotifications(pool, sender, operatorNotifications),
+      scan: () => scanner.scan(),
+      log: (event) => console.info(JSON.stringify(event)),
+    });
+    console.info(JSON.stringify({ event: "operator_notifications_configured", enabled: true }));
+  } else {
+    await boss.unschedule(OPERATOR_NOTIFICATIONS_QUEUE);
+    await boss.unschedule(STUCK_OPERATIONS_QUEUE);
+  }
+
   if (env.WORKER_SMOKE_TEST_ENABLED) {
     await registerWorkerSmokeTest(boss);
   }
@@ -472,6 +496,7 @@ try {
     JSON.stringify({
       event: "worker_started",
       customerReconciliationEnabled:env.CUSTOMER_RECONCILIATION_ENABLED,
+      operatorNotificationsEnabled: env.OPERATOR_NOTIFICATIONS_ENABLED,
       queue: SETTLEMENT_ORCHESTRATION_QUEUE,
       concurrency: env.JOB_CONCURRENCY,
       ozavEnvironment: moneyModeFor(env),

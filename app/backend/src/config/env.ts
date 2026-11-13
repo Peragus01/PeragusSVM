@@ -6,7 +6,7 @@ import { purchaseLimits } from "../purchases/operation-status.js";
 import { z } from "zod";
 import { parseLegalRequiredDocuments } from "../legal/legal-acceptance.js";
 
-const envSchema = z
+export const envSchema = z
   .object({
     PERAGUS_DEPLOYMENT_ENV: z
       .enum(["staging", "production"])
@@ -41,6 +41,15 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    // Operator + trusted-person e-mail alerts (Task 17): the worker drains the outbox and runs
+    // the stuck-operation scanner only when enabled. Recipients are validated, never logged.
+    OPERATOR_NOTIFICATIONS_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    OPERATOR_ALERT_EMAIL: z.email().optional(),
+    TRUSTED_ALERT_EMAIL: z.email().optional(),
+    OPERATOR_NOTIFICATIONS_FROM: z.email().optional(),
     CUSTOMER_RECONCILIATION_ENABLED: z
       .enum(["true", "false"])
       .default("false")
@@ -375,6 +384,20 @@ const envSchema = z
             "Invitation outbox requires the selected Auth project and valid encryption configuration",
         });
       }
+    }
+    if (env.OPERATOR_NOTIFICATIONS_ENABLED) {
+      // Messages name the variable only, never its value.
+      if (!env.OPERATOR_ALERT_EMAIL)
+        context.addIssue({ code: "custom", path: ["OPERATOR_ALERT_EMAIL"], message: "OPERATOR_ALERT_EMAIL is required when operator notifications are enabled" });
+      if (!env.TRUSTED_ALERT_EMAIL)
+        context.addIssue({ code: "custom", path: ["TRUSTED_ALERT_EMAIL"], message: "TRUSTED_ALERT_EMAIL is required when operator notifications are enabled" });
+      if (env.OPERATOR_ALERT_EMAIL && env.TRUSTED_ALERT_EMAIL
+        && env.OPERATOR_ALERT_EMAIL.toLowerCase() === env.TRUSTED_ALERT_EMAIL.toLowerCase())
+        context.addIssue({ code: "custom", path: ["TRUSTED_ALERT_EMAIL"], message: "TRUSTED_ALERT_EMAIL must differ from OPERATOR_ALERT_EMAIL" });
+      if (!env.OPERATOR_NOTIFICATIONS_FROM?.toLowerCase().endsWith("@peragus.com.br"))
+        context.addIssue({ code: "custom", path: ["OPERATOR_NOTIFICATIONS_FROM"], message: "OPERATOR_NOTIFICATIONS_FROM must be an @peragus.com.br sender" });
+      if (!env.DATABASE_URL)
+        context.addIssue({ code: "custom", path: ["DATABASE_URL"], message: "DATABASE_URL is required when operator notifications are enabled" });
     }
     const validateSigner = (
       pathValue: string | undefined,

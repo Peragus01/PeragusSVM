@@ -5,6 +5,7 @@ import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import type {AuthenticatedUser} from "../auth/customer-access.js";
 import {authorizeWithdrawalOperator,defaultOperatorMfaPolicy,requireFreshMfa,type OperatorMfaPolicy} from "../withdrawals/operator-approvals.js";
+import {assertPreviousDayReviewed,DailyReviewRequiredError} from "./daily-review.js";
 
 /**
  * Runtime kill switches (migration 054). Independent of each other and of the env flags
@@ -32,6 +33,10 @@ export class RuntimeControlError extends Error {constructor(readonly code:string
  * environment. Runs on the caller's open transaction: the `for share` row lock makes a
  * concurrent switch change wait until the guarded claim/insert commits or rolls back.
  * A database without a recorded environment, or a missing row, reads as paused.
+ * new_operations is also gated by the daily review (Task 17): on the same transaction,
+ * assertPreviousDayReviewed refuses with DAILY_REVIEW_REQUIRED when the previous São
+ * Paulo day had operation activity and no review. Every new_operations call site (quote
+ * claim, purchase accept, Pix reserve/claim) therefore runs both checks.
  */
 export async function assertControlEnabled(client:Pick<PoolClient,"query">,key:RuntimeControlKey):Promise<void>{
  if(!RUNTIME_CONTROL_KEYS.includes(key))throw new RuntimeControlError("RUNTIME_CONTROL_KEY_INVALID");
@@ -39,6 +44,7 @@ export async function assertControlEnabled(client:Pick<PoolClient,"query">,key:R
   join peragus_database_environment d on d.singleton and d.environment=c.environment
   where c.key=$1 for share of c`,[key]);
  if(r.rows[0]?.enabled!==true)throw new OperationsPausedError(key);
+ if(key==="new_operations")await assertPreviousDayReviewed(client);
 }
 
 /**
@@ -60,8 +66,15 @@ export async function inControlledTransaction<T>(pool:Pick<Pool,"connect">,key:R
  }finally{client.release(broken);}
 }
 
-/** Answers a paused action with 503 OPERATIONS_PAUSED naming the switch; false for any other error. */
+/**
+ * Answers a paused action with 503 OPERATIONS_PAUSED naming the switch, or a missing daily
+ * review with 503 DAILY_REVIEW_REQUIRED naming the day; false for any other error.
+ */
 export function replyIfPaused(error:unknown,reply:FastifyReply):boolean{
+ if(error instanceof DailyReviewRequiredError){
+  void reply.code(503).send({error:{code:"DAILY_REVIEW_REQUIRED",day:error.day,automatic_retry:false}});
+  return true;
+ }
  if(!(error instanceof OperationsPausedError))return false;
  void reply.code(503).send({error:{code:"OPERATIONS_PAUSED",key:error.key,automatic_retry:false}});
  return true;
