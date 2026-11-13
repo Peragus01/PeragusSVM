@@ -96,7 +96,8 @@ describe("sandbox identity verification",()=>{
   });
   it("recovers a timeout-created verification by customer lookup without repeating POST",async()=>{
     const s=await setup();s.timeout();
-    await expect(s.service.start(s.actor.id)).rejects.toThrow("OZAV connection failed");
+    // The failed create is followed at once by a GET-only lookup that finds the session.
+    expect((await s.service.start(s.actor.id)).data?.verification_id).toBe(s.verificationId);
     expect((await repo.find(s.actor.id))?.createAttempted).toBe(true);
     expect((await s.service.start(s.actor.id)).data?.verification_id).toBe(s.verificationId);
     expect(s.writeTransport).toHaveBeenCalledTimes(1);
@@ -113,11 +114,30 @@ describe("sandbox identity verification",()=>{
     const result=await s.service.refresh(s.actor.id);
     expect(result?.observed_outcome).toBeNull();expect(result?.checks.liveness).toBeUndefined();
   });
-  it("does not blindly repeat a create when its result cannot be found",async()=>{
+  it("final review I10: a failed create that left no session (OZAV lists none) releases the claim so the customer can retry",async()=>{
     const s=await setup();s.timeout(false);
-    await expect(s.service.start(s.actor.id)).rejects.toThrow();
-    await expect(s.service.start(s.actor.id)).rejects.toThrow("VERIFICATION_RECOVERY_REQUIRED");
+    await expect(s.service.start(s.actor.id)).rejects.toThrow("VERIFICATION_SESSION_UNAVAILABLE");
+    expect((await repo.find(s.actor.id))?.createAttempted).toBe(false);
     expect(s.writeTransport).toHaveBeenCalledTimes(1);
+  });
+  it("final review I10: a stale claim with no listed session is released on the next start; a fresh one is not",async()=>{
+    const s=await setup();
+    await repo.reserve(s.actor.id,s.providerId);
+    await db.query("update peragus_customer_verifications set create_attempted=true,updated_at=now() where customer_id=$1",[s.actor.id]);
+    await expect(s.service.start(s.actor.id)).rejects.toThrow("VERIFICATION_RECOVERY_REQUIRED");
+    expect(s.writeTransport).toHaveBeenCalledTimes(0);
+    await db.query("update peragus_customer_verifications set updated_at=now()-interval '3 minutes' where customer_id=$1",[s.actor.id]);
+    expect((await s.service.start(s.actor.id)).data?.verification_id).toBe(s.verificationId);
+    expect(s.writeTransport).toHaveBeenCalledTimes(1);
+  });
+  it("final review I10: an expired hosted session allows a new one; the ended id is kept as history",async()=>{
+    const s=await setup();await s.service.start(s.actor.id);
+    // Still open: a second start replays, never a new POST.
+    expect((await s.service.start(s.actor.id)).replayed).toBe(true);expect(s.writeTransport).toHaveBeenCalledTimes(1);
+    s.seed({...s.rawSession(),status:"expired"});await s.service.refresh(s.actor.id);
+    const again=await s.service.start(s.actor.id);
+    expect(again.replayed).toBe(false);expect(s.writeTransport).toHaveBeenCalledTimes(2);
+    expect((await db.query("select previous_verification_ids from peragus_customer_verifications where customer_id=$1",[s.actor.id])).rows[0]).toEqual({previous_verification_ids:[s.verificationId]});
   });
   it("recovers after local persistence failure with one provider create",async()=>{
     const s=await setup();failSave=true;
@@ -286,6 +306,8 @@ describe("live hosted identity verification", () => {
     expect((await s.service.refresh(s.actor.id))?.session_url).toBe(hosted);
     s.complete();
     expect(await s.service.refresh(s.actor.id)).toMatchObject({ status: "completed", identity_outcome: "approved", session_url: null });
+    // Final review I10: the closed session's link is no longer stored at all.
+    expect(JSON.stringify((await liveRepo.find(s.actor.id))?.observation ?? null)).not.toContain(hosted);
   });
   it("never simulates in live: no route and the service refuses before any provider call", async () => {
     const s = await live(), app = await liveApp(s); await s.service.start(s.actor.id);

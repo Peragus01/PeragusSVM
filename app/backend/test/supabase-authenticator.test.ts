@@ -8,7 +8,7 @@ describe("Supabase server token validation", () => {
   it("uses the configured project Auth server and returns only verified identity", async () => {
     const fetcher = mockFetch(user);
     const auth = createSupabaseAuthenticator(origin, "sb_publishable_test", fetcher);
-    expect(await auth("opaque-access-token")).toEqual({ id: user.id, email: user.email });
+    expect(await auth("opaque-access-token")).toEqual({ id: user.id, email: user.email, emailConfirmedAt: user.email_confirmed_at });
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${origin}/auth/v1/user`);
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer opaque-access-token");

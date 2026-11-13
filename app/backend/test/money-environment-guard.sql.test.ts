@@ -28,7 +28,9 @@ const GUARDED=["peragus_customer_wallet_challenges","peragus_customer_wallets","
  // runtime kill switches and their append-only audit (054)
  "peragus_runtime_controls","peragus_runtime_control_events",
  // operator/trusted-person e-mail outbox and the daily review (055)
- "peragus_operator_notifications","peragus_daily_reviews"];
+ "peragus_operator_notifications","peragus_daily_reviews",
+ // audited operator resolutions (056)
+ "peragus_operator_resolutions"];
 const NETWORK_COLUMNS:Record<string,string>={peragus_customer_wallets:"network",
  peragus_customer_purchase_intents:"wallet_proof_network",peragus_customer_withdrawal_requests:"proof_network"};
 vi.setConfig({testTimeout:60000});

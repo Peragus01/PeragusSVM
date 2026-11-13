@@ -18,6 +18,8 @@ export interface AuthenticatedUser {
    * `amr` claim). Only set after the Auth server accepted that exact token.
    */
   mfaVerifiedAt?: number;
+  /** Supabase email_confirmed_at, as accepted by getUser (live registration requires it). */
+  emailConfirmedAt?: string;
 }
 export interface Customer {
   id: string;

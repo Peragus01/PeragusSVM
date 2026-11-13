@@ -34,7 +34,8 @@ export async function registerCustomerSubmissionRoutes(app: FastifyInstance, ser
             .strict().safeParse(body);
           if (!parsed.success) return reply.code(400).send({ error: { code: "VALIDATION_ERROR" } });
           const result = await service.submit(customer.id, parsed.data.draft_version, parsed.data.terms_session_id, live
-            ? { attestation: "data_truthfulness_confirmed", email: request.authenticatedUser.email }
+            ? { attestation: "data_truthfulness_confirmed", email: request.authenticatedUser.email,
+                ...(request.authenticatedUser.emailConfirmedAt ? { emailConfirmedAt: request.authenticatedUser.emailConfirmedAt } : {}) }
             : { attestation: "sandbox_data_confirmed" });
           reply.header("Idempotency-Replayed", String(result.replayed));
           return reply.code(result.replayed ? 200 : 201).send({ data: result.data, meta: { idempotent_replay: result.replayed, operations_enabled: false } });

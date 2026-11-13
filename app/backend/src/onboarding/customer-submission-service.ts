@@ -26,7 +26,7 @@ export class RegistrationSnapshotService {
   }
 }
 /** What the authenticated person confirmed with the request, and (live) their own e-mail. */
-export interface SubmissionConfirmation { attestation: SubmissionAttestation; email?: string }
+export interface SubmissionConfirmation { attestation: SubmissionAttestation; email?: string; emailConfirmedAt?: string }
 export class CustomerSubmissionService {
   constructor(private readonly repository: SubmissionRepository, private readonly vault: SubmissionVault,
     private readonly drafts: Pick<IndividualDraftService, "read">,
@@ -53,6 +53,10 @@ export class CustomerSubmissionService {
     if (this.mode === "live") {
       email = confirmation.email?.trim().toLowerCase() ?? "";
       if (!isLiveRegistrationEmail(email)) throw new SubmissionError("ONBOARDING_EMAIL_REQUIRED");
+      // Final review I10: a real registration only with an e-mail Supabase confirmed (in code,
+      // besides the project setting).
+      const confirmedAt = confirmation.emailConfirmedAt ? Date.parse(confirmation.emailConfirmedAt) : NaN;
+      if (!Number.isFinite(confirmedAt)) throw new SubmissionError("ONBOARDING_EMAIL_NOT_CONFIRMED");
     }
     let record = await this.repository.find(customerId);
     if (record && (record.draftVersion !== draftVersion || record.termsSessionId !== termsSessionId)) throw new SubmissionError("ONBOARDING_CONFLICT");

@@ -165,6 +165,10 @@ begin
  return null;
 end $$;
 
+-- KYC (final review I10): a hosted session that expired may be replaced; the ended
+-- verification ids stay on the row as history and are never recovered again.
+alter table peragus_customer_verifications add column previous_verification_ids text[] not null default '{}';
+
 -- Worker liveness (checked by /ready).
 create table peragus_worker_heartbeats (
  worker text not null check(worker ~ '^[a-z][a-z0-9_-]{0,39}$'),

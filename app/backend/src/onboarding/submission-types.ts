@@ -13,7 +13,7 @@ export interface SubmissionRecord {
   attestation?: SubmissionAttestation | null;
 }
 export class SubmissionError extends Error {
-  constructor(public readonly code: "ONBOARDING_CONFLICT" | "ONBOARDING_DRAFT_REQUIRED" | "ONBOARDING_DRAFT_CHANGED" | "ONBOARDING_CAPABILITY_REQUIRED" | "ONBOARDING_NOT_SUBMITTED" | "ONBOARDING_ATTESTATION_REQUIRED" | "ONBOARDING_EMAIL_REQUIRED") { super(code); }
+  constructor(public readonly code: "ONBOARDING_CONFLICT" | "ONBOARDING_DRAFT_REQUIRED" | "ONBOARDING_DRAFT_CHANGED" | "ONBOARDING_CAPABILITY_REQUIRED" | "ONBOARDING_NOT_SUBMITTED" | "ONBOARDING_ATTESTATION_REQUIRED" | "ONBOARDING_EMAIL_REQUIRED" | "ONBOARDING_EMAIL_NOT_CONFIRMED") { super(code); }
 }
 export interface SubmissionRepository {
   find(customerId: string): Promise<SubmissionRecord | null>;

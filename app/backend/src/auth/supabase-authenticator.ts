@@ -54,7 +54,7 @@ export function createSupabaseAuthenticator(url: string, publishableKey: string,
         }
       }
     } catch { /* Unknown assurance is never privileged. */ }
-    return { id: parsed.data.id, email: parsed.data.email, ...(assuranceLevel ? {assuranceLevel} : {}),
+    return { id: parsed.data.id, email: parsed.data.email, emailConfirmedAt: parsed.data.email_confirmed_at, ...(assuranceLevel ? {assuranceLevel} : {}),
       ...(mfaVerifiedAt !== undefined ? {mfaVerifiedAt} : {}) };
   };
 }

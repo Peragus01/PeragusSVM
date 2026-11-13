@@ -18,6 +18,12 @@ const sessionOpen = (value: OzavVerification) => value.status === "pending" || v
 /** Live only: the stored hosted link, re-validated, while the session is still open. */
 const hostedSessionUrl = (value: OzavVerification | null, mode: MoneyMode) =>
   mode === "live" && value && sessionOpen(value) && isAllowedHostedSessionUrl(value.sessionUrl) ? value.sessionUrl : null;
+/** OZAV ended the session without a result (expired, or failed if OZAV reports it): a new one may start. */
+const sessionEnded = (value: OzavVerification | null) => value !== null && ((value.status as string) === "expired" || (value.status as string) === "failed");
+/** Final review I10: the hosted link is a credential of an open session; never stored once it closed. */
+const sealed = (value: OzavVerification): OzavVerification => sessionOpen(value) || !value.sessionUrl ? value : { ...value, sessionUrl: null };
+/** A claimed create older than this, with no session listed at OZAV, is released (the POST is not in flight). */
+export const VERIFICATION_CLAIM_STALE_MS = 2 * 60_000;
 const renderView = (row: VerificationRecord | null, mode: MoneyMode) => row ? ({ provider_customer_id: row.providerCustomerId,
   verification_id: row.verificationId, state: row.verificationId ? "linked" : "creating",
   status: row.observation?.status ?? null, checks: row.observation?.checks ?? {},
@@ -52,7 +58,7 @@ export class CustomerVerificationService {
   private async save(row: VerificationRecord, observation: OzavVerification, outcome?: SimulationOutcome) {
     const kept = this.mode === "live" && !observation.sessionUrl && row.observation?.id === observation.id && row.observation.sessionUrl
       ? { ...observation, sessionUrl: row.observation.sessionUrl } : observation;
-    return this.repository.save(row, kept, outcome);
+    return this.repository.save(row, sealed(kept), outcome);
   }
   /** Live start must hand the browser a hosted session while it is open; never fabricate one. */
   private hosted(row: VerificationRecord) {
@@ -62,7 +68,9 @@ export class CustomerVerificationService {
   }
   async read(customerId: string) { return this.view(await this.repository.find(customerId)); }
   private async recover(row: VerificationRecord) {
-    const sessions = await this.provider.listCustomerVerifications(row.providerCustomerId);
+    // Sessions this record already ended (expired) are history, not a recoverable create.
+    const sessions = (await this.provider.listCustomerVerifications(row.providerCustomerId))
+      .filter(session => !row.previousVerificationIds?.includes(session.id));
     if (sessions.length === 0) return null;
     if (sessions.length !== 1) throw new VerificationError("VERIFICATION_RECOVERY_REQUIRED");
     const found = await this.provider.getCustomerVerification(row.providerCustomerId, sessions[0]!.id);
@@ -85,7 +93,10 @@ export class CustomerVerificationService {
     const binding = await this.binding(customerId);
     const prior = await this.repository.find(customerId);
     if (prior && prior.providerCustomerId !== binding.providerId) throw new VerificationError("VERIFICATION_CONFLICT");
-    if (prior?.verificationId) return this.replay(prior);
+    if (prior?.verificationId && sessionEnded(prior.observation)) {
+      // Final review I10: the previous hosted session expired: start a new one (the old id is kept as history).
+      await this.repository.resetEnded(customerId, prior.verificationId);
+    } else if (prior?.verificationId) return this.replay(prior);
     await this.capabilities(true);
     const snapshot = await this.provider.getSandboxCustomerSnapshot(binding.providerId!, onboardingExternalRef(customerId, this.mode));
     if (snapshot.verification_mode !== "full") throw new VerificationError("VERIFICATION_FULL_MODE_REQUIRED");
@@ -93,7 +104,12 @@ export class CustomerVerificationService {
     if (row.verificationId) return this.replay(row);
     const recovered = await this.recover(row);
     if (recovered) return { data: this.hosted(await this.save(row, recovered)), replayed: true };
-    if (row.createAttempted) throw new VerificationError("VERIFICATION_RECOVERY_REQUIRED");
+    if (row.createAttempted) {
+      // OZAV lists no session for a claim that is no longer in flight: nothing was created, so
+      // the claim is released and the customer can retry (final review I10).
+      if (!await this.repository.releaseCreate(customerId, VERIFICATION_CLAIM_STALE_MS)) throw new VerificationError("VERIFICATION_RECOVERY_REQUIRED");
+      row = (await this.repository.find(customerId))!;
+    }
     if (!await this.repository.claimCreate(customerId)) throw new VerificationError("VERIFICATION_PROCESSING");
     row = (await this.repository.find(customerId))!;
     let observation: OzavVerification;
@@ -105,9 +121,15 @@ export class CustomerVerificationService {
         await this.repository.releaseCreate(customerId);
         throw new VerificationError("VERIFICATION_SESSION_UNAVAILABLE");
       }
-      if (!(error instanceof OzavClientError) || error.statusCode !== 409) throw error;
-      const found = await this.recover(row);
-      if (!found) throw error;
+      // Any other failure: if OZAV lists no session, nothing was created; release the claim so
+      // the customer can retry (final review I10). A failed listing keeps the claim (fail closed).
+      let found: OzavVerification | null;
+      try { found = await this.recover(row); } catch { throw error; }
+      if (!found) {
+        await this.repository.releaseCreate(customerId);
+        if (error instanceof OzavClientError && error.statusCode === 409) throw error;
+        throw new VerificationError("VERIFICATION_SESSION_UNAVAILABLE");
+      }
       observation = found;
     }
     this.assertIdentity(row, observation);

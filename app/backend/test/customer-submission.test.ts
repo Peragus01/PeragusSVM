@@ -236,7 +236,7 @@ describe("live registration of a real person", () => {
     const terms = new CustomerTermsService(liveTerms, termsVault, provider, liveDrafts, () => fixedNow, "live");
     const service = new CustomerSubmissionService(liveRepo, submissionVault, liveDrafts, terms, provider, "live");
     const app = await buildApp({ moneyMode: "live", customerAccess: { legal: allAcceptedLegal, customers: liveCustomers, authenticate: async value => {
-      if (value !== "valid") throw new AuthenticationError("INVALID_TOKEN"); return { id: owner, email: realEmail }; } }, customerSubmissionService: service });
+      if (value !== "valid") throw new AuthenticationError("INVALID_TOKEN"); return { id: owner, email: realEmail, emailConfirmedAt: "2026-11-01T10:00:00Z" }; } }, customerSubmissionService: service });
     apps.push(app);
     return { actor, termsId, providerId, provider, service, app, writeTransport, transport };
   }
@@ -265,6 +265,9 @@ describe("live registration of a real person", () => {
     await expect(s.service.submit(s.actor.id, 1, s.termsId)).rejects.toThrow("ONBOARDING_ATTESTATION_REQUIRED");
     await expect(s.service.submit(s.actor.id, 1, s.termsId, { attestation: "sandbox_data_confirmed", email: realEmail })).rejects.toThrow("ONBOARDING_ATTESTATION_REQUIRED");
     await expect(s.service.submit(s.actor.id, 1, s.termsId, { attestation: "data_truthfulness_confirmed", email: "not-an-email" })).rejects.toThrow("ONBOARDING_EMAIL_REQUIRED");
+    // Final review I10: live registration needs the e-mail confirmation Supabase reported.
+    await expect(s.service.submit(s.actor.id, 1, s.termsId, { attestation: "data_truthfulness_confirmed", email: realEmail })).rejects.toThrow("ONBOARDING_EMAIL_NOT_CONFIRMED");
+    await expect(s.service.submit(s.actor.id, 1, s.termsId, { attestation: "data_truthfulness_confirmed", email: realEmail, emailConfirmedAt: "not-a-date" })).rejects.toThrow("ONBOARDING_EMAIL_NOT_CONFIRMED");
     expect(s.writeTransport).not.toHaveBeenCalled();
   });
   it("the database refuses a sandbox attestation on a live row", async () => {
