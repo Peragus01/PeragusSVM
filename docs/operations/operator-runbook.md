@@ -66,8 +66,10 @@ cliente/operador verá: `OPERATIONS_PAUSED` (com a chave) e `DAILY_REVIEW_REQUIR
 
 ## 2. Revisão diária (apenas para dias encerrados) — `/operador/revisao-diaria`
 
-Se o dia anterior (fuso `America/Sao_Paulo`) teve atividade de operação e não foi revisado, **novas operações ficam
-bloqueadas** (`DAILY_REVIEW_REQUIRED`) e o scanner envia o alerta `daily_review_missing` (alta). O dia corrente **não** pode ser revisado
+Se **qualquer** dia já encerrado (fuso `America/Sao_Paulo`) desde `DAILY_REVIEW_FLOOR_DATE` teve atividade de operação e não
+foi revisado, **novas operações ficam bloqueadas** (`DAILY_REVIEW_REQUIRED`, nomeando o dia mais antigo pendente) e o scanner
+envia o alerta `daily_review_missing` (alta) para cada dia pendente. Revise os dias pendentes do mais antigo para o mais novo
+(o campo de dia aceita qualquer dia encerrado). O dia corrente **não** pode ser revisado
 (`DAILY_REVIEW_DAY_NOT_ENDED`, HTTP 409; a tela recusa antes de enviar): um dia só é revisado depois de terminar, para que nenhuma operação posterior escape.
 
 1. Leia as pendências no console: **Alertas** (alertas e notificações `failed`/`uncertain`), **Saques** (filtro "Todas"),
@@ -127,8 +129,13 @@ partir de 12 h (atenção) e 20 h (alta).
    **Decidir estorno** (Saques) e **Abrir estornos** (Alertas) preenchem o **ID da operação**. Informe o **Motivo do
    estorno** (10 a 500 caracteres) → **Registrar decisão de estorno** → **Confirmar estorno**. Origem permitida:
    `needs_review`, `pix_confirmed`, `converted`, `awaiting_approval`, ou `expired`/`failed` com o Pix **efetivamente pago**.
-   É recusado se já existe aprovação/execução de envio (`REFUND_WITHDRAWAL_IN_PROGRESS`) ou se o pagamento não foi
-   confirmado (`REFUND_PAYMENT_NOT_CONFIRMED`). A operação passa a `refund_pending`.
+   **Ruling 38:** é recusado (`REFUND_WITHDRAWAL_IN_PROGRESS`) quando a operação está `approved`, `sending`, `sent` ou
+   `delivered_verified`, ou quando um envio foi reivindicado e **não** está ao mesmo tempo recusado definitivamente pela OZAV
+   **e** confirmado por uma busca somente-leitura (Detalhes → **Conciliar**) como sem transfer (`refused_find_clear: true`).
+   Uma aprovação sem envio reivindicado não bloqueia mais. Também recusado se o pagamento não foi confirmado
+   (`REFUND_PAYMENT_NOT_CONFIRMED`). A operação passa a `refund_pending`.
+   - `approved` com bloqueio permanente (ex.: `DESTINATION_TOKEN_ACCOUNT_FROZEN`): use **Resoluções → Voltar aprovada para revisão**
+     (só sem envio reivindicado) e depois a decisão de estorno.
 2. **Executar o reembolso: peça manualmente à OZAV** (canal de suporte/contato combinado) a devolução do valor pago ao pagador
    original, informando a operação e o valor. **Nenhum botão do sistema devolve dinheiro.** Anote a referência que a OZAV fornecer.
 3. **Registrar a conclusão em até 24 h:** em **Analisar pedido** de um pedido aprovado, informe **Valor devolvido (R$)**
@@ -137,7 +144,10 @@ partir de 12 h (atenção) e 20 h (alta).
    Requer `MANUAL_REFUNDS_ENABLED=true` (`MANUAL_REFUNDS_DISABLED` caso contrário; a decisão sobre operação é registrada mesmo assim).
 4. Se passar de **12 h** sem conclusão, aja agora; aos **20 h** o prazo de 24 h está em risco: ligue para a OZAV.
 5. Pedido de reembolso aberto pelo cliente aparece como "Em análise" (`pending_review`) e como alerta `refund_pending_review`;
-   a decisão aprovar/não aprovar fica em **Analisar pedido** (confirmação `MANUAL_REVIEW_COMPLETED`).
+   a decisão aprovar/não aprovar fica em **Analisar pedido** (confirmação `MANUAL_REVIEW_COMPLETED`). **Aprovar** exige TOTP
+   fresco e a operação em `refund_pending` (`REFUND_OPERATION_NOT_REFUND_PENDING` caso contrário). Um pedido com uma
+   **não aprovação antiga** em operação `refund_pending` pode ser **aprovado** por cima (a aprovação substitui a recusa,
+   ambas ficam na auditoria) para que o reembolso seja concluído.
 
 ## 5. Tratamento de `needs_review`
 
@@ -148,14 +158,28 @@ antes de qualquer decisão que mova dinheiro, consulte a OZAV (painel/GET) e con
 | Código do motivo | Origem | O que significa | Ação |
 |---|---|---|---|
 | `OZAV_TRANSFER_NEEDS_REVIEW` | Progressão da compra: a transfer do Pix ficou `needs_review` na OZAV (estado não terminal) | A OZAV está revisando o pagamento/conversão. Não é reembolso automático. | Acompanhe com a OZAV. Se a OZAV concluir, a operação retoma sozinha (→ `pix_confirmed`/`converted`). Se a OZAV falhar/cancelar após o recebimento, ou você decidir devolver, faça a decisão de reembolso (seção 4). Não reembolse enquanto a OZAV ainda pode concluir (risco de perda dupla). |
-| `PIX_LOCK_OUTCOME_UNKNOWN: transfer_status=...` | Pix: o estado da trava de câmbio não pôde ser confirmado | Não se sabe se a trava valeu; o Pix pode estar pago. | Consulte a transfer na OZAV. Se pago e trava válida, retome com a OZAV; se pago sem trava utilizável ou falhou, decisão de reembolso. Alerta `pix_open_after_close` pode acompanhar. |
+| `PIX_LOCK_OUTCOME_UNKNOWN: transfer_status=...` | Pix: o estado da trava de câmbio não pôde ser confirmado | Não se sabe se a trava valeu; o Pix pode estar pago. | Consulte a transfer na OZAV. Se pago e trava válida, retome com a OZAV; se pago sem trava utilizável ou falhou, decisão de reembolso. Se a transfer **terminou sem pagamento** (failed/cancelled/expired), a progressão encerra a revisão como `failed` sozinha; ou use **Resoluções → Encerrar revisão sem pagamento** (faz um GET; recusa se a transfer não estiver terminal e sem pagamento). Alerta `pix_open_after_close` pode acompanhar. |
 | `LOCKED_AMOUNT_MISMATCH: facility.amount=... locked_usdt_amount=...` | Pix: o valor da trava da OZAV é menor que o USDT aceito pelo cliente | A operação vai para **`failed`** (código ao cliente `PIX_LOCKED_AMOUNT_MISMATCH`) e o Pix **não** é exibido. A transfer pode ficar `awaiting_payment` com BR Code válido do lado da OZAV. | Confirme com a OZAV que a transfer não será paga/cancele-a; verifique se não houve pagamento. Se houve, reembolso. Investigar a divergência antes de liberar novas operações. |
 | `TX_ALREADY_USED` | Verificação on-chain: o `tx_hash` informado já verificou outra operação | Uma transação não pode comprovar duas entregas. | Não marque entregue. Compare os dois `tx_hash` no Explorer; peça à OZAV o `tx_hash` correto. Operação fica em revisão até a OZAV esclarecer; se a entrega não ocorreu, siga a regra do envio (seção 6). |
-| `TX_PREDATES_SEND` | Verificação on-chain: a transação é anterior ao envio, ou o RPC não devolveu `blockTime` | Pode ser hash errado ou RPC sem `blockTime` (a Mainnet exige RPC que o devolva). | Confira `SOLANA_RPC_URL`; abra a transação no Explorer e confirme data/valor/destino; peça à OZAV o hash correto. Só marque entrega após verificação válida. |
-| `ONCHAIN_CREDIT_DIFFERS_FROM_SETTLED` | Verificação: o crédito on-chain difere do valor líquido que a OZAV liquidou (ruling 30) | Divergência entre a chain e o relatório da OZAV. | A chain é a verdade. Registre as duas quantias, abra caso com a OZAV; não aprove entrega. Diferença pequena dentro da tolerância não basta se for diferente do líquido liquidado. |
-| `TRAVEL_RULE_REQUIRED` (resposta definitiva da OZAV; erro `WITHDRAWAL_SEND_REFUSED` com `provider_code`) | O envio foi **recusado** definitivamente (400/401/403/422); o sistema nunca reenvia | A OZAV recusou antes de criar a transfer. Mas pode existir transfer mesmo assim. | **Ruling 28:** (1) o sistema faz uma busca somente-leitura por metadata; se achar transfer, alerta `withdrawal_refused_transfer_found` (alta) e **nada é vinculado ou reenviado**; (2) **confirme com a OZAV, por escrito, que nenhuma transfer existe** para esta operação; (3) só então um reenvio pode ser considerado — não há botão: é decisão manual, com apoio do desenvolvedor, e jamais com a mesma chave sem essa confirmação; (4) se não for possível enviar, siga a decisão de reembolso com a OZAV. Um 404 **não** é recusa definitiva: permanece `sending` e é recuperado por GET. |
+| `TX_PREDATES_SEND` | Verificação on-chain: a transação é anterior ao envio, ou o RPC não devolveu `blockTime` | Pode ser hash errado ou RPC sem `blockTime` (a Mainnet exige RPC que o devolva). | Transação anterior ao envio: hash errado — peça à OZAV o hash correto e use **Resoluções → Verificar entrega de novo**. Sem `blockTime` o sistema **não** vai mais para revisão: a operação fica `sent` (pendente `BLOCK_TIME_MISSING`), é reverificada a cada conciliação e o alerta de `sent` > 30 min escala; confira `SOLANA_RPC_URL` (a Mainnet exige RPC que devolva `blockTime`) e use **Verificar entrega de novo**. Não existe "marcar como entregue": só a verificação on-chain move para `delivered_verified`. |
+| `ONCHAIN_CREDIT_DIFFERS_FROM_SETTLED` | Verificação: o crédito on-chain difere do valor líquido que a OZAV liquidou (ruling 30) | Divergência entre a chain e o relatório da OZAV. | A chain é a verdade. Registre as duas quantias, abra caso com a OZAV; não aprove entrega. Diferença pequena dentro da tolerância não basta se for diferente do líquido liquidado. Quando a OZAV corrigir o valor liquidado, use **Resoluções → Verificar entrega de novo** (mesmas regras do ruling 30). |
+| `TRAVEL_RULE_REQUIRED` (resposta definitiva da OZAV; erro `WITHDRAWAL_SEND_REFUSED` com `provider_code`) | O envio foi **recusado** definitivamente (400/401/403/422); o sistema nunca reenvia | A OZAV recusou antes de criar a transfer. Mas pode existir transfer mesmo assim. | **Ruling 28:** (1) o sistema faz uma busca somente-leitura por metadata; se achar transfer, alerta `withdrawal_refused_transfer_found` (alta) e **nada é vinculado ou reenviado**; (2) **confirme com a OZAV, por escrito, que nenhuma transfer existe** para esta operação; (3) rode **Detalhes → Conciliar**: se a busca não achar transfer, a execução fica `refused_find_clear` e a **decisão de estorno** (seção 4) passa a ser aceita (Ruling 38); (4) reenvio não existe no sistema — o caminho é o reembolso. Um 404 **não** é recusa definitiva: permanece `sending` e é recuperado por GET. |
+| `OZAV_SEND_FAILED` / `OZAV_SEND_CANCELLED` / `OZAV_SEND_EXPIRED` | A conciliação leu o envio terminado sem sucesso na OZAV | Nada foi entregue (confirme no Explorer). | Confirme com a OZAV que o USDT voltou para a carteira gerenciada; decisão de estorno (seção 4) ou novo envio somente por orientação do desenvolvedor. |
+| `OPERATOR_RETURNED_APPROVED_TO_REVIEW: <bloqueio>` | O operador devolveu uma operação aprovada sem envio reivindicado | Bloqueio permanente antes do envio. | Decisão de estorno (seção 4). |
 
 Para qualquer `needs_review`, registre na revisão diária: operação, causa, quem foi contatado na OZAV, desfecho.
+
+### Resoluções do operador (Ruling 39) — **Saques/Alertas → Resoluções**
+
+Todas exigem operador da allowlist, TOTP **fresco**, **motivo** (10 a 500 caracteres) e geram auditoria
+(`peragus_operator_resolutions`) e e-mail `operator_resolution`. Repetir com o mesmo `request_id` devolve o mesmo resultado.
+
+| Ação | Quando | Efeito |
+|---|---|---|
+| **Encerrar revisão sem pagamento** (`close-unpaid-review`) | `needs_review` cujo Pix nunca foi pago | GET na OZAV; só se a transfer estiver failed/cancelled/expired e sem pagamento: `needs_review → failed`. |
+| **Verificar entrega de novo** (`reverify-delivery`) | `sent`, ou `needs_review` vindo de `sent` | Reexecuta a verificação on-chain (tolerância e RPC atuais, mesmas regras). Pode mover para `delivered_verified`; nunca marca à mão. |
+| **Voltar aprovada para revisão** (`return-approved-to-review`) | `approved` com bloqueio permanente e **sem** envio reivindicado | `approved → needs_review`; depois, decisão de estorno. |
+| **Reconciliar Pix** (`reconcile-pix`) | Qualquer operação com Pix | Só GET + progressão (sem TOTP fresco, sem motivo). |
 
 ## 6. Alertas específicos — `/operador/alertas`
 
@@ -171,9 +195,14 @@ papel do destinatário (operador ou pessoa de confiança) e o código do erro, s
   O dinheiro pode ter saído. Não reenvie, não vincule. Abra a transfer na OZAV, veja o estado e o `tx_hash`, e decida com a OZAV (verificar entrega
   manualmente ou reembolso). Registre na revisão diária.
 - **`stuck_operation`** (e-mail "Operação parada"): `sending`/`sent` > 30 min, ou `awaiting_pix` após o prazo do Pix/trava. Reconcilie (**Saques → Detalhes → Conciliar**) antes de agir.
+  Limiares por etapa (compromisso de 24 h): `accepted`, `pix_confirmed`, `converted` e `approved` — atenção em **2 h**, alta em **8 h**;
+  `awaiting_approval` — atenção em **1 h**, alta em **4 h**. `accepted` sem criação de Pix expira sozinho após
+  `ACCEPTED_OPERATION_TTL_MINUTES` (30 min); com criação reivindicada e sem transfer na OZAV, após `PIX_CREATE_NOT_FOUND_GRACE_MINUTES` (30 min).
+- **`awaiting_approval`** (e-mail "Cliente pagou — aprovar o envio", atenção): a operação está pronta para a aprovação (seção 3).
+- **`operator_resolution`:** registro de uma resolução do operador (acima), para a pessoa de confiança.
 - **`webhook_signature_invalid`:** webhook com assinatura inválida: confira o `CUSTOMER_WEBHOOK_SECRET` e o endpoint na OZAV; repetição pode ser tentativa de fraude.
-- **`reconciliation_mismatch`:** divergência na conciliação: tratar como `needs_review`.
-- **`daily_review_missing`:** seção 2.
+- **`reconciliation_mismatch`:** divergência real na conciliação (evidência que não confere, tentativas esgotadas, transfer concluída sem custódia): tratar como `needs_review`. Um Pix comum ainda não pago **não** gera mais este alerta; a conciliação continua (com espera crescente: 1, 5 e 15 min) até a OZAV terminar e a operação sair das etapas de captação.
+- **`daily_review_missing`:** seção 2. Qualquer dia encerrado com atividade desde `DAILY_REVIEW_FLOOR_DATE` e sem revisão bloqueia novas operações (o mais antigo é nomeado), não só ontem.
 
 ## 7. Cancelamento pelo cliente
 
