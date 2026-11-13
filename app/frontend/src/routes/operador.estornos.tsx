@@ -1,3 +1,4 @@
+import { OperatorResolutions } from "@/components/peragus/operator-resolutions";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { CustomerPanel } from "@/components/peragus/customer-ui";
@@ -58,6 +59,13 @@ function OperatorRefunds({
       <OperatorMfaGate reads={[read]} context={{ token, verifyMfa }} />
       <OperationRefundDecision
         key={initialOperation}
+        token={token}
+        verifyMfa={verifyMfa}
+        initialOperation={initialOperation}
+        onSaved={() => read.reload()}
+      />
+      <OperatorResolutions
+        key={`resolutions-${initialOperation}`}
         token={token}
         verifyMfa={verifyMfa}
         initialOperation={initialOperation}

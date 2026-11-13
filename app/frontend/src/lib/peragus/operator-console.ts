@@ -413,6 +413,76 @@ export async function listNotifications(
   });
 }
 
+export type ResolutionAction =
+  "close-unpaid-review" | "reverify-delivery" | "return-approved-to-review";
+export interface OperatorResolution {
+  id: string;
+  purchase_id: string;
+  action: string;
+  from_status: string;
+  to_status: string;
+  outcome: string;
+  created_at: string;
+}
+// Literal paths (one per action) so the proxy-allowlist test can see every call.
+const RESOLUTION_PATHS: Record<ResolutionAction, (id: string) => string> = {
+  "close-unpaid-review": (id) => `v1/admin/operations/${id}/resolutions/close-unpaid-review`,
+  "reverify-delivery": (id) => `v1/admin/operations/${id}/resolutions/reverify-delivery`,
+  "return-approved-to-review": (id) =>
+    `v1/admin/operations/${id}/resolutions/return-approved-to-review`,
+};
+/** Ruling 39 audited resolution (fresh TOTP, reason, idempotent per request_id). */
+export async function resolveOperation(
+  token: string,
+  purchaseId: string,
+  action: ResolutionAction,
+  requestId: string,
+  reason: string,
+  signal?: AbortSignal,
+): Promise<OperatorResolution> {
+  requireId(purchaseId);
+  requireId(requestId);
+  reason = reason.trim();
+  if (!singleLine(reason, 10, 500) || !Object.hasOwn(RESOLUTION_PATHS, action)) throw validation();
+  const body = await operatorRequest(token, RESOLUTION_PATHS[action](purchaseId), {
+    body: { request_id: requestId, reason },
+    ...(signal ? { signal } : {}),
+  });
+  const data = body["data"];
+  if (!record(data) || data["purchase_id"] !== purchaseId || typeof data["to_status"] !== "string")
+    throw invalid();
+  return data as unknown as OperatorResolution;
+}
+/** "Reconciliar Pix": GET-only reads at OZAV plus progression; returns the resulting status. */
+export async function reconcileOperationPix(
+  token: string,
+  purchaseId: string,
+  signal?: AbortSignal,
+) {
+  requireId(purchaseId);
+  const body = await operatorRequest(token, `v1/admin/operations/${purchaseId}/reconcile-pix`, {
+    method: "POST",
+    ...(signal ? { signal } : {}),
+  });
+  const data = body["data"];
+  if (!record(data) || data["purchase_id"] !== purchaseId || typeof data["status"] !== "string")
+    throw invalid();
+  return data as { purchase_id: string; status: string; pix_state: string };
+}
+/** Audited resolutions of one operation. */
+export async function listOperationResolutions(
+  token: string,
+  purchaseId: string,
+  signal?: AbortSignal,
+) {
+  requireId(purchaseId);
+  const body = await operatorRequest(token, `v1/admin/operations/${purchaseId}/resolutions`, {
+    ...(signal ? { signal } : {}),
+  });
+  if (!Array.isArray(body["data"])) throw invalid();
+  return body["data"] as OperatorResolution[];
+}
+
 /** Operator refund decision on an operation (purchase id): moves it to refund_pending. */
 export async function decideOperationRefund(
   token: string,

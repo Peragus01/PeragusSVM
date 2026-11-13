@@ -72,6 +72,23 @@ const CALLS: { path: string; methods: string[]; proxy: Proxy }[] = [
     proxy: "operator",
   },
   { path: "v1/admin/operational-alerts", methods: ["GET"], proxy: "operator" },
+  {
+    path: `v1/admin/operations/${ID}/resolutions/close-unpaid-review`,
+    methods: ["POST"],
+    proxy: "operator",
+  },
+  {
+    path: `v1/admin/operations/${ID}/resolutions/reverify-delivery`,
+    methods: ["POST"],
+    proxy: "operator",
+  },
+  {
+    path: `v1/admin/operations/${ID}/resolutions/return-approved-to-review`,
+    methods: ["POST"],
+    proxy: "operator",
+  },
+  { path: `v1/admin/operations/${ID}/resolutions`, methods: ["GET"], proxy: "operator" },
+  { path: `v1/admin/operations/${ID}/reconcile-pix`, methods: ["POST"], proxy: "operator" },
   { path: "v1/admin/operator-notifications", methods: ["GET"], proxy: "operator" },
 ];
 

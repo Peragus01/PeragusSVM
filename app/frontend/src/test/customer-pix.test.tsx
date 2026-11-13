@@ -1,6 +1,12 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CustomerPix } from "@/components/peragus/customer-pix";
+import {
+  CANCELLED_EXPIRED_MESSAGE,
+  CANCELLED_MESSAGE,
+  CANCELLED_NO_PIX_MESSAGE,
+  CustomerPix,
+  cancelMessage,
+} from "@/components/peragus/customer-pix";
 
 const purchaseId = "d57d1d93-d02c-4141-a278-834bc0dec6e3",
   pixId = "5b0c7f3e-8a1d-4c2b-9e6f-1a2b3c4d5e6f";
@@ -150,9 +156,8 @@ describe("customer cancel before Pix (policy 7.1)", () => {
     expect(cancel.method).toBe("POST");
     expect(cancel.body).toEqual({ request_id: expect.stringMatching(/^[0-9a-f-]{36}$/) });
     expect(screen.queryByLabelText("Pix copia e cola")).toBeNull();
-    expect(
-      screen.getByText("Pedido cancelado — se você já pagou, a compra seguirá normalmente."),
-    ).toBeInTheDocument();
+    expect(screen.getByText(CANCELLED_MESSAGE)).toBeInTheDocument();
+    expect(CANCELLED_MESSAGE).toContain("vaga de compra até o Pix vencer");
     expect(screen.queryByRole("button", { name: "Cancelar pedido" })).toBeNull();
   });
   it("can go back from the confirmation without cancelling", async () => {
@@ -221,5 +226,15 @@ describe("customer cancel before Pix (policy 7.1)", () => {
     expect(calls.filter((c) => !c.url.endsWith("/cancel"))).toHaveLength(0);
     expect(screen.getByText(/^Pedido cancelado/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Gerar ou recuperar Pix" })).toBeDisabled();
+  });
+
+  describe("final review I11: cancel copy matches what the cancel left behind", () => {
+    it("expired with a Pix, no Pix at all, or a Pix still open until it expires", () => {
+      expect(cancelMessage("expired", true)).toBe(CANCELLED_EXPIRED_MESSAGE);
+      expect(cancelMessage("expired", false)).toBe(CANCELLED_NO_PIX_MESSAGE);
+      expect(cancelMessage("awaiting_pix", true)).toBe(CANCELLED_MESSAGE);
+      expect(cancelMessage("accepted", false)).toBe(CANCELLED_NO_PIX_MESSAGE);
+      expect(CANCELLED_EXPIRED_MESSAGE).toContain("devolvido");
+    });
   });
 });

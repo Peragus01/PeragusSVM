@@ -18,8 +18,21 @@ const CANCEL_FAILURES: Record<string, string> = {
     "O pagamento Pix já foi recebido; o pedido não pode mais ser cancelado por desistência (Política de Reembolso, item 7.2).",
   CANCEL_NOT_ALLOWED: "Este pedido não pode mais ser cancelado.",
 };
+/** Pix still open at OZAV until it expires: a payment before expiry withdraws the cancel (7.1). */
 export const CANCELLED_MESSAGE =
-  "Pedido cancelado — se você já pagou, a compra seguirá normalmente.";
+  "Pedido cancelado — as instruções de pagamento foram ocultadas. Se você já pagou, a compra seguirá normalmente. O pedido continua ocupando sua vaga de compra até o Pix vencer; depois disso você poderá fazer uma nova compra.";
+/** No Pix was generated: the order ended at once and the purchase slot is free. */
+export const CANCELLED_NO_PIX_MESSAGE =
+  "Pedido cancelado. Nenhum Pix foi gerado; você já pode fazer uma nova compra.";
+/** The order already expired: nothing to pay; a late payment goes to the refund path. */
+export const CANCELLED_EXPIRED_MESSAGE =
+  "Pedido cancelado e encerrado. Não pague este Pix: um pagamento feito depois do encerramento será devolvido conforme a Política de Reembolso.";
+/** Final review I11: the message depends on what the cancel left behind. */
+export function cancelMessage(status: string | null | undefined, hasPix: boolean) {
+  if (status === "expired" || status === "failed")
+    return hasPix ? CANCELLED_EXPIRED_MESSAGE : CANCELLED_NO_PIX_MESSAGE;
+  return hasPix || status === "awaiting_pix" ? CANCELLED_MESSAGE : CANCELLED_NO_PIX_MESSAGE;
+}
 type Cancel = { purchase_id: string; status: string; cancel_requested_at: string };
 type Pix = {
   id: string;
@@ -220,7 +233,9 @@ export function CustomerPix({
           <CustomerNotice kind="warning">{error}</CustomerNotice>
         </div>
       )}
-      {cancelled && !pix?.payment_confirmed && <p role="status">{CANCELLED_MESSAGE}</p>}
+      {cancelled && !pix?.payment_confirmed && (
+        <p role="status">{cancelMessage(pix?.status ?? cancel?.status, Boolean(pix))}</p>
+      )}
       {cancellable && !confirming && (
         <button
           type="button"
@@ -241,7 +256,8 @@ export function CustomerPix({
             </a>{" "}
             (item 7.1), você pode cancelar antes da confirmação do pagamento Pix. Depois que o Pix
             for confirmado, não há cancelamento por desistência (item 7.2). Se você já pagou, a
-            compra seguirá normalmente.
+            compra seguirá normalmente. Com um Pix já gerado, o pedido continua ocupando sua vaga de
+            compra até o Pix vencer.
           </p>
           <button
             type="button"

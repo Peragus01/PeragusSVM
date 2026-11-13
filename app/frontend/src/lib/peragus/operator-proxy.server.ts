@@ -16,12 +16,26 @@ const withdrawal = (suffix: string) =>
 const approval = withdrawal("approval");
 const execution = withdrawal("execution");
 const reconcile = withdrawal("execution/reconcile");
+// Ruling 39 operator resolutions on an operation (purchase id).
+const operation = (suffix: string) => new RegExp(`^v1/admin/operations/${uuid}/${suffix}$`, "i");
+const resolution = operation(
+  "resolutions/(close-unpaid-review|reverify-delivery|return-approved-to-review)",
+);
+const resolutions = operation("resolutions");
+const reconcilePix = operation("reconcile-pix");
 
 /** Operator console resources (allowlist + AAL2 enforced by the backend). Refunds live in refund-proxy. */
 export function operatorMethods(path: string): string[] {
   if (Object.hasOwn(exact, path)) return exact[path]!;
   if (execution.test(path)) return ["GET", "POST"];
-  if (approval.test(path) || reconcile.test(path)) return ["POST"];
+  if (
+    approval.test(path) ||
+    reconcile.test(path) ||
+    resolution.test(path) ||
+    reconcilePix.test(path)
+  )
+    return ["POST"];
+  if (resolutions.test(path)) return ["GET"];
   return [];
 }
 const error = (status: number, code: string) =>
@@ -39,5 +53,7 @@ export async function forwardOperator(request: Request, target: URL, path: strin
   }
   if (request.method === "GET") return forwardCustomerRead(request, target);
   // The reconcile POST carries no body (the backend refuses one).
-  return forwardJsonWrite(request, target, { emptyBody: reconcile.test(path) });
+  return forwardJsonWrite(request, target, {
+    emptyBody: reconcile.test(path) || reconcilePix.test(path),
+  });
 }

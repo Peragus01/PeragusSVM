@@ -141,4 +141,56 @@ describe("operator refund console", () => {
     });
     await waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
+
+  it("posts an audited resolution (re-verify delivery) with request_id and reason, and reconciles Pix", async () => {
+    mocks.search = { operacao: purchase };
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(requestA);
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(page([]))
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            data: {
+              id,
+              purchase_id: purchase,
+              action: "reverify_delivery",
+              from_status: "needs_review",
+              to_status: "delivered_verified",
+              outcome: "VERIFIED: ok",
+              created_at: "2026-11-13T10:00:00Z",
+            },
+            meta: { idempotent_replay: false },
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(page([]))
+      .mockResolvedValueOnce(
+        Response.json({ data: { purchase_id: purchase, status: "failed", pix_state: "expired" } }),
+      )
+      .mockResolvedValue(page([]));
+    render(<Page />);
+    expect(await screen.findByLabelText("ID da operação (resoluções)")).toHaveValue(purchase);
+    fireEvent.change(screen.getByLabelText("Motivo da resolução"), {
+      target: { value: "RPC devolveu blockTime; verificar de novo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar entrega de novo" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirmar" }));
+    expect(await screen.findByText(/needs_review → delivered_verified/)).toBeInTheDocument();
+    expect(String(fetcher.mock.calls[1]![0])).toBe(
+      `/api/v1/admin/operations/${purchase}/resolutions/reverify-delivery`,
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      request_id: requestA,
+      reason: "RPC devolveu blockTime; verificar de novo",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reconciliar Pix" }));
+    expect(await screen.findByText(/Pix reconciliado: operação em failed/)).toBeInTheDocument();
+    const reconcile = fetcher.mock.calls.find(
+      (c) => String(c[0]) === `/api/v1/admin/operations/${purchase}/reconcile-pix`,
+    );
+    expect(reconcile?.[1]?.method).toBe("POST");
+    expect(reconcile?.[1]?.body).toBeUndefined();
+  });
 });
