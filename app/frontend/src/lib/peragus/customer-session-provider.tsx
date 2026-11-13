@@ -24,6 +24,8 @@ import {
 // Refresh this long before the access token expires; retry transient failures after 15 s.
 const refreshSkewMs = 60_000;
 const refreshRetryMs = 15_000;
+// Never schedule the proactive refresh sooner than this (short-lived tokens must not loop).
+export const refreshFloorMs = 10_000;
 
 const operatorMfaFriendlyName = "Peragus Operador";
 // GoTrue renders each QR module as SVG markup; keep a bounded limit that fits
@@ -125,6 +127,10 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
         if (tokensRef.current !== base) return tokensRef.current?.access_token ?? null;
         tokensRef.current = next;
         setTokens(next);
+        // The refresh token rotated: persist it now, so a reload before the identity effect
+        // runs never restores the consumed (now invalid) refresh token.
+        const stored = loadStoredSession();
+        if (stored) saveStoredSession({ ...next, user: stored.user });
         return next.access_token;
       } catch (error) {
         if (generation.current !== turn) return null;
@@ -332,9 +338,11 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
       refresh_token: saved.refresh_token,
       expires_at: saved.expires_at,
     };
+    let refreshed = false;
     void (async () => {
       try {
         if (saved.expires_at - Date.now() <= refreshSkewMs) {
+          refreshed = true;
           if (!(await refreshAccessToken()))
             throw new CustomerSessionError("AUTH_REQUIRED", "Entre na sua conta.");
         }
@@ -346,7 +354,11 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         if (generation.current !== turn) return; // logout()/login() already took over
         tokensRef.current = null;
-        if (error instanceof CustomerSessionError && error.code.startsWith("IDENTITY_4"))
+        // A restore that already attempted a refresh leaves nothing reusable in storage.
+        if (
+          refreshed ||
+          (error instanceof CustomerSessionError && error.code.startsWith("IDENTITY_4"))
+        )
           clearStoredSession();
         setTokens(null);
         setIdentity(null);
@@ -371,7 +383,7 @@ export function CustomerSessionProvider({ children }: { children: ReactNode }) {
         Math.min(delay, 2_147_000_000),
       );
     };
-    schedule(Math.max(0, tokens.expires_at - refreshSkewMs - Date.now()));
+    schedule(Math.max(refreshFloorMs, tokens.expires_at - refreshSkewMs - Date.now()));
     return () => {
       active = false;
       clearTimeout(timer);

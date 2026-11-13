@@ -125,6 +125,37 @@ describe("persistent per-tab session", () => {
     expect(JSON.parse(window.sessionStorage.getItem(KEY)!).access_token).toBe("fresh.access");
   });
 
+  it("final review: the rotated refresh token is stored as soon as the refresh succeeds", async () => {
+    window.sessionStorage.setItem(KEY, JSON.stringify(stored({ expires_at: Date.now() - 1000 })));
+    let seenAtMe: string | null = null;
+    mockFetch(async (url) => {
+      if (url.includes("grant_type=refresh_token"))
+        return json(tokenBody("fresh.access", "rotated.refresh"));
+      if (url === "/api/v1/me") {
+        // Before the identity is known, storage already holds the rotated refresh token.
+        seenAtMe = JSON.parse(window.sessionStorage.getItem(KEY)!).refresh_token;
+        return json(identity);
+      }
+      return json({}, 404);
+    });
+    mount();
+    await screen.findByText("fresh.access");
+    expect(seenAtMe).toBe("rotated.refresh");
+  });
+
+  it("final review: a restore that fails after a refresh clears the stored session", async () => {
+    window.sessionStorage.setItem(KEY, JSON.stringify(stored({ expires_at: Date.now() - 1000 })));
+    mockFetch(async (url) => {
+      if (url.includes("grant_type=refresh_token"))
+        return json(tokenBody("fresh.access", "rotated.refresh"));
+      if (url === "/api/v1/me") return json({}, 503);
+      return json({}, 404);
+    });
+    mount();
+    await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("unauthenticated"));
+    expect(window.sessionStorage.getItem(KEY)).toBeNull();
+  });
+
   it("concurrent refreshAccessToken calls share one request", async () => {
     window.sessionStorage.setItem(KEY, JSON.stringify(stored()));
     const fetcher = mockFetch(async (url) => {

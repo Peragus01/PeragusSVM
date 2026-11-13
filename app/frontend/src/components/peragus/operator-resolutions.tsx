@@ -14,7 +14,7 @@ import {
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const RESOLUTION_LABELS: Record<ResolutionAction, { label: string; help: string }> = {
+const RESOLUTION_LABELS: Record<ResolutionAction, { label: string; help: string }> = {
   "close-unpaid-review": {
     label: "Encerrar revisão sem pagamento",
     help: "Consulta a OZAV (GET) e só encerra como falha se a transfer do Pix terminou sem pagamento.",
