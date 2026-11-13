@@ -376,20 +376,7 @@ export const envSchema = z
         });
       }
     }
-    if (
-      env.PERAGUS_DEPLOYMENT_ENV === "staging" &&
-      !env.SOLANA_USDT_MINT &&
-      (env.CUSTOMER_QUOTES_ENABLED ||
-        env.CUSTOMER_PURCHASE_INTENTS_ENABLED ||
-        env.CUSTOMER_SANDBOX_PIX_ENABLED ||
-        env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED)
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["SOLANA_USDT_MINT"],
-        message: "SOLANA_USDT_MINT is required when purchase flows are enabled",
-      });
-    }
+    // SOLANA_USDT_MINT is optional in staging: the OZAV sandbox delivers nothing on Solana.
     if (env.INVITE_EMAIL_OUTBOX_ENABLED) {
       const key = env.INVITE_EMAIL_ENCRYPTION_KEY ?? "";
       const decoded = Buffer.from(key, "base64");

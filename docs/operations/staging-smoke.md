@@ -20,7 +20,8 @@ de zero na primeira falha, nomeando a etapa. Anexe a saída (sem segredos) ao PR
    `OPERATOR_EXECUTION_MIN_DELAY_SECONDS=0`; com valor maior o script espera o intervalo (`EXECUTION_TOO_EARLY`).
 2. **Conta de cliente de teste** já criada (convite resgatado), com o **rascunho do cadastro individual** salvo no app
    usando dados sintéticos. O script confirma a atestação de dados de teste (`sandbox_data_confirmed`) ao enviar.
-3. **Carteira devnet já vinculada** pelo app, com **conta de token (ATA) do USDT de teste** criada. Se já estiver
+3. **Carteira devnet já vinculada** pelo app, apenas com a prova de posse assinada (não precisa de conta de token: o
+   sandbox da OZAV não entrega nada na Solana e a checagem de ATA só vale em live). Se já estiver
    vinculada e quiser pular a checagem, use `--skip-wallet`.
 4. **Conta de operador separada** (não pode ter cadastro de cliente) com MFA configurado (AAL2).
 5. Nenhuma operação aberta para o cliente de teste e nenhuma outra operação aberta no ambiente

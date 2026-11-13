@@ -48,3 +48,18 @@ describe("final review I12: live money paths need their safeguards", () => {
     expect(envSchema.safeParse({ PERAGUS_DEPLOYMENT_ENV: "staging", DAILY_REVIEW_FLOOR_DATE: "2026-13-40" }).success).toBe(false);
   });
 });
+
+describe("staging does not require SOLANA_USDT_MINT (OZAV sandbox delivers nothing on Solana)", () => {
+  it("parses with purchase flows enabled and no mint", async () => {
+    const { envSchema } = await import("../src/config/env.js");
+    const result = envSchema.safeParse({
+      PERAGUS_DEPLOYMENT_ENV: "staging",
+      CUSTOMER_QUOTES_ENABLED: "true",
+      CUSTOMER_PURCHASE_INTENTS_ENABLED: "true",
+      CUSTOMER_SANDBOX_PIX_ENABLED: "true",
+      SANDBOX_WITHDRAWAL_EXECUTION_ENABLED: "true",
+    });
+    const mintIssues = result.success ? [] : result.error.issues.filter((i) => i.path.includes("SOLANA_USDT_MINT"));
+    expect(mintIssues).toEqual([]);
+  });
+});

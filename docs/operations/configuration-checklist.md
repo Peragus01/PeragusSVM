@@ -212,8 +212,8 @@ Staging é o ambiente `test`/devnet. Mesmo código, outra chave, outro banco, ou
 | `OZAV_API_KEY` | `ozav_sk_test_...` | Prefixo `test` obrigatório em staging; a chave live nunca entra aqui. |
 | `CUSTOMER_WEBHOOKS_ENABLED` / `CUSTOMER_WEBHOOK_SECRET` | `true` / `ozav_whsec_...` do endpoint de staging | Webhook de teste; eventos `livemode:true` são ignorados. |
 | `SOLANA_RPC_URL` | RPC da **Devnet** (ex.: `https://api.devnet.solana.com`) | Genesis hash da Devnet conferido no boot. |
-| `SOLANA_USDT_MINT` | mint de teste da devnet (base58, 32 a 44 caracteres) | **Obrigatório em qualquer processo de staging** (`resolveMoneyEnvironment` recusa com `MONEY_ENVIRONMENT_INVALID` sem ele; o schema o exige ainda por validação quando cotação/compra/Pix/envio estão ligados). Só em produção ele é opcional (o mint canônico é fixo). |
-| Conta de token USDT devnet | uma conta de token (ATA) do mint de teste para **cada carteira de teste** de cliente | O envio recusa `DESTINATION_TOKEN_ACCOUNT_MISSING` se a carteira de destino não tiver ATA do mint configurado. Criar a ATA antes do smoke. |
+| `SOLANA_USDT_MINT` | opcional em staging (base58, 32 a 44 caracteres) | **Opcional em staging.** O sandbox da OZAV emite o "USDT de teste" dentro da própria OZAV e **não entrega nada na Solana**: sem o mint, `resolveMoneyEnvironment` devolve um endereço placeholder (`TEST_MODE_USDT_MINT_PLACEHOLDER`, nunca usado para verificar nada em `test`) e o staging sobe normalmente. Se for informado em staging, é usado como antes (verificação on-chain opcional). Em produção continua opcional e fixo: ausente = mint canônico; qualquer outro valor impede o boot. |
+| Conta de token USDT devnet | **não é necessária em staging** | A checagem de conta de token do destinatário (`DESTINATION_TOKEN_ACCOUNT_*`) e a verificação on-chain da entrega valem **somente em live** (Mainnet). Em staging o sandbox da OZAV não entrega nada na Solana, então a carteira de teste só precisa da prova de posse assinada. |
 | `LEGAL_REQUIRED_DOCUMENTS` | JSON da seção 0 | Gate jurídico idêntico à produção. |
 | `TRUST_PROXY_HOPS` | `1` | Railway. |
 | `API_RATE_LIMITS_ENABLED` | `true` | Mesmo comportamento da produção. |
@@ -237,7 +237,7 @@ Staging é o ambiente `test`/devnet. Mesmo código, outra chave, outro banco, ou
 | `PERAGUS_DEPLOYMENT_ENV` | `staging` | Idem API. |
 | `DATABASE_URL` / `DATABASE_SSL` / `SUPABASE_URL` | staging / `true` / `https://lybdkqkbwlfwvmmvstzi.supabase.co` | Guarda de ambiente. |
 | `OZAV_API_KEY` | `ozav_sk_test_...` | Reconciliação em test. |
-| `SOLANA_RPC_URL` / `SOLANA_USDT_MINT` | Devnet / mint de teste (obrigatório no worker de staging também) | Verificação on-chain; sandbox cujo `tx_hash` não existe na devnet fica simulado, nunca `delivered_verified`. |
+| `SOLANA_RPC_URL` / `SOLANA_USDT_MINT` | Devnet / mint de teste (opcional) | Verificação on-chain só roda no worker de staging se o mint for informado; sem ele a entrega não é verificada (comportamento de sempre). Sandbox cujo `tx_hash` não existe na devnet fica simulado, nunca `delivered_verified`. |
 | `USDT_DELIVERY_TOLERANCE_UNITS` | `100000` | Idem. |
 | `CUSTOMER_RECONCILIATION_ENABLED` | `true` | Reconciliação. |
 | `OZAV_RECONCILIATION_INTERVAL_SECONDS` / `OZAV_RECONCILIATION_MAX_ATTEMPTS` | `30` / `120` | Polling. |
@@ -312,7 +312,7 @@ Mesma lista da seção 1.6 para as variáveis legadas (`OZAV_ONRAMP_WRITES_ENABL
   de onboarding ligado em produção; para clientes externos, decida (ou ajuste o código) antes do piloto externo. Até lá, só a allowlist recebe.
 - **Origem da sessão de KYC:** o host do `session_url` precisa ser `ozav.io` ou `*.ozav.io`; se a OZAV usar outro domínio,
   o KYC live falha fechado até a lista ser atualizada (pendência registrada).
-- **ATA do destinatário:** pendência com a OZAV (criação da conta de token); enquanto aberta, o envio é bloqueado pelo
+- **ATA do destinatário (somente live; em staging a checagem é pulada):** pendência com a OZAV (criação da conta de token); enquanto aberta, o envio é bloqueado pelo
   blocker `DESTINATION_TOKEN_ACCOUNT_MISSING` e `DESTINATION_TOKEN_ACCOUNT_FROZEN` (conta congelada).
 - **Piso R$ 50:** a redução negociada com a OZAV é apenas configuração: depois que a OZAV confirmar **por escrito** que o mínimo do on-ramp caiu (antes disso a OZAV recusa com `AMOUNT_BELOW_MINIMUM`), defina `PURCHASE_MIN_BRL=50.00` na API **e** no worker (mesmo valor). Cotação, aceite e criação do Pix usam só `PURCHASE_MIN_BRL`..`PURCHASE_MAX_BRL` (não há outro piso no código). `PURCHASE_MAX_BRL` continua limitado pela reserva de contingência. O lançamento não depende dessa redução.
 - Variáveis de uso local/legado que não pertencem a nenhum ambiente hospedado: `SANDBOX_SLOT_RELEASE_CONFIRMATION`,

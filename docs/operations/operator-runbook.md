@@ -108,6 +108,8 @@ Fluxo normal: Pix pago → transfer 1 `completed` → operação `awaiting_appro
 
 ### Bloqueios antes do envio (conta de token)
 
+A checagem de conta de token vale **somente em live** (Mainnet). Em staging (modo `test`) o sandbox da OZAV não entrega nada na Solana: a checagem é pulada e esses bloqueios não ocorrem.
+
 | Código | Significado | O que fazer |
 |---|---|---|
 | `DESTINATION_TOKEN_ACCOUNT_MISSING` | A carteira de destino não tem conta de token (ATA) do USDT | Nada é enviado. Peça à OZAV a criação da ATA (pendência em aberto) ou ao cliente que crie a ATA (receber 1 USDT/abrir conta na carteira) e execute de novo. |

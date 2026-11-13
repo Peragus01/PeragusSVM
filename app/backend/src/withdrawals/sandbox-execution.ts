@@ -304,15 +304,21 @@ export class SandboxWithdrawalExecutionService {
   const identity=await this.provider.identity(c.providerCustomerId,onboardingExternalRef(c.customerId,this.mode));
   const available=await this.provider.available(c.providerCustomerId,c.providerWalletId);
   if(usdtUnits(available)<amount)throw new SandboxExecutionError("WITHDRAWAL_BALANCE_INSUFFICIENT");
-  // The destination must already hold a token account for this environment's USDT mint.
-  let state:TokenAccountState;
-  try{state=await this.destination.reader.tokenAccountState(c.walletAddress,this.destination.usdtMint);}
-  catch{throw new SandboxExecutionError("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");}
-  if(state!=="ready" && state!=="missing" && state!=="frozen")throw new SandboxExecutionError("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");
-  // A frozen account exists but cannot receive: reported apart from a missing one.
-  const blocker=state==="ready"?null:state==="frozen"?DESTINATION_TOKEN_ACCOUNT_FROZEN:DESTINATION_TOKEN_ACCOUNT_MISSING;
-  await this.repository.recordDestinationCheck(c.withdrawalId,c.customerId,blocker);
-  if(blocker)throw new SandboxExecutionError(blocker);
+  if(this.mode==="live"){
+   // Live: the destination must already hold a token account for this environment's USDT mint.
+   let state:TokenAccountState;
+   try{state=await this.destination.reader.tokenAccountState(c.walletAddress,this.destination.usdtMint);}
+   catch{throw new SandboxExecutionError("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");}
+   if(state!=="ready" && state!=="missing" && state!=="frozen")throw new SandboxExecutionError("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");
+   // A frozen account exists but cannot receive: reported apart from a missing one.
+   const blocker=state==="ready"?null:state==="frozen"?DESTINATION_TOKEN_ACCOUNT_FROZEN:DESTINATION_TOKEN_ACCOUNT_MISSING;
+   await this.repository.recordDestinationCheck(c.withdrawalId,c.customerId,blocker);
+   if(blocker)throw new SandboxExecutionError(blocker);
+  }else{
+   // Test (OZAV sandbox): nothing is delivered on Solana, so there is no token account to check.
+   // Decided from the provider's money mode only; the reader is never called.
+   await this.repository.recordDestinationCheck(c.withdrawalId,c.customerId,null);
+  }
   // Travel Rule: identify the self-custodied destination (attested by the wallet proof) before the send.
   // It moves no money and a repeat only records the latest identification, so a failure here leaves
   // the operation approved with nothing claimed.

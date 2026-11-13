@@ -544,7 +544,7 @@ describe("approved sandbox withdrawal execution",()=>{
 
 describe("live USDT send with destination identification (Task 10)",()=>{
  it("identifies the destination with the wallet proof timestamp before sending",async()=>{
-  const f=await executionFixture();
+  const f=await executionFixture();f.provider.mode="live";
   const proof=(await db.query<{verified_at:Date}>("select verified_at from peragus_customer_wallets where customer_id=$1",[f.s.customer.id])).rows[0]!.verified_at;
   const r=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
   expect(r.replayed).toBe(false);
@@ -642,15 +642,15 @@ describe("live USDT send with destination identification (Task 10)",()=>{
   expect((await f.execution.read(f.user,f.wr.data.id)).provider_transaction_reference).toBe("5ynthetic7xHash1111111111111111111111111111111111");
   expect(f.sends()).toBe(1);
  });
- it("keeps the operation approved and reports DESTINATION_TOKEN_ACCOUNT_MISSING without any POST",async()=>{
-  const f=await executionFixture();f.setTokenAccount(false);
+ it("live: keeps the operation approved and reports DESTINATION_TOKEN_ACCOUNT_MISSING without any POST",async()=>{
+  const f=await executionFixture();f.provider.mode="live";f.setTokenAccount(false);
   await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("DESTINATION_TOKEN_ACCOUNT_MISSING");
   expect(f.calls).toEqual([]);expect(await f.repo.read(f.wr.data.id)).toBeNull();
   expect(await operationStatus(f.p.data.id)).toBe("approved");
   const history=new CustomerOperationHistoryService(pool,"test");
   expect((await history.get(f.s.customer.id,f.p.data.id))!.withdrawal).toMatchObject({state:"approved",destination_blocker:"DESTINATION_TOKEN_ACCOUNT_MISSING"});
   const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
-  const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers,payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
+  const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers,payload:{request_id:f.executionRequestId,confirmation:"LIVE_USDT_SEND"}});
   expect(r.statusCode).toBe(409);expect(r.json().error.code).toBe("DESTINATION_TOKEN_ACCOUNT_MISSING");
   f.setTokenAccount(new Error("private rpc failure"));
   await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");
@@ -898,11 +898,36 @@ describe("send hardening (Task 11, ruling 28)",()=>{
   expect(r.statusCode).toBe(409);expect(r.json().error).toMatchObject({code:"DESTINATION_IDENTIFICATION_FAILED",provider_http_status:422,automatic_retry:false});
   expect(r.body).not.toContain("private identification failure");expect(f.sends()).toBe(0);
  });
- it("a frozen destination token account is DESTINATION_TOKEN_ACCOUNT_FROZEN, with no POST",async()=>{
-  const f=await executionFixture();f.setTokenAccount("frozen");
+ it("live: a frozen destination token account is DESTINATION_TOKEN_ACCOUNT_FROZEN, with no POST",async()=>{
+  const f=await executionFixture();f.provider.mode="live";f.setTokenAccount("frozen");
   await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("DESTINATION_TOKEN_ACCOUNT_FROZEN");
   expect(f.calls).toEqual([]);expect(await operationStatus(f.p.data.id)).toBe("approved");
   expect((await new CustomerOperationHistoryService(pool,"test").get(f.s.customer.id,f.p.data.id))!.withdrawal).toMatchObject({destination_blocker:"DESTINATION_TOKEN_ACCOUNT_FROZEN"});
+ });
+ it("live: an unrecognised token account state and a reader that throws are DESTINATION_TOKEN_ACCOUNT_UNVERIFIED, with no POST",async()=>{
+  const f=await executionFixture();f.provider.mode="live";
+  f.setTokenAccount(new Error("private rpc failure"));
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");
+  f.setTokenAccount("weird" as any);
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toThrow("DESTINATION_TOKEN_ACCOUNT_UNVERIFIED");
+  expect(f.tokenChecks.length).toBe(2);expect(f.calls).toEqual([]);expect(await operationStatus(f.p.data.id)).toBe("approved");
+ });
+ it("test (OZAV sandbox): never reads the token account, records no blocker and sends even if the reader would say missing",async()=>{
+  const f=await executionFixture();f.setTokenAccount(false);
+  const done=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  expect(done.replayed).toBe(false);expect(f.tokenChecks).toEqual([]);expect(f.sends()).toBe(1);
+  expect((await new CustomerOperationHistoryService(pool,"test").get(f.s.customer.id,f.p.data.id))!.withdrawal).toMatchObject({destination_blocker:null});
+ });
+ it("test (OZAV sandbox): proceeds even when the reader would throw or report frozen",async()=>{
+  const f=await executionFixture();f.setTokenAccount(new Error("private rpc failure"));
+  expect((await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).replayed).toBe(false);
+  expect(f.tokenChecks).toEqual([]);expect(f.sends()).toBe(1);
+  expect(await operationStatus(f.p.data.id)).toBe("sent");
+ });
+ it("test (OZAV sandbox): proceeds even when the reader would report frozen",async()=>{
+  const g=await executionFixture();g.setTokenAccount("frozen");
+  expect((await g.execution.execute(g.user,g.wr.data.id,g.executionRequestId)).replayed).toBe(false);
+  expect(g.tokenChecks).toEqual([]);expect(g.sends()).toBe(1);
  });
 });
 
@@ -1254,7 +1279,7 @@ describe("final review: operator resolutions (Rulings 38/39) and send dead ends"
   expect((await gRefunds.operationDecision(g.user,g.p.data.id,randomUUID(),resolutionReason)).data.status).toBe("refund_pending");
  });
  it("R38 path for approved with a permanent blocker: back to review (no send claimed), then the refund decision",async()=>{
-  const f=await executionFixture();f.setTokenAccount(false);
+  const f=await executionFixture();f.provider.mode="live";f.setTokenAccount(false);
   await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toMatchObject({code:"DESTINATION_TOKEN_ACCOUNT_MISSING"});
   const {service}=await resolutions(f);
   const r=await service.returnApprovedToReview(f.user,f.p.data.id,randomUUID(),resolutionReason);

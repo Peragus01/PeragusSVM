@@ -15,6 +15,13 @@ export interface MoneyEnvironment {
 }
 
 export const MAINNET_USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+/**
+ * Valid 32-byte base58 address (the system program id) returned in test mode when no
+ * SOLANA_USDT_MINT is configured. The OZAV sandbox issues "test USDT" inside OZAV and
+ * delivers nothing on Solana, so in test mode this value is never used for real
+ * verification (no token-account check, no on-chain delivery check without a configured mint).
+ */
+export const TEST_MODE_USDT_MINT_PLACEHOLDER = "11111111111111111111111111111111";
 export const MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 export const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 
@@ -42,12 +49,11 @@ export function resolveMoneyEnvironment(
       explorerCluster: "mainnet-beta",
     };
   }
-  if (!env.SOLANA_USDT_MINT) throw invalid();
   return {
     mode: "test",
     network: "solana:devnet",
     ozavKeyPrefix: "ozav_sk_test_",
-    usdtMint: env.SOLANA_USDT_MINT,
+    usdtMint: env.SOLANA_USDT_MINT || TEST_MODE_USDT_MINT_PLACEHOLDER,
     genesisHash: DEVNET_GENESIS_HASH,
     walletProofDomain: "peragussvm-staging.up.railway.app",
     appOrigin: INVITE_STAGING_ORIGIN,
