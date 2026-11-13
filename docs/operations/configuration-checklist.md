@@ -66,7 +66,8 @@ Legenda das colunas: **Variável/ajuste**, **Valor esperado** (formato, nunca se
 | `PURCHASE_MIN_BRL` | `1000.00` | Piso por operação (D2; piso da OZAV R$ 1.000). |
 | `PURCHASE_MAX_BRL` | `1000.00` | Teto por operação; exposição máxima R$ 1.000. |
 | `PURCHASE_MAX_OPEN_GLOBAL` | `1` | Uma operação aberta no total. |
-| `MANUAL_REFUNDS_ENABLED` | `true` | Sem isto o operador não consegue decidir/registrar reembolso (compromisso de 24 h da política). |
+| `PIX_INSTRUCTIONS_HIDE_MARGIN_MINUTES` | `5` (0 a 30) | O BR Code some da tela este tempo antes de min(expiração do Pix, prazo da trava): o cliente nunca paga no limite. |
+| `MANUAL_REFUNDS_ENABLED` | `true` | Sem isto o operador não consegue decidir/registrar reembolso (compromisso de 24 h da política). Em live, a API **recusa subir** com Pix/envio ligados e este flag desligado. |
 | `CUSTOMER_PURCHASE_INTENTS_ENABLED` | `true` | Aceite de cotação/compra. Os kill switches de runtime controlam a ordem de abertura. |
 | `CUSTOMER_QUOTES_ENABLED` | `true` | Cotações com trava de câmbio. |
 | `CUSTOMER_SANDBOX_PIX_ENABLED` | `true` | Nome legado: é o caminho do Pix **live** (seguro em live). Só a simulação é recusada. |
@@ -112,6 +113,12 @@ Legenda das colunas: **Variável/ajuste**, **Valor esperado** (formato, nunca se
 | `CUSTOMER_RECONCILIATION_ENABLED` | `true` | Reconciliação das operações (Pix, transfer, envio, on-chain). |
 | `OZAV_RECONCILIATION_INTERVAL_SECONDS` | `30` (1 a 3600) | Intervalo do polling de fallback. |
 | `OZAV_RECONCILIATION_MAX_ATTEMPTS` | `120` (1 a 10000) | Limite de tentativas antes de alertar. |
+| `ACCEPTED_OPERATION_TTL_MINUTES` | `30` (5 a 1440) | Operação `accepted` sem criação de Pix reivindicada expira após este tempo (libera a vaga). |
+| `PIX_CREATE_NOT_FOUND_GRACE_MINUTES` | `30` (5 a 1440) | Criação de Pix reivindicada sem transfer listada na OZAV (busca por metadata) expira a operação após este tempo — nunca se existir transfer. |
+| `PIX_EXPIRY_GRACE_MINUTES` | `10` (0 a 60) | Um GET sem pagamento só expira a operação este tempo **depois** de min(expiração do Pix, prazo da trava). |
+| `PIX_INSTRUCTIONS_HIDE_MARGIN_MINUTES` | `5` | Mesmo valor da API (vistas devolvidas pela reconciliação). |
+| `DAILY_REVIEW_FLOOR_DATE` | data do deploy (padrão `2026-11-01`) | Todo dia de São Paulo encerrado com atividade desde esta data precisa de revisão diária; qualquer dia pendente bloqueia novas operações. Defina **também na API** (mesmo valor). |
+| Batimento do worker | (automático, sem variável) | O worker grava `peragus_worker_heartbeats` a cada minuto; o `/ready` da API falha (fila) se o batimento tiver mais de 3 min. Confira que o worker está de pé antes do go-live. |
 | `JOB_POLL_INTERVAL_SECONDS` / `JOB_CONCURRENCY` | `2` / `3` | Parâmetros do pg-boss. |
 | `OPERATOR_NOTIFICATIONS_ENABLED` | `true` | O worker só envia alertas e roda o scanner de operações paradas com este flag. A API (`server.ts`) não lê estas variáveis: não precisam estar na API. Se forem definidas lá, a validação compartilhada de `env.ts` se aplica igual (e-mails distintos, remetente `@peragus.com.br`, `DATABASE_URL`), então mantenha os mesmos valores nos dois ou omita-os na API. |
 | `OPERATOR_ALERT_EMAIL` | e-mail do operador | Destinatário dos alertas; validado, nunca logado. |

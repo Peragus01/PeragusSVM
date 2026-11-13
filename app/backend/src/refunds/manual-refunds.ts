@@ -213,6 +213,8 @@ export class ManualRefundService {
  }
  async decide(user:AuthenticatedUser,id:string,requestId:string,decision:"approved"|"rejected",reason:string){
   this.authorize(user);this.writable();
+  // Final review I7: with settled operations an approval is a money decision.
+  if(this.settleOperations && decision==="approved")return this.approveSettled(user,id,requestId,reason);
   const prior=await this.pool.query<{refund_request_id:string}>("select refund_request_id from peragus_manual_refund_decisions where operator_user_id=$1 and request_id=$2",[user.id,requestId]);
   if(prior.rows[0] && prior.rows[0].refund_request_id!==id)fail("REFUND_IDEMPOTENCY_CONFLICT");
   const before=await this.one("r.id=$1",[id]);if(!before)fail("REFUND_REQUEST_NOT_FOUND");
@@ -222,6 +224,45 @@ export class ManualRefundService {
   const row=(await this.one("r.id=$1",[id]))!;
   if(row.decision_operator===user.id && row.decision_request_id===requestId){if(row.decision!==decision || row.decision_reason!==reason)fail("REFUND_IDEMPOTENCY_CONFLICT");return {data:view(row,this.e,true),replayed:inserted.rows.length===0};}
   fail(row.decision_id?"REFUND_ALREADY_DECIDED":"REFUND_IDEMPOTENCY_CONFLICT");
+ }
+ /**
+  * Approving a refund request when operations are settled (final review I7): fresh TOTP, the
+  * operation must be refund_pending under the purchase row lock (else
+  * REFUND_OPERATION_NOT_REFUND_PENDING). A legacy rejection of the same request is superseded
+  * by the approval (audited: a new append-only decision row that names the rejection), so the
+  * refund can complete. Idempotent per operator + request_id.
+  */
+ private async approveSettled(user:AuthenticatedUser,id:string,requestId:string,reason:string){
+  this.requireFreshMfa(user);
+  const prior=await this.pool.query<{refund_request_id:string;decision:string;reason:string}>("select refund_request_id,decision,reason from peragus_manual_refund_decisions where operator_user_id=$1 and request_id=$2",[user.id,requestId]);
+  if(prior.rows[0]){
+   if(prior.rows[0].refund_request_id!==id || prior.rows[0].decision!=="approved" || prior.rows[0].reason!==reason)fail("REFUND_IDEMPOTENCY_CONFLICT");
+   return {data:view((await this.one("r.id=$1",[id]))!,this.e,true),replayed:true};
+  }
+  const client=await this.pool.connect();let broken:Error|undefined;
+  try{
+   await client.query("begin isolation level read committed");
+   const op=await client.query<{status:string}>(`select pi.status from peragus_customer_purchase_intents pi
+    join peragus_customer_refund_requests rr on rr.purchase_intent_id=pi.id and rr.customer_id=pi.customer_id
+    where rr.id=$1 and rr.environment='${this.e.mode}' and pi.environment='${this.e.mode}' for update of pi`,[id]);
+   if(!op.rows[0])fail("REFUND_REQUEST_NOT_FOUND");
+   if(op.rows[0]!.status!=="refund_pending")fail("REFUND_OPERATION_NOT_REFUND_PENDING");
+   const current=await this.one("r.id=$1",[id],client);
+   if(current!.decision==="approved")fail("REFUND_ALREADY_DECIDED");
+   const inserted=await client.query(`insert into peragus_manual_refund_decisions(id,refund_request_id,customer_id,operator_user_id,request_id,decision,reason,supersedes_decision_id)
+    select $1,r.id,r.customer_id,$3,$4,'approved',$5,$6 from peragus_customer_refund_requests r where r.id=$2
+     and not exists(select 1 from peragus_customers where owner_user_id=$3) returning id`,[randomUUID(),id,user.id,requestId,reason,current!.decision==="rejected"?current!.decision_id:null]);
+   if(!inserted.rows[0])fail("OPERATOR_ACCOUNT_SEPARATION_REQUIRED");
+   const row=(await this.one("r.id=$1",[id],client))!;
+   await client.query("commit");
+   return {data:view(row,this.e,true),replayed:false};
+  }catch(error){
+   try{await client.query("rollback");}catch(rollbackError){broken=rollbackError instanceof Error?rollbackError:new Error("ROLLBACK_FAILED");}
+   if(error instanceof ManualRefundError)throw error;
+   const message=error instanceof Error?error.message:"";
+   if(message.includes("operator_user_id_request_id") || message.includes("peragus_manual_refund_one_original_decision") || message.includes("supersedes_decision_id"))fail("REFUND_ALREADY_DECIDED");
+   throw error;
+  }finally{client.release(broken);}
  }
  async complete(user:AuthenticatedUser,id:string,requestId:string,amount:string,reference:string){
   this.authorize(user);this.requireFreshMfa(user);this.writable();amount=normalized(amount);
@@ -240,6 +281,7 @@ export class ManualRefundService {
     insert into peragus_manual_refund_completions(id,refund_request_id,customer_id,decision_id,operator_user_id,request_id,maximum_amount_brl,amount_brl,reference)
     select $1,r.id,r.customer_id,d.id,$3,$4,r.amount_brl,$5,$6 from peragus_customer_refund_requests r
     join peragus_manual_refund_decisions d on d.refund_request_id=r.id and d.customer_id=r.customer_id and d.decision='approved'
+     and not exists(select 1 from peragus_manual_refund_decisions s where s.supersedes_decision_id=d.id)
     where r.id=$2 and not exists(select 1 from peragus_customers where owner_user_id=$3)
      ${settle?"and exists(select 1 from p where p.status='refund_pending')":""}
     on conflict do nothing returning id

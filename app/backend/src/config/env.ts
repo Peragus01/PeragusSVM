@@ -143,6 +143,20 @@ export const envSchema = z
       .min(1)
       .max(1_000)
       .default(1),
+    // Final review I3: an accepted operation without a claimed Pix create expires after this TTL;
+    // a claimed create with no transfer listed by OZAV expires after the grace period.
+    ACCEPTED_OPERATION_TTL_MINUTES: z.coerce.number().int().min(5).max(1_440).default(30),
+    PIX_CREATE_NOT_FOUND_GRACE_MINUTES: z.coerce.number().int().min(5).max(1_440).default(30),
+    // Final review I9: Pix instructions are hidden this long before min(Pix expiry, lock
+    // deadline); an unpaid GET expires the operation only this long after it.
+    PIX_INSTRUCTIONS_HIDE_MARGIN_MINUTES: z.coerce.number().int().min(0).max(30).default(5),
+    PIX_EXPIRY_GRACE_MINUTES: z.coerce.number().int().min(0).max(60).default(10),
+    // Final review I8: every ended São Paulo day with activity since this date must be reviewed.
+    DAILY_REVIEW_FLOOR_DATE: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)))
+      .default("2026-11-01"),
     CUSTOMER_WALLET_LINKING_ENABLED: z
       .enum(["true", "false"])
       .default("false")
@@ -323,6 +337,25 @@ export const envSchema = z
         path: [flag],
         message: `MONEY_PATH_NOT_LIVE_READY: ${flag}`,
       });
+    }
+    // Final review I12: a live money path needs the refund path, signed webhooks and the
+    // real client IP (rate limits) before it may start.
+    if (
+      expected === "live" &&
+      (env.CUSTOMER_SANDBOX_PIX_ENABLED || env.SANDBOX_WITHDRAWAL_EXECUTION_ENABLED)
+    ) {
+      for (const [field, ok] of [
+        ["MANUAL_REFUNDS_ENABLED", env.MANUAL_REFUNDS_ENABLED],
+        ["CUSTOMER_WEBHOOKS_ENABLED", env.CUSTOMER_WEBHOOKS_ENABLED],
+        ["TRUST_PROXY_HOPS", env.TRUST_PROXY_HOPS > 0],
+      ] as const) {
+        if (!ok)
+          context.addIssue({
+            code: "custom",
+            path: [field],
+            message: `LIVE_MONEY_PATH_REQUIRES_SAFEGUARD: ${field}`,
+          });
+      }
     }
     {
       const { minCents, maxCents } = purchaseLimits(env);

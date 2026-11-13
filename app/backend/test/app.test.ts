@@ -256,6 +256,52 @@ describe("GET /ready", () => {
     expect(calls).toBe(2);
   });
 
+  it("shares one in-flight database/queue probe among concurrent requests and caches it for 2 s", async () => {
+    let db = 0, queue = 0, clock = 1_000;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const checker = createReadinessChecker(
+      { database: async () => { db += 1; await gate; }, queue: async () => { queue += 1; } },
+      { now: () => clock },
+    );
+    const concurrent = [checker(), checker(), checker()];
+    release();
+    expect((await Promise.all(concurrent)).every((r) => r.status === "ready")).toBe(true);
+    expect([db, queue]).toEqual([1, 1]);
+    clock += 1_999;
+    await checker();
+    expect([db, queue]).toEqual([1, 1]);
+    clock += 2;
+    await checker();
+    expect([db, queue]).toEqual([2, 2]);
+  });
+
+  it("the queue check fails when the worker heartbeat is stale (> 3 min)", async () => {
+    const { workerHeartbeatProbe, recordWorkerHeartbeat } = await import("../src/operations/worker-heartbeat.js");
+    const { queueReadinessProbe } = await import("../src/database/readiness.js");
+    const { PGlite } = await import("@electric-sql/pglite");
+    const { readFile, readdir } = await import("node:fs/promises");
+    const db = new PGlite();
+    try {
+      await db.exec("create role anon; create role authenticated; create schema pgboss; create table pgboss.job(id int);");
+      const dir = new URL("../migrations/", import.meta.url);
+      for (const f of (await readdir(dir)).filter((f) => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(f, dir), "utf8"));
+      const pool = { query: (sql: string, params?: unknown[]) => db.query(sql, params) } as never;
+      const check = createReadinessChecker({ database: ok, queue: queueReadinessProbe(pool, workerHeartbeatProbe(pool, "test")) }, { databaseCacheMs: 0 });
+      expect((await check()).checks.queue).toBe("failed");
+      await recordWorkerHeartbeat(pool, "test");
+      expect((await check()).checks.queue).toBe("ok");
+      await db.query("update peragus_worker_heartbeats set beat_at=now()-interval '181 seconds'");
+      expect((await check()).checks.queue).toBe("failed");
+      // The other environment's heartbeat does not count.
+      await db.query("delete from peragus_worker_heartbeats");
+      await recordWorkerHeartbeat(pool, "live");
+      expect((await check()).checks.queue).toBe("failed");
+    } finally {
+      await db.close();
+    }
+  }, 60_000);
+
   it("is reachable with auth and rate limiting configured, and /health is unchanged", async () => {
     const app = await buildApp({
       readiness: { database: ok, queue: ok, ozav: ok },

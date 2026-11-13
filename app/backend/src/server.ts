@@ -68,6 +68,9 @@ import {
   verifyDatabaseConnection,
 } from "./database/readiness.js";
 import { randomUUID } from "node:crypto";
+import { OperatorResolutionService } from "./operations/operator-resolutions.js";
+import { workerHeartbeatProbe } from "./operations/worker-heartbeat.js";
+import { setDailyReviewFloorDate } from "./operations/daily-review.js";
 import { INVITE_STAGING_ORIGIN } from "./invites/invite-email-template.js";
 import { createSupabaseAuthenticator } from "./auth/supabase-authenticator.js";
 import { LegalAcceptanceService, parseLegalRequiredDocuments } from "./legal/legal-acceptance.js";
@@ -142,6 +145,8 @@ import type { SettlementRepository } from "./repositories/settlement-repository.
 
 console.info(JSON.stringify(deploymentConfigurationAudit()));
 const env = getEnv();
+// Final review I8: every ended São Paulo day with activity since this date must be reviewed.
+setDailyReviewFloorDate(env.DAILY_REVIEW_FLOOR_DATE);
 const moneyMode = moneyModeFor(env);
 // Fresh-TOTP window for money-moving operator actions (OPERATOR_MFA_MAX_AGE_SECONDS, <= 300 s).
 const operatorMfaPolicy = { mfaMaxAgeSeconds: env.OPERATOR_MFA_MAX_AGE_SECONDS };
@@ -533,7 +538,13 @@ const app = await buildApp({
               ? () => assertDatabaseEnvironment(pool!, moneyModeFor(env))
               : undefined,
           ),
-          queue: queueReadinessProbe(pool),
+          // Hosted deployments: the worker must also have beaten within 3 minutes (final review I12).
+          queue: queueReadinessProbe(
+            pool,
+            process.env.RAILWAY_ENVIRONMENT_NAME || env.PERAGUS_DEPLOYMENT_ENV === "production"
+              ? workerHeartbeatProbe(pool, moneyModeFor(env))
+              : undefined,
+          ),
           // No OZAV key in this process: the check is skipped and reported "ok".
           ...(env.OZAV_API_KEY
             ? {
@@ -631,6 +642,35 @@ const app = await buildApp({
           true,
           operatorMfaPolicy,
         ),
+      }
+    : {}),
+  // Ruling 39 operator resolutions: GET-only provider reads, audited local moves.
+  ...(pool && env.OZAV_API_KEY
+    ? {
+        operatorResolutionService: (() => {
+          const client = new OzavClient({ apiKey: env.OZAV_API_KEY!, mode: moneyModeFor(env), attempts: 1, timeoutMs: 5000 });
+          const reads = Object.freeze({
+            findCustomerPixTransfer: client.findCustomerPixTransfer.bind(client),
+            getTransfer: client.getTransfer.bind(client),
+          });
+          return new OperatorResolutionService({
+            pool: pool!,
+            mode: moneyModeFor(env),
+            operators: new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+            policy: operatorMfaPolicy,
+            pix: { repo: new PostgresCustomerPixRepository(pool!, moneyModeFor(env), purchaseLimits(env)), provider: reads },
+            progression: createPurchaseProgression(pool!, moneyModeFor(env), env, client),
+            ...(deliveryCheck
+              ? {
+                  delivery: {
+                    repo: new PostgresSandboxExecutionRepository(pool!, moneyModeFor(env)),
+                    provider: new OzavSandboxWithdrawalProvider(env.OZAV_API_KEY!, { mode: moneyModeFor(env) }),
+                    check: deliveryCheck,
+                  },
+                }
+              : {}),
+          });
+        })(),
       }
     : {}),
   ...(env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED
@@ -736,6 +776,17 @@ const app = await buildApp({
             maxOpenGlobal: env.PURCHASE_MAX_OPEN_GLOBAL,
             limits: purchaseLimits(env),
           }),
+          {
+            // Final review I9: instructions hidden N minutes before min(Pix expiry, lock deadline).
+            instructionsMarginMs: env.PIX_INSTRUCTIONS_HIDE_MARGIN_MINUTES * 60_000,
+            // Final review I5: the customer "atualizar" runs progression (GET-only reads).
+            progression: createPurchaseProgression(pool!, moneyModeFor(env), env, new OzavClient({
+              apiKey: env.OZAV_API_KEY!,
+              mode: moneyModeFor(env),
+              attempts: 1,
+              timeoutMs: 5000,
+            })),
+          },
         ),
       }
     : {}),

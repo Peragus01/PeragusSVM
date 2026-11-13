@@ -261,6 +261,13 @@ describe("operator notifications",()=>{
   const day=(await db.query<{d:string}>("select ((now() at time zone 'America/Sao_Paulo')::date-6)::text d")).rows[0]!.d;
   await scanner.scan(at(-5*24*60));await scanner.scan(at(-5*24*60+5));
   expect((await notes("kind='daily_review_missing'")).map(r=>[r.dedupe_key,r.payload.day])).toEqual([[`daily_review_missing:${day}`,day],[`daily_review_missing:${day}`,day]]);
+  // Final review I8: the same day is still reported days later (any unreviewed ended day, not
+  // only yesterday), once; a review clears it.
+  await scanner.scan(at(0));
+  expect((await notes("kind='daily_review_missing'")).length).toBe(2);
+  await db.query("insert into peragus_daily_reviews(day,environment,reviewed_by) values($1::date,'test',$2)",[day,randomUUID()]);
+  await scanner.scan(at(0));
+  expect((await notes("kind='daily_review_missing'")).length).toBe(2);
  });
 
  it("outbox is environment-guarded, RLS-protected and its audit is immutable",async()=>{

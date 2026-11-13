@@ -51,7 +51,9 @@ export const backoffMinutes=(attempts:number)=>attempts<15?1:attempts<45?5:15;
 /** Discovers existing requests only. Every provider call is a read, never a retry of a send. */
 export class CustomerReconciliationService {
  private readonly e:RowEnvironment;
- constructor(private readonly pool:Pick<Pool,"query">,private readonly reader:CustomerReconciliationReader,mode:MoneyMode){this.e=rowEnvironment(mode);}
+ /** `sweep`: local expiries run before each tick (accepted TTL, final review I3); a failure never stops reconciliation. */
+ constructor(private readonly pool:Pick<Pool,"query">,private readonly reader:CustomerReconciliationReader,mode:MoneyMode,
+  private readonly sweep?:()=>Promise<unknown>){this.e=rowEnvironment(mode);}
  async discover(){
   await this.pool.query(`insert into peragus_customer_reconciliation(customer_id,purchase_intent_id,pix_id,created_at,environment)
    select x.customer_id,x.purchase_intent_id,x.id,x.created_at,'${this.e.mode}' from peragus_customer_sandbox_pix x
@@ -66,6 +68,7 @@ export class CustomerReconciliationService {
    order by e.created_at,e.id limit 100 on conflict do nothing`);
  }
  async run(){
+  if(this.sweep){try{await this.sweep();}catch{console.warn(JSON.stringify({event:"customer_reconciliation_sweep_failed",code:"SWEEP_UNAVAILABLE"}));}}
   await this.discover();
   // If a worker died on its final lease, persist the unresolved terminal checkpoint.
   await this.pool.query(`with exhausted as (

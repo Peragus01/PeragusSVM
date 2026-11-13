@@ -23,22 +23,42 @@ export const dayActivitySql=(environment:string,day:string)=>`exists(select 1 fr
   and a.created_at>=(${day})::timestamp at time zone '${DAILY_REVIEW_TIME_ZONE}'
   and a.created_at<((${day})+1)::timestamp at time zone '${DAILY_REVIEW_TIME_ZONE}')`;
 
+/** Default first day that must be reviewed (DAILY_REVIEW_FLOOR_DATE; final review I8). */
+export const DEFAULT_DAILY_REVIEW_FLOOR_DATE="2026-11-01";
+let floorDate=DEFAULT_DAILY_REVIEW_FLOOR_DATE;
+const isDay=(day:string)=>/^\d{4}-\d{2}-\d{2}$/.test(day) && new Date(`${day}T00:00:00Z`).toISOString().slice(0,10)===day;
+/** Set once at boot from DAILY_REVIEW_FLOOR_DATE (API and worker use the same value). */
+export function setDailyReviewFloorDate(day:string){if(!isDay(day))throw new Error("DAILY_REVIEW_FLOOR_DATE_INVALID");floorDate=day;}
+export const dailyReviewFloorDate=()=>floorDate;
+
 /**
- * Refuses (DAILY_REVIEW_REQUIRED) a new operation when the previous São Paulo calendar
- * day had operation activity in the recorded database environment and no daily review.
- * Runs on the caller's open transaction, right after assertControlEnabled(client,
- * "new_operations"). `now` defaults to the database clock. Never used by reconciliation,
- * refunds, sends of already-approved operations or reads.
+ * SQL (one row per day): every ENDED São Paulo day from `floor` with operation activity in
+ * `environment` and no daily review, oldest first. `today` is a São Paulo date expression.
  */
-export async function assertPreviousDayReviewed(client:Pick<PoolClient,"query">,now?:Date):Promise<void>{
- const r=await client.query<{day:string;active:boolean;reviewed:boolean}>(`with d as (
-   select (((coalesce($1::timestamptz,now())) at time zone '${DAILY_REVIEW_TIME_ZONE}')::date-1) as day,e.environment
+export const unreviewedDaysSql=(environment:string,floor:string,today:string)=>`select distinct (a.created_at at time zone '${DAILY_REVIEW_TIME_ZONE}')::date as day
+ from peragus_operation_status_events a
+ where a.environment=${environment} and a.actor<>'system:migration_045'
+  and a.created_at>=(${floor})::timestamp at time zone '${DAILY_REVIEW_TIME_ZONE}'
+  and a.created_at<(${today})::timestamp at time zone '${DAILY_REVIEW_TIME_ZONE}'
+  and not exists(select 1 from peragus_daily_reviews v where v.environment=${environment}
+   and v.day=(a.created_at at time zone '${DAILY_REVIEW_TIME_ZONE}')::date)`;
+
+/**
+ * Refuses (DAILY_REVIEW_REQUIRED, naming the oldest such day) a new operation when ANY ended
+ * São Paulo day since DAILY_REVIEW_FLOOR_DATE had operation activity in the recorded database
+ * environment and no daily review (final review I8; previously only yesterday). Today never
+ * counts (it has not ended). Runs on the caller's open transaction, right after
+ * assertControlEnabled(client,"new_operations"). `now` defaults to the database clock. Never
+ * used by reconciliation, refunds, sends of already-approved operations or reads.
+ */
+export async function assertPreviousDayReviewed(client:Pick<PoolClient,"query">,now?:Date,floor:string=floorDate):Promise<void>{
+ const r=await client.query<{day:string|null}>(`with d as (
+   select ((coalesce($1::timestamptz,now())) at time zone '${DAILY_REVIEW_TIME_ZONE}')::date as today,e.environment
    from peragus_database_environment e where e.singleton
-  ) select d.day::text as day,${dayActivitySql("d.environment","d.day")} as active,
-   exists(select 1 from peragus_daily_reviews v where v.day=d.day and v.environment=d.environment) as reviewed
-  from d`,[now?now.toISOString():null]);
- const row=r.rows[0];
- if(row?.active===true && row.reviewed!==true)throw new DailyReviewRequiredError(row.day);
+  ) select (select min(u.day)::text from (${unreviewedDaysSql("d.environment","$2::date","d.today")}) u) as day from d`,
+  [now?now.toISOString():null,floor]);
+ const day=r.rows[0]?.day;
+ if(day)throw new DailyReviewRequiredError(day);
 }
 
 export const dailyReviewInput=z.object({

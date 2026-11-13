@@ -6,7 +6,7 @@ import {AuthenticationError} from "../src/auth/customer-access.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerPurchaseIntentRepository} from "../src/repositories/postgres-customer-purchase-intents.js";
 import {CustomerPurchaseIntentService} from "../src/purchases/customer-purchase-intents.js";
-import {assertPreviousDayReviewed,DailyReviewRequiredError,DailyReviewService} from "../src/operations/daily-review.js";
+import {assertPreviousDayReviewed,DailyReviewRequiredError,DailyReviewService,DEFAULT_DAILY_REVIEW_FLOOR_DATE,setDailyReviewFloorDate} from "../src/operations/daily-review.js";
 import {allAcceptedLegal} from "./helpers/legal-double.js";
 import {setRuntimeControls} from "./helpers/runtime-controls.js";
 import {migrateAll,pglitePool,purchaseReadyCustomer} from "./helpers/operation-fixture.js";
@@ -68,7 +68,8 @@ describe("daily review",()=>{
   // The scanner's view and an explicit clock agree: a review of another day does not count.
   const client={query:(sql:string,params?:unknown[])=>db.query(sql,params)} as any;
   await expect(assertPreviousDayReviewed(client)).rejects.toBeInstanceOf(DailyReviewRequiredError);
-  await expect(assertPreviousDayReviewed(client,new Date(Date.now()+86_400_000*3))).resolves.toBeUndefined();
+  // Final review I8: any unreviewed ended day blocks, not only yesterday.
+  await expect(assertPreviousDayReviewed(client,new Date(Date.now()+86_400_000*3))).rejects.toMatchObject({day:yesterday});
   // The operator reviews yesterday (allowlist + fresh MFA); new operations resume.
   const app=await appFor(fresh());
   const review=await app.inject({method:"POST",url:"/v1/admin/daily-reviews",headers,payload:{day:yesterday,note:"Revisado: 1 operação, sem divergências."}});
@@ -132,5 +133,25 @@ describe("daily review",()=>{
   expect(JSON.stringify(after)).not.toMatch(/reviewed_by|note|Nota|@|[0-9a-f]{8}-[0-9a-f]{4}/i);
   for(const bad of [`?day=${tomorrow}`,"?day=2026-02-30","?day=yesterday","",`?day=${day}&x=1`,"?day=2025-12-31"])
    expect((await app.inject({method:"GET",url:`${url}${bad}`,headers})).statusCode,bad).toBe(400);
+ });
+
+ it("final review I8: any unreviewed ended day since DAILY_REVIEW_FLOOR_DATE blocks (oldest first); older days do not",async()=>{
+  const older=await spDay(-9),old=await spDay(-8);
+  const first=await activityOn(older);
+  const owner=(await db.query<{customer_id:string}>("select customer_id from peragus_customer_purchase_intents where id=$1",[first])).rows[0]!.customer_id;
+  await db.query(`insert into peragus_operation_status_events(purchase_id,customer_id,from_status,to_status,actor,reason,environment,created_at)
+   values($1,$2,'accepted','accepted','system:test','synthetic note','test',($3::date+time '12:00') at time zone 'America/Sao_Paulo')`,[first,owner,old]);
+  const s=await purchaseReadyCustomer(db,pool);
+  try{
+   // The floor excludes `older`; `old` (8 days ago, not yesterday) still blocks.
+   setDailyReviewFloorDate(old);
+   await expect(purchases.record(s.customer.id,s.requestId,s.quoteId)).rejects.toMatchObject({code:"DAILY_REVIEW_REQUIRED",day:old});
+   setDailyReviewFloorDate(older);
+   await expect(purchases.record(s.customer.id,s.requestId,s.quoteId)).rejects.toMatchObject({code:"DAILY_REVIEW_REQUIRED",day:older});
+   const app=await appFor(fresh());
+   for(const day of [older,old])expect((await app.inject({method:"POST",url:"/v1/admin/daily-reviews",headers,payload:{day}})).statusCode).toBe(200);
+   await expect(purchases.record(s.customer.id,s.requestId,s.quoteId)).resolves.toMatchObject({replayed:false});
+   expect(()=>setDailyReviewFloorDate("2026-02-30")).toThrow("DAILY_REVIEW_FLOOR_DATE_INVALID");
+  }finally{setDailyReviewFloorDate(DEFAULT_DAILY_REVIEW_FLOOR_DATE);}
  });
 });

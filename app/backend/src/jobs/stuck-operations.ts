@@ -2,7 +2,7 @@ import type {Pool} from "pg";
 import type {PgBoss} from "pg-boss";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
-import {dayActivitySql,DAILY_REVIEW_TIME_ZONE} from "../operations/daily-review.js";
+import {dailyReviewFloorDate,DAILY_REVIEW_TIME_ZONE,unreviewedDaysSql} from "../operations/daily-review.js";
 import {DRAIN_MAX,SEND_TIMEOUT_MS} from "../operations/operator-notifications.js";
 
 /** pg-boss expiry of both jobs. A worst-case drain (every send timing out) must fit inside it. */
@@ -103,14 +103,12 @@ export class StuckOperationScanner {
     and not exists(select 1 from peragus_operation_status_events m where m.purchase_id=p.id and m.actor='system:migration_045')
     and not exists(select 1 from peragus_operator_refund_decisions o where o.purchase_id=p.id)
    union all
-   -- The previous São Paulo day had operation activity and was not reviewed.
+   -- Every ended São Paulo day since DAILY_REVIEW_FLOOR_DATE with activity and no review (I8).
    select 'daily_review_missing','high','daily_review_missing:'||d.day::text,null::uuid,jsonb_build_object('day',d.day::text)
-   from (select ((clock.now at time zone '${DAILY_REVIEW_TIME_ZONE}')::date-1) as day from clock) d
-   where ${dayActivitySql(env,"d.day")}
-    and not exists(select 1 from peragus_daily_reviews v where v.day=d.day and v.environment=${env})
+   from clock,lateral (${unreviewedDaysSql(env,"$2::date",`(clock.now at time zone '${DAILY_REVIEW_TIME_ZONE}')::date`)}) d
   ) select coalesce(sum(peragus_enqueue_operator_notification(${env},c.kind,c.severity,c.dedupe_key,c.purchase_id,
     case when c.purchase_id is null then '{}'::jsonb else peragus_operator_notification_purchase(c.purchase_id) end||c.payload)),0)::int as n
-  from candidates c`,[now?now.toISOString():null]);
+  from candidates c`,[now?now.toISOString():null,dailyReviewFloorDate()]);
   return{enqueued:Number(r.rows[0]?.n??0)};
  }
 }

@@ -1160,3 +1160,135 @@ describe('audited sandbox withdrawal closure',()=>{
   for(const role of ['anon','authenticated'])expect((await db.query<any>("select has_table_privilege($1,'peragus_sandbox_withdrawal_closures','select') as allowed",[role])).rows[0].allowed).toBe(false);
  });
 });
+
+import {OperatorResolutionService} from "../src/operations/operator-resolutions.js";
+describe("final review: operator resolutions (Rulings 38/39) and send dead ends",()=>{
+ const resolutionReason="Checked OZAV and the chain; resolving per runbook.";
+ async function resolutions(f:Awaited<ReturnType<typeof executionFixture>>,tx?:unknown){
+  const delivery=deliveryCheck(tx);
+  return{delivery,service:new OperatorResolutionService({pool,mode:"test",operators:new Set([f.user.id]),pix:{repo:f.pixRepo,provider:f.provider as any},
+   delivery:{repo:f.repo,provider:f.provider,check:delivery}})};
+ }
+ async function sent(net:string|null="199.950000"){
+  const f=await executionFixture();f.observed.targetAmount=net as any;f.observed.transactionReference=SIGNATURE as any;
+  await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+  expect(await operationStatus(f.p.data.id)).toBe("sent");
+  return f;
+ }
+ it("a transaction without blockTime keeps the operation sent (pending BLOCK_TIME_MISSING), never review",async()=>{
+  const f=await sent(),delivery=deliveryCheck(chainTx(f.s.wallet,199950000n,TEST_USDT_MINT,null,null));
+  const view=await new SandboxWithdrawalExecutionService(f.repo,f.provider,f.approvals,f.destination,f.policy,delivery).reconcile(f.user,f.wr.data.id);
+  expect(await operationStatus(f.p.data.id)).toBe("sent");
+  expect(view).toMatchObject({delivery_status:null,delivery_pending_reason:"BLOCK_TIME_MISSING"});
+  // The operator re-verification re-runs the same check once the RPC returns the block time.
+  const {service}=await resolutions(f,chainTx(f.s.wallet,199950000n));
+  const r=await service.reverifyDelivery(f.user,f.p.data.id,randomUUID(),resolutionReason);
+  expect(r.data).toMatchObject({action:"reverify_delivery",from_status:"sent",to_status:"delivered_verified"});
+  expect(await operationStatus(f.p.data.id)).toBe("delivered_verified");
+ });
+ it("re-verification moves a delivery review to delivered_verified with the same Ruling 30 checks; idempotent and fresh-MFA",async()=>{
+  const f=await sent();
+  await new SandboxWithdrawalExecutionService(f.repo,f.provider,f.approvals,f.destination,f.policy,deliveryCheck(chainTx(f.s.wallet,199000000n))).reconcile(f.user,f.wr.data.id);
+  expect(await operationStatus(f.p.data.id)).toBe("needs_review");
+  // Still wrong on chain: stays in review with the reason recorded.
+  const wrong=await resolutions(f,chainTx(f.s.wallet,199000000n));
+  const first=await wrong.service.reverifyDelivery(f.user,f.p.data.id,randomUUID(),resolutionReason);
+  expect(first.data).toMatchObject({from_status:"needs_review",to_status:"needs_review",outcome:"REVIEW: AMOUNT_MISMATCH"});
+  const ok=await resolutions(f,chainTx(f.s.wallet,199950000n)),requestId=randomUUID();
+  await expect(ok.service.reverifyDelivery({...f.user,mfaVerifiedAt:Math.floor(Date.now()/1000)-3600},f.p.data.id,requestId,resolutionReason)).rejects.toMatchObject({code:"OPERATOR_MFA_STALE"});
+  const done=await ok.service.reverifyDelivery(f.user,f.p.data.id,requestId,resolutionReason);
+  expect(done).toMatchObject({replayed:false,data:{to_status:"delivered_verified"}});
+  expect(await operationStatus(f.p.data.id)).toBe("delivered_verified");
+  expect((await statusEvents(f.p.data.id)).at(-1)).toMatchObject({from_status:"needs_review",to_status:"delivered_verified"});
+  expect((await ok.service.reverifyDelivery(f.user,f.p.data.id,requestId,resolutionReason)).replayed).toBe(true);
+  await expect(ok.service.reverifyDelivery(f.user,f.p.data.id,requestId,"A different reason for the same request.")).rejects.toMatchObject({code:"RESOLUTION_IDEMPOTENCY_CONFLICT"});
+  expect(f.sends()).toBe(1);
+  // The database refuses delivered_verified out of a review not entered from `sent`.
+  const g=await executionFixture();await repo.transitionOperation(g.p.data.id,"needs_review","system:test","synthetic review from approved");
+  await expect(repo.transitionOperation(g.p.data.id,"delivered_verified","system:test","synthetic")).rejects.toThrow();
+ });
+ it("HTTP: POST /v1/admin/operations/:id/resolutions/* needs the allowlist, fresh MFA, a reason and a request_id",async()=>{
+  const f=await sent();
+  await new SandboxWithdrawalExecutionService(f.repo,f.provider,f.approvals,f.destination,f.policy,deliveryCheck(chainTx(f.s.wallet,199000000n))).reconcile(f.user,f.wr.data.id);
+  const {service}=await resolutions(f,chainTx(f.s.wallet,199950000n));
+  const appAs=async(identity:object)=>{const app=await buildApp({operatorUserIds:new Set([f.user.id]),customerAccess:{legal:allAcceptedLegal,customers,authenticate:async()=>identity as any},operatorResolutionService:service});apps.push(app);return app;};
+  const url=`/v1/admin/operations/${f.p.data.id}/resolutions/reverify-delivery`,headers={authorization:"Bearer valid"};
+  const outsider=await appAs({...f.user,id:randomUUID()});
+  expect((await outsider.inject({method:"POST",url,headers,payload:{request_id:randomUUID(),reason:resolutionReason}})).statusCode).toBe(403);
+  const app=await appAs(f.user);
+  for(const bad of [{request_id:randomUUID()},{request_id:randomUUID(),reason:"short"},{request_id:"x",reason:resolutionReason},{request_id:randomUUID(),reason:resolutionReason,extra:1}])
+   expect((await app.inject({method:"POST",url,headers,payload:bad})).statusCode,JSON.stringify(bad)).toBe(400);
+  const stale=await appAs({...f.user,mfaVerifiedAt:Math.floor(Date.now()/1000)-3600});
+  expect((await stale.inject({method:"POST",url,headers,payload:{request_id:randomUUID(),reason:resolutionReason}})).json()).toEqual({error:{code:"OPERATOR_MFA_STALE"}});
+  const ok=await app.inject({method:"POST",url,headers,payload:{request_id:randomUUID(),reason:resolutionReason}});
+  expect(ok.statusCode).toBe(201);expect(ok.headers["cache-control"]).toBe("no-store");
+  expect(ok.json().data).toMatchObject({action:"reverify_delivery",to_status:"delivered_verified"});
+  const close=await app.inject({method:"POST",url:`/v1/admin/operations/${f.p.data.id}/resolutions/close-unpaid-review`,headers,payload:{request_id:randomUUID(),reason:resolutionReason}});
+  expect(close.statusCode).toBe(409);expect(close.json().error.code).toBe("RESOLUTION_OPERATION_NOT_IN_REVIEW");
+  const list=await app.inject({method:"GET",url:`/v1/admin/operations/${f.p.data.id}/resolutions`,headers});
+  expect(list.json().data).toHaveLength(1);expect(JSON.stringify(list.json())).not.toContain(resolutionReason);
+ });
+ it("a send OZAV ends failed moves sent to needs_review (OZAV_SEND_FAILED), never silently pending",async()=>{
+  const f=await executionFixture();f.observed.status="payout_initiated";f.observed.destinationLegStatus="pending";
+  await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);expect(await operationStatus(f.p.data.id)).toBe("sent");
+  f.observed.status="failed";f.observed.destinationLegStatus="failed";
+  await f.execution.reconcile(f.user,f.wr.data.id);
+  expect(await operationStatus(f.p.data.id)).toBe("needs_review");
+  expect((await statusEvents(f.p.data.id)).at(-1)!.reason).toMatch(/^OZAV_SEND_FAILED/);
+ });
+ it("Ruling 38: a refused send allows the refund decision only after a GET-only find confirmed no transfer",async()=>{
+  const f=await executionFixture();f.setMode("travel_rule");
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toMatchObject({code:"WITHDRAWAL_SEND_REFUSED"});
+  expect(await operationStatus(f.p.data.id)).toBe("needs_review");
+  const refunds=new ManualRefundService(pool,new Set([f.user.id]),true,"test",true);
+  await expect(refunds.operationDecision(f.user,f.p.data.id,randomUUID(),resolutionReason)).rejects.toThrow("REFUND_WITHDRAWAL_IN_PROGRESS");
+  // A transfer found by metadata keeps the decision refused (and alerts).
+  f.setFound(f.sendId);await f.execution.reconcile(f.user,f.wr.data.id);
+  await expect(refunds.operationDecision(f.user,f.p.data.id,randomUUID(),resolutionReason)).rejects.toThrow("REFUND_WITHDRAWAL_IN_PROGRESS");
+  // Another operation: the find returns nothing -> confirmed clear -> refund decision allowed.
+  await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+  const g=await executionFixture();g.setMode("travel_rule");
+  await expect(g.execution.execute(g.user,g.wr.data.id,g.executionRequestId)).rejects.toMatchObject({code:"WITHDRAWAL_SEND_REFUSED"});
+  expect((await g.execution.reconcile(g.user,g.wr.data.id))).toMatchObject({refused_find_clear:true,refused_transfer_found:false});
+  const gRefunds=new ManualRefundService(pool,new Set([g.user.id]),true,"test",true);
+  expect((await gRefunds.operationDecision(g.user,g.p.data.id,randomUUID(),resolutionReason)).data.status).toBe("refund_pending");
+ });
+ it("R38 path for approved with a permanent blocker: back to review (no send claimed), then the refund decision",async()=>{
+  const f=await executionFixture();f.setTokenAccount(false);
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toMatchObject({code:"DESTINATION_TOKEN_ACCOUNT_MISSING"});
+  const {service}=await resolutions(f);
+  const r=await service.returnApprovedToReview(f.user,f.p.data.id,randomUUID(),resolutionReason);
+  expect(r.data).toMatchObject({from_status:"approved",to_status:"needs_review",outcome:"DESTINATION_TOKEN_ACCOUNT_MISSING"});
+  const refunds=new ManualRefundService(pool,new Set([f.user.id]),true,"test",true);
+  expect((await refunds.operationDecision(f.user,f.p.data.id,randomUUID(),resolutionReason)).data.status).toBe("refund_pending");
+  // A claimed send can never be returned to review this way.
+  await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+  const g=await sent();const other=await resolutions(g);
+  await expect(other.service.returnApprovedToReview(g.user,g.p.data.id,randomUUID(),resolutionReason)).rejects.toMatchObject({code:"RESOLUTION_OPERATION_NOT_APPROVED"});
+ });
+ it("I7: approving a refund request needs a refund_pending operation; an approval supersedes a legacy rejection so the refund completes",async()=>{
+  const f=await executionFixture();f.setMode("travel_rule");
+  await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toMatchObject({code:"WITHDRAWAL_SEND_REFUSED"});
+  await f.execution.reconcile(f.user,f.wr.data.id);
+  const refunds=new ManualRefundService(pool,new Set([f.user.id]),true,"test",true);
+  const decided=await refunds.operationDecision(f.user,f.p.data.id,randomUUID(),resolutionReason);
+  const refundId=decided.data.refund_request.id;
+  // Legacy: a rejection was recorded on the request.
+  await refunds.decide(f.user,refundId,randomUUID(),"rejected","Legacy rejection before the policy change.");
+  await expect(refunds.decide({...f.user,mfaVerifiedAt:Math.floor(Date.now()/1000)-3600},refundId,randomUUID(),"approved",resolutionReason)).rejects.toThrow("OPERATOR_MFA_STALE");
+  const approvalId=randomUUID(),approved=await refunds.decide(f.user,refundId,approvalId,"approved",resolutionReason);
+  expect(approved).toMatchObject({replayed:false,data:{state:"approved"}});
+  expect((await refunds.decide(f.user,refundId,approvalId,"approved",resolutionReason)).replayed).toBe(true);
+  const both=(await db.query<{decision:string;supersedes:boolean}>("select decision,supersedes_decision_id is not null supersedes from peragus_manual_refund_decisions where refund_request_id=$1 order by created_at",[refundId])).rows;
+  expect(both).toEqual([{decision:"rejected",supersedes:false},{decision:"approved",supersedes:true}]);
+  await refunds.complete(f.user,refundId,randomUUID(),"1000.00","OZAV-REFUND-REFERENCE");
+  expect(await operationStatus(f.p.data.id)).toBe("refunded");
+  // Not refund_pending: refused.
+  await db.query("truncate peragus_sandbox_withdrawal_executions cascade");
+  const g=await executionFixture();
+  const raw=(await db.query<{id:string}>(`insert into peragus_customer_refund_requests(id,customer_id,purchase_intent_id,pix_id,request_id,reason,amount_brl,environment)
+   values($1,$2,$3,$4,$5,'Synthetic legacy refund request.',1000,'test') returning id`,[randomUUID(),g.s.customer.id,g.p.data.id,g.pixId,randomUUID()])).rows[0]!.id;
+  const gRefunds=new ManualRefundService(pool,new Set([g.user.id]),true,"test",true);
+  await expect(gRefunds.decide(g.user,raw,randomUUID(),"approved",resolutionReason)).rejects.toThrow("REFUND_OPERATION_NOT_REFUND_PENDING");
+ });
+});

@@ -74,6 +74,8 @@ export interface ReadinessReport {
 export const READINESS_DATABASE_TIMEOUT_MS = 2_000;
 export const READINESS_OZAV_TIMEOUT_MS = 3_000;
 export const READINESS_OZAV_CACHE_MS = 30_000;
+/** Database and queue results are shared by concurrent requests and cached this long (final review). */
+export const READINESS_DATABASE_CACHE_MS = 2_000;
 
 async function withTimeout(run: () => Promise<void>, timeoutMs: number): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
@@ -105,36 +107,38 @@ async function outcome(run: () => Promise<void>, timeoutMs: number): Promise<Rea
  */
 export function createReadinessChecker(
   probes: ReadinessProbes,
-  options: { now?: () => number; ozavCacheMs?: number; timeoutMs?: number; ozavTimeoutMs?: number } = {},
+  options: { now?: () => number; ozavCacheMs?: number; timeoutMs?: number; ozavTimeoutMs?: number; databaseCacheMs?: number } = {},
 ): () => Promise<ReadinessReport> {
   const now = options.now ?? Date.now;
   const ozavCacheMs = options.ozavCacheMs ?? READINESS_OZAV_CACHE_MS;
   const timeoutMs = options.timeoutMs ?? READINESS_DATABASE_TIMEOUT_MS;
   const ozavTimeoutMs = options.ozavTimeoutMs ?? READINESS_OZAV_TIMEOUT_MS;
-  let ozavCache: { at: number; result: ReadinessCheckResult } | undefined;
-  let ozavInflight: Promise<ReadinessCheckResult> | undefined;
+  const databaseCacheMs = options.databaseCacheMs ?? READINESS_DATABASE_CACHE_MS;
 
-  const ozavCheck = async (): Promise<ReadinessCheckResult> => {
-    const probe = probes.ozav;
-    if (!probe) return "ok";
-    if (ozavCache && now() - ozavCache.at < ozavCacheMs) return ozavCache.result;
-    ozavInflight ??= outcome(probe, ozavTimeoutMs)
-      .then((result) => {
-        ozavCache = { at: now(), result };
-        return result;
-      })
-      .finally(() => {
-        ozavInflight = undefined;
-      });
-    return ozavInflight;
+  /** One in-flight probe shared by concurrent callers; its result is cached for `cacheMs`. */
+  const shared = (probe: (() => Promise<void>) | undefined, missing: ReadinessCheckResult, probeTimeoutMs: number, cacheMs: number) => {
+    let cache: { at: number; result: ReadinessCheckResult } | undefined;
+    let inflight: Promise<ReadinessCheckResult> | undefined;
+    return async (): Promise<ReadinessCheckResult> => {
+      if (!probe) return missing;
+      if (cache && now() - cache.at < cacheMs) return cache.result;
+      inflight ??= outcome(probe, probeTimeoutMs)
+        .then((result) => {
+          cache = { at: now(), result };
+          return result;
+        })
+        .finally(() => {
+          inflight = undefined;
+        });
+      return inflight;
+    };
   };
+  const databaseCheck = shared(probes.database, "failed", timeoutMs, databaseCacheMs);
+  const queueCheck = shared(probes.queue, "failed", timeoutMs, databaseCacheMs);
+  const ozavCheck = shared(probes.ozav, "ok", ozavTimeoutMs, ozavCacheMs);
 
   return async () => {
-    const [database, queue, ozav] = await Promise.all([
-      probes.database ? outcome(probes.database, timeoutMs) : Promise.resolve<ReadinessCheckResult>("failed"),
-      probes.queue ? outcome(probes.queue, timeoutMs) : Promise.resolve<ReadinessCheckResult>("failed"),
-      ozavCheck(),
-    ]);
+    const [database, queue, ozav] = await Promise.all([databaseCheck(), queueCheck(), ozavCheck()]);
     const ready = database === "ok" && queue === "ok" && ozav === "ok";
     return { status: ready ? "ready" : "not_ready", checks: { database, queue, ozav } };
   };
@@ -151,10 +155,15 @@ export function databaseReadinessProbe(
   };
 }
 
-/** Cheap pg-boss schema reachability check; never starts or touches jobs. */
-export function queueReadinessProbe(pool: Pick<Pool, "query">): () => Promise<void> {
+/**
+ * Cheap pg-boss schema reachability check; never starts or touches jobs. With `worker`, the
+ * background worker must also have beaten recently (final review I12: a dead worker means no
+ * reconciliation, alerts or expiries, so the queue is reported failed).
+ */
+export function queueReadinessProbe(pool: Pick<Pool, "query">, worker?: () => Promise<void>): () => Promise<void> {
   return async () => {
     const { rows } = await pool.query("select to_regclass('pgboss.job') is not null as ok");
     if ((rows[0] as { ok?: unknown } | undefined)?.ok !== true) throw new Error("QUEUE_SCHEMA_MISSING");
+    if (worker) await worker();
   };
 }

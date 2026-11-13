@@ -28,6 +28,9 @@ import { assertDatabaseEnvironment, runMoneyEnvironmentBootChecks } from "./conf
 import { moneyModeFor, resolveMoneyEnvironment } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import { verifyDatabaseConnection } from "./database/readiness.js";
+import { startWorkerHeartbeat } from "./operations/worker-heartbeat.js";
+import { setDailyReviewFloorDate } from "./operations/daily-review.js";
+let stopHeartbeat: (() => void) | undefined;
 import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -284,6 +287,7 @@ async function shutdown(
     }),
   );
 
+  stopHeartbeat?.();
   await boss.stop({
     graceful: true,
     timeout: 30_000,
@@ -322,6 +326,10 @@ try {
   );
   if (process.env.RAILWAY_ENVIRONMENT_NAME) await verifyDatabaseConnection(pool);
   await startJobQueue(boss);
+  // Final review I8: same review floor as the API (the scanner reports every missing day).
+  setDailyReviewFloorDate(env.DAILY_REVIEW_FLOOR_DATE);
+  // Final review I12: /ready (API) fails when this beat is older than 3 minutes.
+  stopHeartbeat = startWorkerHeartbeat(pool, moneyModeFor(env), (event) => console.warn(JSON.stringify(event)));
   await ensureSettlementQueues(boss);
   if(env.CUSTOMER_RECONCILIATION_ENABLED){
     // Refuse to reconcile against a database recorded for the other money environment.
@@ -333,7 +341,10 @@ try {
     const delivery=moneyModeFor(env)==="live" || env.SOLANA_USDT_MINT
       ?{usdtMint:resolveMoneyEnvironment(env).usdtMint,toleranceUnits:env.USDT_DELIVERY_TOLERANCE_UNITS,connection:new Connection(env.SOLANA_RPC_URL,"confirmed")}
       :undefined;
-    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!,moneyModeFor(env),undefined,progression,delivery),moneyModeFor(env)));
+    // Final review I3: accepted operations without a claimed Pix expire after the TTL (each tick).
+    const ttlMs=env.ACCEPTED_OPERATION_TTL_MINUTES*60_000;
+    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!,moneyModeFor(env),undefined,progression,delivery),moneyModeFor(env),
+      ()=>progression.expireAbandonedAccepted(ttlMs)));
     console.info(JSON.stringify({event:"customer_reconciliation_configured",enabled:true,providerReadsOnly:true}));
   }else{
     await boss.unschedule(CUSTOMER_RECONCILIATION_QUEUE);

@@ -230,7 +230,7 @@ export async function reconcileExecution(repository:ReconcileRepository,provider
    const stray=await provider.find(row.providerCustomerId,row.id);
    if(stray){await repository.flagRefusedTransfer(row,stray);row.refusedTransferId=stray;}
    // Ruling 38: the GET-only find confirmed no transfer; the refund decision may proceed.
-   else await repository.markRefusedFindClear(row);
+   else{await repository.markRefusedFindClear(row);row.refusedFindClearAt??=new Date().toISOString();}
   }
   return executionView(row);
  }

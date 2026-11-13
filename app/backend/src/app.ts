@@ -7,6 +7,8 @@ import type { PilotInviteService } from "./invites/pilot-invites.js";
 import { registerCustomerReconciliationStatusRoutes } from "./routes/customer-reconciliation-status.js";
 import type { CustomerReconciliationStatusService } from "./jobs/customer-reconciliation.js";
 import { registerManualRefundRoutes } from "./routes/manual-refunds.js";
+import { registerOperatorResolutionRoutes } from "./routes/operator-resolutions.js";
+import type { OperatorResolutionService } from "./operations/operator-resolutions.js";
 import type { ManualRefundService } from "./refunds/manual-refunds.js";
 import type { SandboxWithdrawalRecoveryService } from "./withdrawals/sandbox-recovery.js";
 import { registerOperatorWithdrawalAuditRoutes } from "./routes/operator-withdrawal-audit.js";
@@ -99,6 +101,8 @@ export interface BuildAppOptions {
   moneyMode?: MoneyMode;
   inviteDelivery?: InviteDeliveryOptions;
   manualRefundService?: ManualRefundService;
+  /** Ruling 39 operator resolutions (close unpaid review, re-verify delivery, approved -> review, reconcile Pix). */
+  operatorResolutionService?: OperatorResolutionService;
   sandboxWithdrawalRecoveryService?: SandboxWithdrawalRecoveryService;
   operatorWithdrawalAuditService?: OperatorWithdrawalAuditService;
   operatorWithdrawalQueueService?: OperatorWithdrawalQueueService;
@@ -268,6 +272,10 @@ export async function buildApp(
   await registerManualRefundRoutes(
     app,
     options.customerAccess ? options.manualRefundService : undefined,
+  );
+  await registerOperatorResolutionRoutes(
+    app,
+    options.customerAccess ? options.operatorResolutionService : undefined,
   );
   await registerOperatorWithdrawalAuditRoutes(
     app,
