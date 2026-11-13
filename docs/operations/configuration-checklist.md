@@ -307,7 +307,7 @@ Mesma lista da seção 1.6 para as variáveis legadas (`OZAV_ONRAMP_WRITES_ENABL
   o KYC live falha fechado até a lista ser atualizada (pendência registrada).
 - **ATA do destinatário:** pendência com a OZAV (criação da conta de token); enquanto aberta, o envio é bloqueado pelo
   blocker `DESTINATION_TOKEN_ACCOUNT_MISSING` e `DESTINATION_TOKEN_ACCOUNT_FROZEN` (conta congelada).
-- **Piso R$ 50:** redução negociada com a OZAV é apenas configuração (`PURCHASE_MIN_BRL`/`PURCHASE_MAX_BRL`); o lançamento não depende dela.
+- **Piso R$ 50:** a redução negociada com a OZAV é apenas configuração: depois que a OZAV confirmar **por escrito** que o mínimo do on-ramp caiu (antes disso a OZAV recusa com `AMOUNT_BELOW_MINIMUM`), defina `PURCHASE_MIN_BRL=50.00` na API **e** no worker (mesmo valor). Cotação, aceite e criação do Pix usam só `PURCHASE_MIN_BRL`..`PURCHASE_MAX_BRL` (não há outro piso no código). `PURCHASE_MAX_BRL` continua limitado pela reserva de contingência. O lançamento não depende dessa redução.
 - Variáveis de uso local/legado que não pertencem a nenhum ambiente hospedado: `SANDBOX_SLOT_RELEASE_CONFIRMATION`,
   `PERAGUS_DEMO_RECIPIENT`, `PERAGUS_DEMO_CORRIDOR_ID`, `OZAV_READINESS_EXPECTED_ENVIRONMENT`, `OZAV_READINESS_API_KEY`, `OZAV_LIVE_PROBE_API_KEY`
   (scripts de linha de comando; nunca definir nos serviços; `OZAV_LIVE_PROBE_API_KEY` só no terminal do responsável, durante o probe `scripts/ozav-live-capabilities.mjs`).

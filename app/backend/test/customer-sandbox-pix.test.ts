@@ -222,3 +222,16 @@ describe("customer-owned sandbox Pix",()=>{
   const disabled=await appFor(f.s,false);expect((await disabled.inject({method:"GET",url:`${url}/${r.json().data.id}`,headers})).statusCode).toBe(503);
  });
 });
+
+describe("Pix eligibility follows the configured purchase limits",()=>{
+ it("accepts a 50 BRL purchase when PURCHASE_MIN_BRL=50.00 and refuses it under the default 1000 BRL floor",async()=>{
+  const s=await setup();
+  await db.query("update peragus_customer_indicative_quotes set source_amount_brl=50,observation=jsonb_set(observation,'{source,amount}','\"50.00\"') where id=$1",[s.quoteId]);
+  const p=await service.record(s.customer.id,s.requestId,s.quoteId);
+  const configured=new PostgresCustomerPixRepository(pool,"test",{minCents:5000n,maxCents:100000n});
+  expect((await configured.context(s.customer.id,p.data.id,"create"))?.amountBrl).toBe("50.00");
+  expect(await new PostgresCustomerPixRepository(pool,"test").context(s.customer.id,p.data.id,"create")).toBeNull();
+  expect(await new PostgresCustomerPixRepository(pool,"test",{minCents:5001n,maxCents:100000n}).context(s.customer.id,p.data.id,"create")).toBeNull();
+  expect(()=>new PostgresCustomerPixRepository(pool,"test",{minCents:0n,maxCents:1n})).toThrow("Invalid purchase limits");
+ });
+});

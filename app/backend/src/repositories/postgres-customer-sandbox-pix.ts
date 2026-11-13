@@ -5,11 +5,13 @@ import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
 import {inControlledTransaction} from "../operations/runtime-controls.js";
 import {CustomerPixError, validatePixTransfer, type CustomerPixRecord, type CustomerPixRepository, type PixContext} from "../purchases/customer-sandbox-pix.js";
 import type {OzavTransfer} from "../providers/ozav-client.js";
-import type {OperationStatus} from "../purchases/operation-status.js";
+import {centsToBrl,DEFAULT_PURCHASE_LIMITS,type OperationStatus,type PurchaseLimits} from "../purchases/operation-status.js";
 // A Pix is created only for an accepted operation; a sandbox simulation may follow once it awaits the Pix.
 const CREATE:readonly OperationStatus[]=["accepted"],FUNDING:readonly OperationStatus[]=["accepted","awaiting_pix"];
 // Statuses come from the closed constants above, so they may be inlined as SQL literals.
-const eligible = (env:RowEnvironment,statuses:readonly OperationStatus[]) => `select p.id as purchase_id,p.provider_customer_id,q.provider_quote_id,p.source_amount_brl,p.wallet_address,
+// The amount must sit within the configured PURCHASE_MIN_BRL..PURCHASE_MAX_BRL (bigint cents,
+// rendered as fixed-point literals, never user input).
+const eligible = (env:RowEnvironment,statuses:readonly OperationStatus[],limits:PurchaseLimits) => `select p.id as purchase_id,p.provider_customer_id,q.provider_quote_id,p.source_amount_brl,p.wallet_address,
    p.facility_terms_version,p.locked_usdt_amount
    from peragus_customer_purchase_intents p join peragus_customer_indicative_quotes q on q.id=p.quote_id and q.customer_id=p.customer_id
    join peragus_customers c on c.id=q.customer_id and c.customer_type='pf' and not c.suspended
@@ -36,7 +38,7 @@ const eligible = (env:RowEnvironment,statuses:readonly OperationStatus[]) => `se
     and sc.observation->>'status'='completed' and sc.observation->>'result'='clear'
     and sc.observation->>'matchesCount'='0' and sc.observation->>'suggestedDecision'='clear'
     and sc.observation->'lists' @> '["sanctions","pep"]'::jsonb
- and p.source_amount_brl>=1000 and p.source_amount_brl=q.source_amount_brl and p.wallet_address=w.wallet_address and p.provider_customer_id=q.provider_customer_id
+ and p.source_amount_brl between ${centsToBrl(limits.minCents)} and ${centsToBrl(limits.maxCents)} and p.source_amount_brl=q.source_amount_brl and p.wallet_address=w.wallet_address and p.provider_customer_id=q.provider_customer_id
  and p.environment='${env.mode}' and p.status in (${statuses.map(v=>`'${v}'`).join(",")})
  ${env.mode==="live"?"and p.facility_terms_version is not null and p.locked_usdt_amount is not null":""}`;
 // Each Pix row with the status and lock fields of the operation it funds.
@@ -53,9 +55,13 @@ const map=(r:Row):CustomerPixRecord=>({id:r.id,customerId:r.customer_id,requestI
  cancelRequestedAt:r.cancel_requested_at==null?null:new Date(r.cancel_requested_at).toISOString(),...(r.locked_usdt_amount===null?{}:{lockedUsdtAmount:r.locked_usdt_amount})});
 export class PostgresCustomerPixRepository implements CustomerPixRepository {
  private readonly e:RowEnvironment;
- constructor(private readonly pool:Pool,mode:MoneyMode){this.e=rowEnvironment(mode);}
+ /** `limits`: the configured purchase limits (purchaseLimits(env)); the default mirrors the env defaults. */
+ constructor(private readonly pool:Pool,mode:MoneyMode,private readonly limits:PurchaseLimits=DEFAULT_PURCHASE_LIMITS){
+  if(limits.minCents<=0n || limits.maxCents<limits.minCents)throw Error("Invalid purchase limits");
+  this.e=rowEnvironment(mode);
+ }
  async context(customerId:string,purchaseId:string,stage?:"create"):Promise<PixContext|null>{
-  const r=await this.pool.query(eligible(this.e,stage==="create"?CREATE:FUNDING),[customerId,purchaseId]),x=r.rows[0];
+  const r=await this.pool.query(eligible(this.e,stage==="create"?CREATE:FUNDING,this.limits),[customerId,purchaseId]),x=r.rows[0];
   return x?{purchaseId:x.purchase_id,providerCustomerId:x.provider_customer_id,providerQuoteId:x.provider_quote_id,amountBrl:x.source_amount_brl,walletAddress:x.wallet_address,
    facilityTermsVersion:x.facility_terms_version,lockedUsdtAmount:x.locked_usdt_amount}:null;
  }
@@ -65,7 +71,7 @@ export class PostgresCustomerPixRepository implements CustomerPixRepository {
   const id=randomUUID();
   // Kill switch new_operations, in the reservation's own transaction (no row while paused).
   await inControlledTransaction(this.pool,"new_operations",client=>client.query(`insert into peragus_customer_sandbox_pix(id,customer_id,request_id,purchase_intent_id,provider_customer_id,provider_quote_id,source_amount_brl,wallet_address,provider_wallet_id,idempotency_key,environment)
-   select $3,$1,$4,e.purchase_id,e.provider_customer_id,e.provider_quote_id,e.source_amount_brl,e.wallet_address,$5,$6,'${this.e.mode}' from (${eligible(this.e,CREATE)}) e
+   select $3,$1,$4,e.purchase_id,e.provider_customer_id,e.provider_quote_id,e.source_amount_brl,e.wallet_address,$5,$6,'${this.e.mode}' from (${eligible(this.e,CREATE,this.limits)}) e
    where e.provider_customer_id=$7 and e.provider_quote_id=$8 and e.source_amount_brl=$9 and e.wallet_address=$10
    on conflict do nothing`,[customerId,c.purchaseId,id,requestId,walletId,`peragus-pix-${id}`,c.providerCustomerId,c.providerQuoteId,c.amountBrl,c.walletAddress]));
   const row=await this.findRequest(customerId,requestId);
@@ -83,7 +89,7 @@ export class PostgresCustomerPixRepository implements CustomerPixRepository {
   const result=await inControlledTransaction(this.pool,"new_operations",client=>client.query(`with locked as (select id from peragus_customer_purchase_intents
     where id=$2 and customer_id=$1 and environment='${this.e.mode}' and status='accepted' and cancel_requested_at is null for update)
    update peragus_customer_sandbox_pix set create_attempted=true,updated_at=now()
-   where id=$3 and not create_attempted and exists(select 1 from locked) and exists(${eligible(this.e,CREATE)}) returning id`,[r.customer_id,r.purchase_intent_id,id]));
+   where id=$3 and not create_attempted and exists(select 1 from locked) and exists(${eligible(this.e,CREATE,this.limits)}) returning id`,[r.customer_id,r.purchase_intent_id,id]));
   return Boolean(result.rows[0]);
  }
  async claimSimulation(row:CustomerPixRecord){
@@ -91,7 +97,7 @@ export class PostgresCustomerPixRepository implements CustomerPixRepository {
    where id=$3 and customer_id=$1 and purchase_intent_id=$2 and not simulation_attempted and create_attempted
     and provider_transfer_id=$4 and observation->>'status'='awaiting_payment'
     and (observation->'source'->'paymentInstructions'->>'expiresAt')::timestamptz>clock_timestamp()
-    and exists(${eligible(this.e,FUNDING)}) returning id`,[row.customerId,row.purchaseId,row.id,row.transferId]);
+    and exists(${eligible(this.e,FUNDING,this.limits)}) returning id`,[row.customerId,row.purchaseId,row.id,row.transferId]);
   return Boolean(r.rows[0]);
  }
  async recordLockDeadline(row:CustomerPixRecord,deadlineAt:string){

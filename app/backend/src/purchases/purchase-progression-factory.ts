@@ -18,5 +18,5 @@ export function createPurchaseProgression(pool: Pool, mode: MoneyMode,
     withdrawals: new PostgresCustomerWithdrawalRequestRepository(pool, mode),
     // System-created refund requests are local records; operator writes stay gated by MANUAL_REFUNDS_ENABLED on the route service.
     refunds: new ManualRefundService(pool, new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), true, mode, true),
-    pix: {repo: new PostgresCustomerPixRepository(pool, mode), provider: reads}});
+    pix: {repo: new PostgresCustomerPixRepository(pool, mode, purchaseLimits(env)), provider: reads}});
 }

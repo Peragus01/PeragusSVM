@@ -723,7 +723,7 @@ const app = await buildApp({
   ...(env.CUSTOMER_SANDBOX_PIX_ENABLED
     ? {
         customerSandboxPixService: new CustomerPixService(
-          new PostgresCustomerPixRepository(pool!, moneyModeFor(env)),
+          new PostgresCustomerPixRepository(pool!, moneyModeFor(env), purchaseLimits(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
             mode: moneyModeFor(env),
