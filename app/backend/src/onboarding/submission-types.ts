@@ -18,6 +18,8 @@ export class SubmissionError extends Error {
 export interface SubmissionRepository {
   find(customerId: string): Promise<SubmissionRecord | null>;
   reserve(record: SubmissionRecord): Promise<SubmissionRecord>;
+  /** Runtime kill switch gate before each registration POST (Postgres: onboarding switch, same transaction). */
+  claimAttempt?(record: SubmissionRecord): Promise<void>;
   complete(record: SubmissionRecord, result: { id: string; status: string; verificationMode: "full" }): Promise<SubmissionRecord>;
   saveSnapshot(customerId: string, providerId: string, version: number, snapshot: OzavCustomerSnapshot): Promise<SubmissionRecord>;
 }

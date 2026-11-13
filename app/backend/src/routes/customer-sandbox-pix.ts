@@ -1,3 +1,4 @@
+import {replyIfPaused} from "../operations/runtime-controls.js";
 import type {FastifyInstance} from "fastify";
 import {z} from "zod";
 import {CustomerPixError, type CustomerPixService} from "../purchases/customer-sandbox-pix.js";
@@ -35,6 +36,7 @@ export async function registerCustomerSandboxPixRoutes(app:FastifyInstance,servi
      }
      return{data:action==="read"?await service.read(customer.id,params.data.id):await service.reconcile(customer.id,params.data.id)};
     }catch(error){
+     if(replyIfPaused(error,reply))return reply;
      if(error instanceof CustomerPixError)return reply.code(error.code==="PIX_NOT_FOUND"?404:409).send({error:{code:error.code,automatic_retry:false}});
      request.log.warn({event:"customer_sandbox_pix_recovery_required"});
      return reply.code(503).send({error:{code:"PIX_OUTCOME_REQUIRES_RECOVERY",automatic_retry:false}});

@@ -2,6 +2,7 @@ import {randomUUID} from "node:crypto";
 import type {Pool,PoolClient} from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
+import {assertControlEnabled} from "../operations/runtime-controls.js";
 import {transitionOperationInTransaction} from "./postgres-customer-purchase-intents.js";
 import type {OperationStatus} from "../purchases/operation-status.js";
 import {SandboxExecutionError,validateWithdrawal,type DeliveryOutcome,type DeliveryStatus,type ExecutionClaim,type ExecutionContext,type SandboxExecution,type SandboxExecutionRepository} from "../withdrawals/sandbox-execution.js";
@@ -129,6 +130,9 @@ export class PostgresSandboxExecutionRepository implements SandboxExecutionRepos
  async claim(row:SandboxExecution):Promise<ExecutionClaim>{
   return this.transaction(async client=>{
    if(await this.lockOperation(client,row.purchaseId)!=="approved")return{commit:false,value:"not_approved" as const};
+   // Kill switch usdt_sends, under the purchase row lock in this claim transaction (before the send POST).
+   // Paused: rolls back; the operation stays approved and the same execution can claim once resumed.
+   await assertControlEnabled(client,"usdt_sends");
    const r=await client.query(`update peragus_sandbox_withdrawal_executions set create_attempted=true,send_attempted_at=now(),updated_at=now()
     where id=$2 and not create_attempted and closed_at is null and not exists(select 1 from peragus_customers where owner_user_id=$3) and exists(${eligible(this.e)}) returning id`,[row.withdrawalId,row.id,row.operatorId]);
    if(!r.rows[0])return{commit:false,value:"taken" as const};

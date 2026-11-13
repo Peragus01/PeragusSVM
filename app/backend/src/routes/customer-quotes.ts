@@ -1,3 +1,4 @@
+import {replyIfPaused} from "../operations/runtime-controls.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
@@ -89,6 +90,7 @@ export async function registerCustomerQuoteRoutes(
               },
             });
           } catch (error) {
+            if (replyIfPaused(error, reply)) return reply;
             if (error instanceof CustomerQuoteError)
               return reply
                 .code(

@@ -1,3 +1,4 @@
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
 import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
@@ -22,14 +23,24 @@ import {
 const db = new PGlite();
 const WIDE = { minCents: 1n, maxCents: 1000000n };
 let failSave = false;
+let connection = Promise.resolve();
+const query = async (sql: string, params?: unknown[]) => {
+  if (failSave && sql.includes("set provider_quote_id=")) {
+    failSave = false;
+    throw new Error("storage unavailable");
+  }
+  const r = await db.query(sql, params);
+  return { ...r, rowCount: r.rows.length };
+};
 const pool = {
-  query: async (sql: string, params?: unknown[]) => {
-    if (failSave && sql.includes("set provider_quote_id=")) {
-      failSave = false;
-      throw new Error("storage unavailable");
-    }
-    const r = await db.query(sql, params);
-    return { ...r, rowCount: r.rows.length };
+  query,
+  // PGlite has one session: connections (the quote claim transaction) are handed out one at a time.
+  connect: async () => {
+    const previous = connection;
+    let release!: () => void;
+    connection = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    return { query, release };
   },
 } as unknown as Pool;
 const customers = new PostgresCustomerRepository(pool),
@@ -48,6 +59,8 @@ beforeAll(async () => {
   await db.exec(
     "insert into peragus_database_environment(environment) values('test')",
   );
+  // Runtime kill switches start OFF (054); this suite performs guarded actions.
+  await enableRuntimeControls(db);
 }, 30000);
 afterAll(async () => {
   await Promise.all(apps.map((a) => a.close()));

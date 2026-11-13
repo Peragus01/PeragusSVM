@@ -70,6 +70,17 @@ describe("live customer Pix", () => {
       expect(document.body.textContent ?? "").not.toMatch(/teste/i);
     },
   );
+  it("explains paused operations and shows no Pix", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json(
+        { error: { code: "OPERATIONS_PAUSED", key: "new_operations", automatic_retry: false } },
+        { status: 503 },
+      ),
+    );
+    await open();
+    expect(screen.getByRole("alert")).toHaveTextContent("Operações temporariamente pausadas");
+    expect(screen.queryByLabelText("Pix copia e cola")).toBeNull();
+  });
   it("shows no instructions for a failed operation", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) =>
       Response.json({

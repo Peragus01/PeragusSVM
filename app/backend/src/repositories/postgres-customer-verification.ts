@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
+import {inControlledTransaction} from "../operations/runtime-controls.js";
 import type { OzavVerification } from "../providers/ozav-client.js";
 import { VerificationError, type VerificationRecord, type VerificationRepository, type SimulationOutcome } from "../onboarding/verification-types.js";
 interface Row { customer_id: string; provider_customer_id: string; verification_id: string | null; create_attempted: boolean;
@@ -22,7 +23,8 @@ export class PostgresCustomerVerificationRepository implements VerificationRepos
     return row;
   }
   async claimCreate(customerId: string) {
-    const r = await this.pool.query(`update peragus_customer_verifications set create_attempted=true,updated_at=now() where customer_id=$1 and environment='${this.e.mode}' and not create_attempted and verification_id is null returning customer_id`, [customerId]);
+    // Kill switch onboarding, read `for share` in the claim's own transaction (before the verification POST).
+    const r = await inControlledTransaction(this.pool, "onboarding", client => client.query(`update peragus_customer_verifications set create_attempted=true,updated_at=now() where customer_id=$1 and environment='${this.e.mode}' and not create_attempted and verification_id is null returning customer_id`, [customerId]));
     return Boolean(r.rows[0]);
   }
   async releaseCreate(customerId: string) {

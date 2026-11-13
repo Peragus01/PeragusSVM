@@ -10,6 +10,7 @@ import { PostgresApiRateLimiter } from "./auth/api-rate-limits.js";
 import { PilotInviteService } from "./invites/pilot-invites.js";
 import { CustomerReconciliationStatusService } from "./jobs/customer-reconciliation.js";
 import { ManualRefundService } from "./refunds/manual-refunds.js";
+import { RuntimeControlService } from "./operations/runtime-controls.js";
 import {
   SandboxWithdrawalRecoveryService,
   createSandboxRecoveryReader,
@@ -524,6 +525,16 @@ const app = await buildApp({
           env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED
             ? createSandboxRecoveryReader(env.OZAV_API_KEY!, moneyMode)
             : undefined,
+        ),
+      }
+    : {}),
+  ...(pool
+    ? {
+        // Runtime kill switches (GET/PUT /v1/admin/runtime-controls): operator + fresh MFA, audited.
+        runtimeControlService: new RuntimeControlService(
+          pool,
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
+          operatorMfaPolicy,
         ),
       }
     : {}),

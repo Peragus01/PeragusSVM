@@ -1,3 +1,4 @@
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
 import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from "node:crypto";
 import {Keypair} from "@solana/web3.js";
@@ -27,6 +28,8 @@ beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");const dir=new URL("../migrations/",import.meta.url);
  for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await db.exec(await readFile(new URL(f,dir),"utf8"));
  await db.exec("insert into peragus_database_environment(environment) values('test')");
+ // Runtime kill switches start OFF (054); this suite performs guarded actions.
+ await enableRuntimeControls(db);
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 async function setup(type:"pf"|"pj"="pf"){

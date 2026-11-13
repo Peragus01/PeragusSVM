@@ -1,3 +1,4 @@
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
 import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from "node:crypto";
 import {Keypair} from "@solana/web3.js";
@@ -29,6 +30,8 @@ beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");const dir=new URL("../migrations/",import.meta.url);
  for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await db.exec(await readFile(new URL(f,dir),"utf8"));
  await db.exec("insert into peragus_database_environment(environment) values('test')");
+ // Runtime kill switches start OFF (054); this suite performs guarded actions.
+ await enableRuntimeControls(db);
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 async function setup(type:"pf"|"pj"="pf"){
@@ -214,7 +217,10 @@ describe("operation status, limits and concurrency",()=>{
   const sent:string[]=[],released:unknown[]=[];
   const client={query:async(sql:string)=>{sent.push(sql.trim().split(/\s+/).slice(0,4).join(" "));
     if(sql.startsWith("insert into peragus_customer_purchase_intents") || sql.startsWith("select status,customer_id"))throw new Error("original failure");
-    if(sql==="rollback")throw new Error("rollback failure");return{rows:[]};},
+    if(sql==="rollback")throw new Error("rollback failure");
+    // The runtime kill switch is read on the same connection; on here so the insert runs.
+    if(sql.includes("from peragus_runtime_controls"))return{rows:[{enabled:true}]};
+    return{rows:[]};},
    release:(err?:unknown)=>{released.push(err);}};
   const fake={query:async()=>({rows:[]}),connect:async()=>client} as unknown as Pool;
   const broken=new PostgresCustomerPurchaseIntentRepository(fake,"test",wide);

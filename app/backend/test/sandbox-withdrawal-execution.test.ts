@@ -1,4 +1,5 @@
 import { allAcceptedLegal } from "./helpers/legal-double.js";
+import { enableRuntimeControls, pauseRuntimeControls } from "./helpers/runtime-controls.js";
 import {SandboxWithdrawalRecoveryService,createSandboxRecoveryReader} from "../src/withdrawals/sandbox-recovery.js";
 import {OperatorWithdrawalAuditService} from "../src/withdrawals/operator-withdrawal-audit.js";
 import {OperatorWithdrawalQueueService} from "../src/withdrawals/operator-withdrawal-queue.js";
@@ -32,6 +33,7 @@ beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");const dir=new URL("../migrations/",import.meta.url);
  for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await db.exec(await readFile(new URL(f,dir),"utf8"));
  await db.exec("insert into peragus_database_environment(environment) values('test')");
+ await enableRuntimeControls(db);
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 async function setup(type:"pf"|"pj"="pf"){
@@ -144,6 +146,30 @@ async function executionFixture(policy:Partial<ExecutionPolicy>={minDelaySeconds
  return{...f,provider,repo,execution,policy,observed,sendId,destination,locked,executionRequestId:randomUUID(),sends:()=>sends,identityReads:()=>identityReads,setMode:(v:string)=>{mode=v;},setFound:(v:string|null)=>{found=v;},
   calls,identifications,tokenChecks,setTokenAccount:(v:boolean|"frozen"|Error)=>{tokenAccount=v;},setTxHash:(v:string|null)=>{txHash=v;}};
 }
+describe("runtime kill switch usdt_sends",()=>{
+ it("paused usdt_sends refuses execution but leaves approved operations untouched",async()=>{
+  await pauseRuntimeControls(db,["usdt_sends"]);
+  try{
+   // Approval stays allowed while sends are paused (the fixture approves).
+   const f=await executionFixture();
+   expect(await operationStatus(f.p.data.id)).toBe("approved");
+   const before=await statusEvents(f.p.data.id);
+   await expect(f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).rejects.toMatchObject({code:"OPERATIONS_PAUSED",key:"usdt_sends"});
+   const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>f.user},sandboxWithdrawalExecutionService:f.execution});apps.push(app);
+   const r=await app.inject({method:"POST",url:`/v1/admin/withdrawal-requests/${f.wr.data.id}/execution`,headers:{authorization:"Bearer valid"},payload:{request_id:f.executionRequestId,confirmation:"SANDBOX_ONLY"}});
+   expect(r.statusCode).toBe(503);expect(r.json()).toEqual({error:{code:"OPERATIONS_PAUSED",key:"usdt_sends",automatic_retry:false}});
+   expect(f.sends()).toBe(0);expect(f.calls).not.toContain("send");
+   expect(await operationStatus(f.p.data.id)).toBe("approved");expect(await statusEvents(f.p.data.id)).toEqual(before);
+   expect((await f.repo.read(f.wr.data.id))?.attempted).toBe(false);
+   // Resuming lets the same execution (same request_id) claim and send exactly once.
+   await enableRuntimeControls(db,["usdt_sends"]);
+   const resumed=await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId);
+   expect(resumed.replayed).toBe(false);expect(f.sends()).toBe(1);
+   expect(await operationStatus(f.p.data.id)).not.toBe("approved");
+   expect((await f.execution.execute(f.user,f.wr.data.id,f.executionRequestId)).replayed).toBe(true);expect(f.sends()).toBe(1);
+  }finally{await enableRuntimeControls(db,["usdt_sends"]);}
+ },60000);
+});
 describe("operator execution guards: fresh MFA, minimum delay, four eyes",()=>{
  // The delay is measured by the database clock: move the persisted approval back in time
  // (the append-only guard is disabled only for this synthetic backdating).

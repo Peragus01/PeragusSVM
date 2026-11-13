@@ -1,5 +1,5 @@
 import { CustomerPix } from "./customer-pix";
-import { journeyRequest } from "@/lib/peragus/journey";
+import { journeyRequest, OPERATIONS_PAUSED_MESSAGE } from "@/lib/peragus/journey";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowDown, ArrowRight, ShieldCheck } from "lucide-react";
@@ -299,6 +299,12 @@ export function AutomaticPurchaseForm({
         );
         return;
       }
+      // Kill switch: nothing was quoted; the explicit retry repeats the same request_id.
+      if (problem.code === "OPERATIONS_PAUSED") {
+        setBlocked(true);
+        setError(OPERATIONS_PAUSED_MESSAGE);
+        return;
+      }
       if (problem.quoteId) {
         const saved = { ...r, quoteId: problem.quoteId };
         try {
@@ -383,7 +389,9 @@ export function AutomaticPurchaseForm({
       if (epoch.current === turn) {
         setBlocked(true);
         setError(
-          `Não foi possível confirmar o registro (${e instanceof PurchaseError ? e.code : "OUTCOME_UNKNOWN"}). Consulte o resultado com os mesmos identificadores.`,
+          e instanceof PurchaseError && e.code === "OPERATIONS_PAUSED"
+            ? OPERATIONS_PAUSED_MESSAGE
+            : `Não foi possível confirmar o registro (${e instanceof PurchaseError ? e.code : "OUTCOME_UNKNOWN"}). Consulte o resultado com os mesmos identificadores.`,
         );
       }
     } finally {

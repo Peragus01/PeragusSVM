@@ -57,6 +57,9 @@ export async function journeyRequest<T = Record<string, unknown>>(
   }
   return value.data as T;
 }
+/** A runtime kill switch is off (HTTP 503 OPERATIONS_PAUSED): nothing was created or moved. */
+export const OPERATIONS_PAUSED_MESSAGE =
+  "Operações temporariamente pausadas. Nada foi registrado; tente novamente mais tarde.";
 export function journeyMessage(error: unknown) {
   const code = error instanceof JourneyError ? error.code : "UNAVAILABLE";
   return (
@@ -72,6 +75,7 @@ export function journeyMessage(error: unknown) {
           "A emissão de convites para novos cadastros ainda não foi configurada.",
         PILOT_INVITES_UNAVAILABLE: "O serviço de convites está indisponível.",
         VALIDATION_ERROR: "Confira os campos informados.",
+        OPERATIONS_PAUSED: OPERATIONS_PAUSED_MESSAGE,
         PROFILE_VERSION_CONFLICT:
           "Os dados mudaram em outra sessão. Atualize a página antes de salvar.",
         VERIFICATION_SESSION_UNAVAILABLE:

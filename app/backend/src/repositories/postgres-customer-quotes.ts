@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
+import {inControlledTransaction} from "../operations/runtime-controls.js";
 import type { OzavIndicativeQuote } from "../providers/ozav-client.js";
 import {
   normalizeQuoteUsdt,
@@ -96,9 +97,12 @@ export class PostgresCustomerQuoteRepository implements CustomerQuoteRepository 
     return row;
   }
   async claim(id: string) {
-    const r = await this.pool.query(
-      `update peragus_customer_indicative_quotes set create_attempted=true,updated_at=now() where id=$1 and environment='${this.e.mode}' and not create_attempted returning id`,
-      [id],
+    // Kill switch new_operations, read `for share` in the claim's own transaction (before the quote POST).
+    const r = await inControlledTransaction(this.pool, "new_operations", (client) =>
+      client.query(
+        `update peragus_customer_indicative_quotes set create_attempted=true,updated_at=now() where id=$1 and environment='${this.e.mode}' and not create_attempted returning id`,
+        [id],
+      ),
     );
     return Boolean(r.rows[0]);
   }

@@ -6,6 +6,7 @@ import {randomBytes,randomUUID} from "node:crypto";
 import {readFile,readdir} from "node:fs/promises";
 import {Keypair} from "@solana/web3.js";
 import {Pool} from "pg";
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
 import {afterAll,beforeAll,describe,expect,it} from "vitest";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerPurchaseIntentRepository} from "../src/repositories/postgres-customer-purchase-intents.js";
@@ -34,6 +35,8 @@ describe.skipIf(!realUrl)("ruling 23 on real PostgreSQL: concurrent withdrawal a
   const dir=new URL("../migrations/",import.meta.url);
   for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await q(await readFile(new URL(f,dir),"utf8"));
   await q("insert into peragus_database_environment(environment) values('test')");
+  // Runtime kill switches start OFF (054); this suite performs guarded actions.
+  await enableRuntimeControls({ query: q });
  },120000);
  afterAll(async()=>{
   await pool?.end();

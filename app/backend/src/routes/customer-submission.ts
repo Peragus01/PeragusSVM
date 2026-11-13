@@ -1,3 +1,4 @@
+import {replyIfPaused} from "../operations/runtime-controls.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CustomerSubmissionService } from "../onboarding/customer-submission-service.js";
@@ -38,6 +39,7 @@ export async function registerCustomerSubmissionRoutes(app: FastifyInstance, ser
           reply.header("Idempotency-Replayed", String(result.replayed));
           return reply.code(result.replayed ? 200 : 201).send({ data: result.data, meta: { idempotent_replay: result.replayed, operations_enabled: false } });
         } catch (error) {
+          if (replyIfPaused(error, reply)) return reply;
           if (error instanceof SubmissionError || error instanceof TermsFlowError) return reply.code(409).send({ error: { code: error.code } });
           if (error instanceof OzavClientError) return reply.code(502).send({ error: { code: "ONBOARDING_PROVIDER_UNAVAILABLE", provider_http_status: error.statusCode ?? null, retryable: error.retryable, automatic_linking: false } });
           request.log.warn({ event: "customer_submission_unavailable" });

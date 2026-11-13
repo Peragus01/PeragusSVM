@@ -1,3 +1,4 @@
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
 import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
@@ -14,10 +15,15 @@ import { PostgresCustomerRepository } from "../src/repositories/postgres-custome
 import { PostgresCustomerWebhookProcessor } from "../src/repositories/postgres-customer-webhook.js";
 import { OzavClient, type OzavWriteRequest } from "../src/providers/ozav-client.js";
 
-const db = new PGlite(); let failSave = false;
-const pool = { query: async (sql: string, params?: unknown[]) => {
+const db = new PGlite(); let failSave = false; let connection = Promise.resolve();
+const query = async (sql: string, params?: unknown[]) => {
   if (failSave && sql.includes("set verification_id=")) { failSave = false; throw new Error("observation unavailable"); }
   const r = await db.query(sql,params); return { ...r, rowCount: r.rows.length };
+};
+// PGlite has one session: connections (the verification claim transaction) are handed out one at a time.
+const pool = { query, connect: async () => {
+  const previous = connection; let release!: () => void; connection = new Promise<void>(resolve => { release = resolve; }); await previous;
+  return { query, release };
 } } as unknown as Pool;
 const customers = new PostgresCustomerRepository(pool), submissions = new PostgresOnboardingSubmissionRepository(pool,"test"), repo = new PostgresCustomerVerificationRepository(pool,"test");
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -26,6 +32,8 @@ beforeAll(async () => {
   const dir = new URL("../migrations/", import.meta.url);
   for (const file of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file,dir),"utf8"));
   await db.exec("insert into peragus_database_environment(environment) values('test')");
+  // Runtime kill switches start OFF (054); this suite performs guarded actions.
+  await enableRuntimeControls(db);
 }, 30000);
 afterAll(async () => { await Promise.all(apps.map(app=>app.close())); await db.close(); });
 async function setup(type: "pf" | "pj" = "pf") {
@@ -206,6 +214,8 @@ describe("live hosted identity verification", () => {
     const dir = new URL("../migrations/", import.meta.url);
     for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await liveDb.exec(await readFile(new URL(file, dir), "utf8"));
     await liveDb.exec("insert into peragus_database_environment(environment) values('live')");
+    // Runtime kill switches start OFF (054); this suite performs guarded actions.
+    await enableRuntimeControls(liveDb);
   }, 30000);
   afterAll(async () => { await liveDb.close(); });
   async function live() {

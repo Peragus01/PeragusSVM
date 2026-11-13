@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
+import {inControlledTransaction} from "../operations/runtime-controls.js";
 import type { OzavCustomerSnapshot } from "../providers/ozav-client.js";
 import { SubmissionError, type SubmissionAttestation, type SubmissionRecord, type SubmissionRepository } from "../onboarding/submission-types.js";
 interface Row { id: string; customer_id: string; draft_version: number; terms_session_id: string; request_hash: string; idempotency_key: string;
@@ -28,6 +29,15 @@ export class PostgresOnboardingSubmissionRepository implements SubmissionReposit
     const saved = await this.find(record.customerId);
     if (!saved || saved.requestHash !== record.requestHash || saved.draftVersion !== record.draftVersion || saved.termsSessionId !== record.termsSessionId) throw new SubmissionError("ONBOARDING_CONFLICT");
     return saved;
+  }
+  /**
+   * Gate before every registration POST (first attempt or retry of the frozen request):
+   * reads the kill switch onboarding `for share` and touches the pending row, in one transaction.
+   */
+  async claimAttempt(record: SubmissionRecord) {
+    const r = await inControlledTransaction(this.pool, "onboarding", client => client.query(`update peragus_customer_onboarding_submissions set updated_at=now()
+      where id=$1 and customer_id=$2 and request_hash=$3 and environment='${this.e.mode}' returning id`, [record.id, record.customerId, record.requestHash]));
+    if (!r.rows[0]) throw new SubmissionError("ONBOARDING_CONFLICT");
   }
   async complete(record: SubmissionRecord, result: { id: string; status: string; verificationMode: "full" }) {
     try {

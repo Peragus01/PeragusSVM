@@ -1,3 +1,4 @@
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
 import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
@@ -42,6 +43,8 @@ beforeAll(async () => {
   const dir = new URL("../migrations/", import.meta.url);
   for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file, dir), "utf8"));
   await db.exec("insert into peragus_database_environment(environment) values('test')");
+  // Runtime kill switches start OFF (054); this suite performs guarded actions.
+  await enableRuntimeControls(db);
 }, 30000);
 afterAll(async () => { await Promise.all(apps.map(app => app.close())); await db.close(); });
 async function setup(type: "pf" | "pj" = "pf") {
@@ -208,6 +211,8 @@ describe("live registration of a real person", () => {
     const dir = new URL("../migrations/", import.meta.url);
     for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await liveDb.exec(await readFile(new URL(file, dir), "utf8"));
     await liveDb.exec("insert into peragus_database_environment(environment) values('live')");
+    // Runtime kill switches start OFF (054); this suite performs guarded actions.
+    await enableRuntimeControls(liveDb);
   }, 30000);
   afterAll(async () => { await liveDb.close(); });
   async function live() {

@@ -1,3 +1,4 @@
+import {replyIfPaused} from "../operations/runtime-controls.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CustomerVerificationService } from "../onboarding/customer-verification-service.js";
@@ -34,6 +35,7 @@ export async function registerCustomerVerificationRoutes(app: FastifyInstance, s
           const result = await service.start(customer.id);
           return reply.code(result.replayed ? 200 : 201).send({ data: result.data, meta: { idempotent_replay: result.replayed, operations_enabled: false } });
         } catch (error) {
+          if (replyIfPaused(error, reply)) return reply;
           // Live fails closed without a hosted session; retrying shortly may help (OZAV's own code).
           if (error instanceof VerificationError) return reply.code(error.code === "VERIFICATION_SESSION_UNAVAILABLE" ? 503 : 409).send({ error: { code: error.code } });
           if (error instanceof OzavClientError) return reply.code(502).send({ error: { code: "VERIFICATION_PROVIDER_UNAVAILABLE", provider_http_status: error.statusCode ?? null, retryable: error.retryable } });

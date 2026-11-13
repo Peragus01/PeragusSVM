@@ -2,6 +2,7 @@ import {randomUUID} from "node:crypto";
 import type {Pool} from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
+import {inControlledTransaction} from "../operations/runtime-controls.js";
 import {CustomerPixError, validatePixTransfer, type CustomerPixRecord, type CustomerPixRepository, type PixContext} from "../purchases/customer-sandbox-pix.js";
 import type {OzavTransfer} from "../providers/ozav-client.js";
 import type {OperationStatus} from "../purchases/operation-status.js";
@@ -62,10 +63,11 @@ export class PostgresCustomerPixRepository implements CustomerPixRepository {
  async read(customerId:string,id:string){const r=await this.pool.query<Row>(`${WITH_OPERATION("peragus_customer_sandbox_pix")} where x.customer_id=$1 and x.id=$2 and x.environment='${this.e.mode}'`,[customerId,id]);return r.rows[0]?map(r.rows[0]):null;}
  async reserve(customerId:string,requestId:string,c:PixContext,walletId:string){
   const id=randomUUID();
-  await this.pool.query(`insert into peragus_customer_sandbox_pix(id,customer_id,request_id,purchase_intent_id,provider_customer_id,provider_quote_id,source_amount_brl,wallet_address,provider_wallet_id,idempotency_key,environment)
+  // Kill switch new_operations, in the reservation's own transaction (no row while paused).
+  await inControlledTransaction(this.pool,"new_operations",client=>client.query(`insert into peragus_customer_sandbox_pix(id,customer_id,request_id,purchase_intent_id,provider_customer_id,provider_quote_id,source_amount_brl,wallet_address,provider_wallet_id,idempotency_key,environment)
    select $3,$1,$4,e.purchase_id,e.provider_customer_id,e.provider_quote_id,e.source_amount_brl,e.wallet_address,$5,$6,'${this.e.mode}' from (${eligible(this.e,CREATE)}) e
    where e.provider_customer_id=$7 and e.provider_quote_id=$8 and e.source_amount_brl=$9 and e.wallet_address=$10
-   on conflict do nothing`,[customerId,c.purchaseId,id,requestId,walletId,`peragus-pix-${id}`,c.providerCustomerId,c.providerQuoteId,c.amountBrl,c.walletAddress]);
+   on conflict do nothing`,[customerId,c.purchaseId,id,requestId,walletId,`peragus-pix-${id}`,c.providerCustomerId,c.providerQuoteId,c.amountBrl,c.walletAddress]));
   const row=await this.findRequest(customerId,requestId);
   if(!row)throw new CustomerPixError("PIX_ALREADY_RESERVED_OR_INELIGIBLE");
   if(row.purchaseId!==c.purchaseId)throw new CustomerPixError("PIX_IDEMPOTENCY_CONFLICT");
@@ -76,12 +78,12 @@ export class PostgresCustomerPixRepository implements CustomerPixRepository {
   // Takes the purchase row lock (as a customer cancel does) and re-reads the status under it:
   // a cancel that expired the accepted operation first makes the claim fail, and a claim
   // committed first is seen by the cancel, so both can never succeed (policy 7.1).
-  // One statement on its own connection (its own transaction): the lock is held until it commits.
-  const client=await this.pool.connect();let result:{rows:unknown[]};
-  try{result=await client.query(`with locked as (select id from peragus_customer_purchase_intents
+  // One transaction on its own connection: the kill switch new_operations is read `for share`
+  // and the purchase row lock is held until it commits.
+  const result=await inControlledTransaction(this.pool,"new_operations",client=>client.query(`with locked as (select id from peragus_customer_purchase_intents
     where id=$2 and customer_id=$1 and environment='${this.e.mode}' and status='accepted' and cancel_requested_at is null for update)
    update peragus_customer_sandbox_pix set create_attempted=true,updated_at=now()
-   where id=$3 and not create_attempted and exists(select 1 from locked) and exists(${eligible(this.e,CREATE)}) returning id`,[r.customer_id,r.purchase_intent_id,id]);}finally{client.release();}
+   where id=$3 and not create_attempted and exists(select 1 from locked) and exists(${eligible(this.e,CREATE)}) returning id`,[r.customer_id,r.purchase_intent_id,id]));
   return Boolean(result.rows[0]);
  }
  async claimSimulation(row:CustomerPixRecord){

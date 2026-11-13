@@ -2,6 +2,7 @@ import {randomUUID} from "node:crypto";
 import type {Pool,PoolClient} from "pg";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
+import {assertControlEnabled} from "../operations/runtime-controls.js";
 import {PurchaseIntentError,type OperationTransition,type TransitionExpectation,type PurchaseIntent,type PurchaseIntentRepository} from "../purchases/customer-purchase-intents.js";
 import {canTransition,isOperationStatus,TERMINAL_STATUSES,type OperationStatus,type PurchaseLimits} from "../purchases/operation-status.js";
 interface Row {id:string;customer_id:string;request_id:string;quote_id:string;source_amount_brl:string;
@@ -62,6 +63,8 @@ export class PostgresCustomerPurchaseIntentRepository implements PurchaseIntentR
   const prior=await this.findRequest(this.pool,customerId,requestId);if(prior)return this.replay(prior,quoteId);
   try{return await this.inTransaction("begin isolation level read committed",async client=>{
    await client.query(ACCEPT_LOCK);
+   // Kill switch new_operations, in the accept's own transaction (same connection, for share).
+   await assertControlEnabled(client,"new_operations");
    const params=[randomUUID(),customerId,requestId,quoteId,this.options.limits.minCents.toString(),this.options.limits.maxCents.toString()];
    // Derivation, prerequisite reads, range check and insert use ONE SQL statement.
    const r=await client.query<Row>(`insert into peragus_customer_purchase_intents(
