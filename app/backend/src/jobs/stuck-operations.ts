@@ -3,6 +3,11 @@ import type {PgBoss} from "pg-boss";
 import type {MoneyMode} from "../config/money-environment.js";
 import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {dayActivitySql,DAILY_REVIEW_TIME_ZONE} from "../operations/daily-review.js";
+import {DRAIN_MAX,SEND_TIMEOUT_MS} from "../operations/operator-notifications.js";
+
+/** pg-boss expiry of both jobs. A worst-case drain (every send timing out) must fit inside it. */
+export const OPERATOR_JOB_EXPIRE_SECONDS=240;
+if(DRAIN_MAX*SEND_TIMEOUT_MS>OPERATOR_JOB_EXPIRE_SECONDS*1000*0.75)throw new Error("OPERATOR_NOTIFICATION_DRAIN_EXCEEDS_EXPIRY");
 
 export const OPERATOR_NOTIFICATIONS_QUEUE="operator-notifications";
 export const STUCK_OPERATIONS_QUEUE="stuck-operations";
@@ -96,11 +101,11 @@ export class StuckOperationScanner {
  * minutes) as singleton pg-boss schedules without retries (a missed run is the next run).
  */
 export async function registerOperatorNotificationJobs(boss:Pick<PgBoss,"createQueue"|"schedule"|"work">,jobs:{
- drain:()=>Promise<Record<string,number>>;scan:()=>Promise<{enqueued:number}>;log?:(event:Record<string,unknown>)=>void}){
+ drain:()=>Promise<Record<string,unknown>>;scan:()=>Promise<{enqueued:number}>;log?:(event:Record<string,unknown>)=>void}){
  const log=jobs.log??(()=>undefined);
  for(const [queue,cron,run] of [[OPERATOR_NOTIFICATIONS_QUEUE,"* * * * *",jobs.drain],[STUCK_OPERATIONS_QUEUE,"*/5 * * * *",jobs.scan]] as const){
-  await boss.createQueue(queue,{policy:"singleton",retryLimit:0,expireInSeconds:240});
-  await boss.schedule(queue,cron,{},{singletonKey:queue,retryLimit:0,expireInSeconds:240});
+  await boss.createQueue(queue,{policy:"singleton",retryLimit:0,expireInSeconds:OPERATOR_JOB_EXPIRE_SECONDS});
+  await boss.schedule(queue,cron,{},{singletonKey:queue,retryLimit:0,expireInSeconds:OPERATOR_JOB_EXPIRE_SECONDS});
   await boss.work(queue,{localConcurrency:1,pollingIntervalSeconds:5},async()=>{
    // Counts only: never addresses, payloads or provider bodies.
    const result=await run();

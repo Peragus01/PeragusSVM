@@ -78,21 +78,25 @@ describe("daily review",()=>{
  });
 
  it("review route needs the operator allowlist and fresh MFA, validates the day and is idempotent and append-only",async()=>{
-  const url="/v1/admin/daily-reviews",today=await spDay(0),tomorrow=await spDay(1);
+  const url="/v1/admin/daily-reviews",today=await spDay(0),tomorrow=await spDay(1),day=await spDay(-2);
   const outsider=await appFor({id:randomUUID(),email:"x@example.test",assuranceLevel:"aal2",mfaVerifiedAt:Math.floor(Date.now()/1000)});
-  expect((await outsider.inject({method:"POST",url,headers,payload:{day:today}})).json().error.code).toBe("WITHDRAWAL_OPERATOR_REQUIRED");
+  expect((await outsider.inject({method:"POST",url,headers,payload:{day}})).json().error.code).toBe("WITHDRAWAL_OPERATOR_REQUIRED");
   const stale=await appFor(fresh(Math.floor(Date.now()/1000)-301));
-  const r=await stale.inject({method:"POST",url,headers,payload:{day:today}});
+  const r=await stale.inject({method:"POST",url,headers,payload:{day}});
   expect(r.statusCode).toBe(403);expect(r.json().error.code).toBe("OPERATOR_MFA_STALE");
   const app=await appFor(fresh());
-  for(const bad of [{day:tomorrow},{day:"2026-02-30"},{day:"yesterday"},{day:today,note:"a\nb"},{day:today,note:"x".repeat(501)},{day:today,extra:1},{}]){
+  for(const bad of [{day:tomorrow},{day:"2026-02-30"},{day:"yesterday"},{day,note:"a\nb"},{day,note:"x".repeat(501)},{day,extra:1},{}]){
    const res=await app.inject({method:"POST",url,headers,payload:bad});
    expect(res.statusCode,JSON.stringify(bad)).toBe(400);
   }
-  const first=await app.inject({method:"POST",url,headers,payload:{day:today}});
-  expect(first.json().data).toMatchObject({day:today,changed:true,note:null});
-  const again=await app.inject({method:"POST",url,headers,payload:{day:today,note:"outra nota"}});
-  expect(again.json().data).toMatchObject({day:today,changed:false,note:null});
+  // A day can only be reviewed after it ends (São Paulo): today is refused, nothing recorded.
+  const early=await app.inject({method:"POST",url,headers,payload:{day:today}});
+  expect(early.statusCode).toBe(409);expect(early.json()).toEqual({error:{code:"DAILY_REVIEW_DAY_NOT_ENDED"}});
+  expect((await db.query("select count(*)::int n from peragus_daily_reviews where day=$1::date and reviewed_by=$2",[today,operatorId])).rows[0]).toEqual({n:0});
+  const first=await app.inject({method:"POST",url,headers,payload:{day}});
+  expect(first.json().data).toMatchObject({day,changed:true,note:null});
+  const again=await app.inject({method:"POST",url,headers,payload:{day,note:"outra nota"}});
+  expect(again.json().data).toMatchObject({day,changed:false,note:null});
   await expect(db.query("update peragus_daily_reviews set note='x'")).rejects.toThrow("DAILY_REVIEWS_APPEND_ONLY");
   await expect(db.query("delete from peragus_daily_reviews")).rejects.toThrow("DAILY_REVIEWS_APPEND_ONLY");
   await expect(db.query("insert into peragus_daily_reviews(day,environment,reviewed_by) values('2026-01-02','live',$1)",[operatorId])).rejects.toThrow("ENVIRONMENT_MISMATCH");
@@ -101,6 +105,6 @@ describe("daily review",()=>{
   // A customer account is never an operator.
   const s=await purchaseReadyCustomer(db,pool);
   const service=new DailyReviewService(pool,new Set([s.owner]),"test");
-  await expect(service.review({id:s.owner,email:"c@example.test",assuranceLevel:"aal2",mfaVerifiedAt:Math.floor(Date.now()/1000)},today)).rejects.toMatchObject({code:"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"});
+  await expect(service.review({id:s.owner,email:"c@example.test",assuranceLevel:"aal2",mfaVerifiedAt:Math.floor(Date.now()/1000)},day)).rejects.toMatchObject({code:"OPERATOR_ACCOUNT_SEPARATION_REQUIRED"});
  });
 });

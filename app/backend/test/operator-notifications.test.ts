@@ -9,9 +9,9 @@ import {CustomerPurchaseIntentService} from "../src/purchases/customer-purchase-
 import {CustomerSandboxPixService} from "../src/purchases/customer-sandbox-pix.js";
 import type {OperationStatus} from "../src/purchases/operation-status.js";
 import {RuntimeControlService} from "../src/operations/runtime-controls.js";
-import {drainOperatorNotifications,operatorNotificationConfig,OperatorNotificationSendError,recordWebhookSignatureInvalid,
+import {DRAIN_MAX,drainOperatorNotifications,operatorNotificationConfig,SEND_TIMEOUT_MS,OperatorNotificationSendError,recordWebhookSignatureInvalid,
  ResendOperatorNotificationSender,type OperatorNotificationSender} from "../src/operations/operator-notifications.js";
-import {OPERATOR_NOTIFICATIONS_QUEUE,registerOperatorNotificationJobs,STUCK_OPERATIONS_QUEUE,StuckOperationScanner} from "../src/jobs/stuck-operations.js";
+import {OPERATOR_JOB_EXPIRE_SECONDS,OPERATOR_NOTIFICATIONS_QUEUE,registerOperatorNotificationJobs,STUCK_OPERATIONS_QUEUE,StuckOperationScanner} from "../src/jobs/stuck-operations.js";
 import {enableRuntimeControls} from "./helpers/runtime-controls.js";
 import {migrateAll,pglitePool,purchaseReadyCustomer} from "./helpers/operation-fixture.js";
 
@@ -84,7 +84,7 @@ describe("operator notifications",()=>{
  });
 
  it("retrying the worker does not send twice",async()=>{
-  await drainOperatorNotifications(pool,fakeSender().sender,config);
+  await drainOperatorNotifications(pool,fakeSender().sender,config,1000);
   const op=await operation(until("approved"));
   const ok=fakeSender();
   expect(await drainOperatorNotifications(pool,ok.sender,config)).toMatchObject({accepted:2,failed:0,uncertain:0});
@@ -183,7 +183,7 @@ describe("operator notifications",()=>{
  });
 
  it("e-mails are pt-BR, carry operation id, kind and amounts, and no customer personal data",async()=>{
-  await drainOperatorNotifications(pool,fakeSender().sender,config);
+  await drainOperatorNotifications(pool,fakeSender().sender,config,1000);
   const op=await operation(until("approved"));
   const requests:{url:string;init:RequestInit}[]=[];
   const fetcher=(async(url:string,init:RequestInit)=>{requests.push({url,init});return new Response(JSON.stringify({id:`re-${requests.length}`}),{status:200});}) as unknown as typeof fetch;
@@ -199,10 +199,14 @@ describe("operator notifications",()=>{
    expect([config.recipients.operator,config.recipients.trusted]).toContain(body.to[0]);
    expect(body.subject).toBe(`[TESTES] [Peragus] Saque aprovado — operação ${op.purchaseId.slice(0,8)}`);
    expect(body.text).toContain(`Operação: ${op.purchaseId}`);
-   expect(body.text).toContain("Tipo: approval");
+   expect(body.text).toContain("Tipo: Saque aprovado");
    expect(body.text).toContain("Valor: R$ 1000.00");
    expect(body.text).toContain("USDT travado: 200.000000");
-   expect(body.text).toContain("Status: approved");
+   expect(body.text).toContain("Status: aprovada");
+   expect(body.text).toContain("Transição: aguardando aprovação → aprovada");
+   // Raw codes stay available to operators on one line.
+   expect(body.text).toContain("Código: approval; status=approved; transição=awaiting_approval->approved");
+   expect(body.text).not.toMatch(/^(Tipo|Status|Transição): .*(approval|approved)/m);
    for(const secret of ["Synthetic name",op.wallet,op.customer.id,op.owner,op.provider])expect(body.text+body.subject).not.toContain(secret);
   }
  });
@@ -236,8 +240,33 @@ describe("operator notifications",()=>{
   await expect(db.query("select peragus_enqueue_operator_notification('live','approval','info','x',null,'{}')")).rejects.toThrow("ENVIRONMENT_MISMATCH");
   const rls=await db.query("select relrowsecurity from pg_class where relname='peragus_operator_notifications'");
   expect(rls.rows).toEqual([{relrowsecurity:true}]);
+  // The daily-review activity check has an (environment, created_at) index on the status log.
+  const index=await db.query<{def:string}>("select indexdef def from pg_indexes where indexname='peragus_operation_status_events_environment_created'");
+  expect(index.rows[0]?.def).toMatch(/peragus_operation_status_events .*\(environment, created_at\)/);
   const grants=await db.query("select grantee from information_schema.role_table_grants where table_name='peragus_operator_notifications' and grantee in ('anon','authenticated','PUBLIC')");
   expect(grants.rows).toEqual([]);
+ });
+
+ it("pending rows older than 48 h expire unsent, except high severity, and are counted by kind only",async()=>{
+  await drainOperatorNotifications(pool,fakeSender().sender,config,1000);
+  const old=async(kind:string,severity:string)=>{
+   const key=`synthetic-old:${randomUUID()}`;
+   await db.query(`insert into peragus_operator_notifications(id,environment,kind,severity,recipient,dedupe_key,payload,payload_hash,idempotency_key,created_at)
+    select s.id,'test',$1,$2,'operator',$3,b.body,encode(sha256(convert_to(b.body::text,'UTF8')),'hex'),'peragus-operator-notification-test/'||s.id,now()-interval '49 hours'
+    from (select gen_random_uuid() id) s,(select jsonb_build_object('kind',$1::text,'severity',$2::text,'environment','test') body) b`,[kind,severity,key]);
+   return key;
+  };
+  const warn=await old("refund_pending","warn"),high=await old("stuck_operation","high");
+  const sent=fakeSender();
+  const result=await drainOperatorNotifications(pool,sent.sender,config);
+  expect(result).toMatchObject({expired:1,expiredByKind:{"refund_pending:warn":1},accepted:1});
+  expect(JSON.stringify(result)).not.toMatch(/@|synthetic-old/);
+  expect((await notes("dedupe_key=any($1)",[[warn,high]])).map(r=>[r.kind,r.status])).toEqual([["refund_pending","failed"],["stuck_operation","accepted"]]);
+  expect(sent.calls.map(c=>c.message.subject)).toEqual(["[TESTES] [Peragus] Operação parada"]);
+ });
+
+ it("a worst-case drain (every send timing out) fits the job expiry",()=>{
+  expect(DRAIN_MAX*SEND_TIMEOUT_MS).toBeLessThanOrEqual(OPERATOR_JOB_EXPIRE_SECONDS*1000*0.75);
  });
 
  it("worker registers the outbox drain every minute and the stuck scanner every 5 minutes",async()=>{

@@ -22,7 +22,7 @@ export async function registerDailyReviewRoutes(app:FastifyInstance,service?:Dai
     return{data:result};
    }catch(error){
     if(error instanceof OperatorApprovalError)return reply.code(403).send({error:{code:error.code}});
-    if(error instanceof DailyReviewError)return reply.code(error.code==="OPERATOR_ACCOUNT_SEPARATION_REQUIRED"?403:400).send({error:{code:error.code}});
+    if(error instanceof DailyReviewError)return reply.code(error.code==="OPERATOR_ACCOUNT_SEPARATION_REQUIRED"?403:error.code==="DAILY_REVIEW_DAY_NOT_ENDED"?409:400).send({error:{code:error.code}});
     request.log.warn({event:"daily_reviews_unavailable"});return reply.code(503).send({error:{code:"DAILY_REVIEWS_UNAVAILABLE"}});
    }
   });

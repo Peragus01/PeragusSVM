@@ -60,16 +60,22 @@ export class DailyReviewService {
   authorizeWithdrawalOperator(user,this.operators);
   requireFreshMfa(user,this.policy.mfaMaxAgeSeconds,this.policy.now()/1000);
  }
- /** Records the review of `day` (today or earlier, São Paulo). Idempotent per day. */
+ /**
+  * Records the review of `day`, a São Paulo day that has already ended (before today).
+  * Today is refused with DAILY_REVIEW_DAY_NOT_ENDED (409). Idempotent per day.
+  */
  async review(user:AuthenticatedUser,day:string,note?:string){
   this.authorize(user);
   const input=dailyReviewInput.safeParse({day,...(note===undefined?{}:{note})});
   if(!input.success)throw new DailyReviewError("VALIDATION_ERROR");
   const parsed=new Date(`${input.data.day}T00:00:00Z`);
   if(Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0,10)!==input.data.day)throw new DailyReviewError("DAILY_REVIEW_DAY_INVALID");
-  // Only a day that has started (São Paulo) can be reviewed.
-  const valid=await this.pool.query<{ok:boolean}>(`select $1::date<=(now() at time zone '${DAILY_REVIEW_TIME_ZONE}')::date and $1::date>=date '2026-01-01' as ok`,[input.data.day]);
-  if(valid.rows[0]?.ok!==true)throw new DailyReviewError("DAILY_REVIEW_DAY_INVALID");
+  // Only a São Paulo day that has ended can be reviewed: a later operation on the same day
+  // would otherwise escape the review.
+  const valid=await this.pool.query<{ended:boolean;today:boolean}>(`select $1::date<(now() at time zone '${DAILY_REVIEW_TIME_ZONE}')::date and $1::date>=date '2026-01-01' as ended,
+   $1::date=(now() at time zone '${DAILY_REVIEW_TIME_ZONE}')::date as today`,[input.data.day]);
+  if(valid.rows[0]?.today===true)throw new DailyReviewError("DAILY_REVIEW_DAY_NOT_ENDED");
+  if(valid.rows[0]?.ended!==true)throw new DailyReviewError("DAILY_REVIEW_DAY_INVALID");
   // A customer account is never an operator (account separation).
   const owner=await this.pool.query("select 1 from peragus_customers where owner_user_id=$1 limit 1",[user.id]);
   if(owner.rows[0])throw new DailyReviewError("OPERATOR_ACCOUNT_SEPARATION_REQUIRED");

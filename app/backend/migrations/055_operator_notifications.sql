@@ -41,6 +41,9 @@ create table peragus_operator_notifications (
  check(status='pending' or status='failed' or attempts=1)
 );
 create index peragus_operator_notifications_pending on peragus_operator_notifications(environment,created_at,id) where status='pending';
+-- Daily-review activity check (gate of new operations and the scanner): status events of
+-- one environment within one calendar day.
+create index peragus_operation_status_events_environment_created on peragus_operation_status_events(environment,created_at);
 create index peragus_operator_notifications_sending on peragus_operator_notifications(environment,updated_at) where status='sending';
 
 -- Daily review: the operator confirms, per calendar day (America/Sao_Paulo), that the

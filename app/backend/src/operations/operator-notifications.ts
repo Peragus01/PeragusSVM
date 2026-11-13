@@ -59,7 +59,7 @@ export class ResendOperatorNotificationSender implements OperatorNotificationSen
   try{
    response=await this.fetcher("https://api.resend.com/emails",{method:"POST",
     headers:{Authorization:`Bearer ${this.apiKey}`,"Content-Type":"application/json","Idempotency-Key":idempotencyKey},
-    body:JSON.stringify(message),redirect:"error",signal:AbortSignal.timeout(10000)});
+    body:JSON.stringify(message),redirect:"error",signal:AbortSignal.timeout(SEND_TIMEOUT_MS)});
   }catch{throw new OperatorNotificationSendError(false);}
   if(!response.ok)throw new OperatorNotificationSendError([400,401,403,404,422].includes(response.status));
   try{
@@ -78,6 +78,11 @@ const TITLES:Record<OperatorNotificationKind,string>={
  daily_review_missing:"Revisão diária pendente",
 };
 const SEVERITY:Record<string,string>={high:"alta",warn:"atenção",info:"informativa"};
+/** pt-BR labels for operation statuses (the raw codes go in the "Código:" line). */
+const STATUS_LABELS:Record<string,string>={quoted:"cotada",accepted:"aceita",awaiting_pix:"aguardando Pix",pix_confirmed:"Pix confirmado",
+ converted:"convertida",awaiting_approval:"aguardando aprovação",approved:"aprovada",sending:"em envio",sent:"enviada",
+ delivered_verified:"entrega verificada",expired:"expirada",failed:"falhou",needs_review:"em revisão",refund_pending:"reembolso pendente",refunded:"reembolsada"};
+const statusLabel=(code:string)=>STATUS_LABELS[code]??code;
 const THRESHOLDS:Record<string,string>={sending_30m:"em envio há mais de 30 min",sent_30m_unverified:"enviada há mais de 30 min sem verificação on-chain",
  awaiting_pix_expired:"aguardando Pix após o prazo (expiração do Pix ou da trava)","4h":"há mais de 4 h","12h":"há mais de 12 h","20h":"há mais de 20 h"};
 const CONTROLS:Record<string,string>={new_operations:"novas operações",usdt_sends:"envios de USDT",onboarding:"cadastro"};
@@ -103,11 +108,11 @@ export function renderOperatorNotification(payload:Record<string,unknown>,mode:M
  else if(kind==="execution")title="Envio de USDT iniciado";
  const subject=`${mode==="test"?"[TESTES] ":""}[Peragus] ${title}${purchase?` — operação ${purchase.slice(0,8)}`:day?` — ${day}`:""}`;
  const lines=[`Alerta Peragus — ambiente: ${mode==="live"?"produção":"testes"}`,"",
-  `Tipo: ${kind}`,`Gravidade: ${SEVERITY[String(payload.severity)]??"informativa"}`];
+  `Tipo: ${TITLES[kind]}`,`Gravidade: ${SEVERITY[String(payload.severity)]??"informativa"}`];
  if(purchase)lines.push(`Operação: ${purchase}`);
  const status=field(payload.status,TOKEN),from=field(payload.from_status,TOKEN),to=field(payload.to_status,TOKEN);
- if(status)lines.push(`Status: ${status}`);
- if(to)lines.push(`Transição: ${from??"—"} → ${to}`);
+ if(status)lines.push(`Status: ${statusLabel(status)}`);
+ if(to)lines.push(`Transição: ${from?statusLabel(from):"—"} → ${statusLabel(to)}`);
  const reason=field(payload.reason_code,/^[A-Z][A-Z0-9_]{2,63}$/);if(reason)lines.push(`Código do motivo: ${reason}`);
  const brl=field(payload.source_amount_brl,AMOUNT);if(brl)lines.push(`Valor: R$ ${brl}`);
  const usdt=field(payload.locked_usdt_amount,AMOUNT);if(usdt)lines.push(`USDT travado: ${usdt}`);
@@ -122,6 +127,8 @@ export function renderOperatorNotification(payload:Record<string,unknown>,mode:M
  if(day)lines.push(`Dia: ${day}${kind==="daily_review_missing"?" — novas operações ficam bloqueadas até a revisão":""}`);
  const resource=field(payload.resource_id,ID);if(resource)lines.push(`Registro: ${resource}`);
  const when=field(payload.event_at,/^[0-9T:.+\- Z]{10,40}$/);if(when)lines.push(`Registrado em: ${when}`);
+ // Raw codes for operators (kind, status, transition).
+ lines.push(`Código: ${[kind,status?`status=${status}`:null,to?`transição=${from??"null"}->${to}`:null].filter(Boolean).join("; ")}`);
  lines.push("","Detalhes no painel do operador. Este e-mail não contém dados pessoais do cliente.",
   "Enviado ao operador e à pessoa de confiança.");
  return{subject,text:lines.join("\n")};
@@ -168,18 +175,30 @@ export async function processOperatorNotification(pool:Pick<Pool,"query">,sender
 
 /** Rows left 'sending' this long were interrupted mid-call (the HTTP timeout is 10 s). */
 export const SENDING_INTERRUPTED_AFTER="5 minutes";
-/** Pending rows older than this are not e-mailed (e.g. enqueued while the worker was off). */
+/**
+ * Pending rows older than this are not e-mailed (e.g. enqueued while the worker was off),
+ * except high-severity ones, which are always sent.
+ */
 export const PENDING_EXPIRES_AFTER="48 hours";
+/** Resend call timeout and the per-drain cap: DRAIN_MAX x SEND_TIMEOUT_MS fits the job expiry. */
+export const SEND_TIMEOUT_MS=10_000;
+export const DRAIN_MAX=15;
 
 /** One worker cycle: closes interrupted/expired rows, then sends up to `max` notifications. */
-export async function drainOperatorNotifications(pool:Pick<Pool,"query">,sender:OperatorNotificationSender,config:OperatorNotificationConfig,max=50){
+export async function drainOperatorNotifications(pool:Pick<Pool,"query">,sender:OperatorNotificationSender,config:OperatorNotificationConfig,max=DRAIN_MAX){
  const e=rowEnvironment(config.mode);
  // An interrupted attempt may have reached the provider: uncertain, never re-sent.
  const interrupted=await pool.query(`update peragus_operator_notifications set status='uncertain',last_error='PROVIDER_UNCONFIRMED',updated_at=clock_timestamp()
   where environment='${e.mode}' and status='sending' and updated_at<clock_timestamp()-interval '${SENDING_INTERRUPTED_AFTER}' returning id`);
  const expired=await pool.query(`update peragus_operator_notifications set status='failed',last_error='EXPIRED_UNSENT',updated_at=clock_timestamp()
-  where environment='${e.mode}' and status='pending' and created_at<clock_timestamp()-interval '${PENDING_EXPIRES_AFTER}' returning id`);
- const counts={accepted:0,failed:0,uncertain:interrupted.rows.length,expired:expired.rows.length};
+  where environment='${e.mode}' and status='pending' and severity<>'high' and created_at<clock_timestamp()-interval '${PENDING_EXPIRES_AFTER}'
+  returning kind,severity`);
+ // Counts by kind:severity only (no ids, addresses or payloads).
+ const expiredByKind:Record<string,number>={};
+ for(const row of expired.rows as {kind:string;severity:string}[]){
+  const key=`${row.kind}:${row.severity}`;expiredByKind[key]=(expiredByKind[key]??0)+1;
+ }
+ const counts={accepted:0,failed:0,uncertain:interrupted.rows.length,expired:expired.rows.length,expiredByKind};
  for(let i=0;i<max;i++){
   const outcome=await processOperatorNotification(pool,sender,config);
   if(outcome==="idle")break;
