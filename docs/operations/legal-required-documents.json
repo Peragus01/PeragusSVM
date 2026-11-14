@@ -1,0 +1,14 @@
+{
+  "terms": {
+    "version": "draft-0.9-2026-11-03",
+    "sha256": "878835648a716afec9ed2834e9c04b0d312d2c562128c93f24ec938063e4a451"
+  },
+  "privacy": {
+    "version": "draft-0.9-2026-11-03",
+    "sha256": "6539cbeb8f1ca83f29148f5913624fcb0a72641e7bc5a8a2901f1f230cab3ed3"
+  },
+  "refund": {
+    "version": "2026-11-02",
+    "sha256": "73d84a9678e3b2ef98b67be11c94a78a6b14a6ac47fe931fbce774aa3478ca57"
+  }
+}

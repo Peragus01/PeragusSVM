@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import type { InviteEmailCipher } from "./invite-email-cipher.js";
 import { InviteProviderError } from "./invite-email-provider.js";
 
@@ -15,7 +17,9 @@ export async function processInviteEmail(
   db: Pick<PoolClient, "query">,
   cipher: InviteEmailCipher,
   provider: InviteDeliveryProvider,
+  mode: MoneyMode,
 ): Promise<boolean> {
+  const env = rowEnvironment(mode);
   const lock = await db.query(
     "select pg_try_advisory_lock(808613,40) as locked",
   );
@@ -31,13 +35,13 @@ export async function processInviteEmail(
       last_error='IDEMPOTENCY_WINDOW_ELAPSED',updated_at=clock_timestamp()
       where state in ('pending','sending','uncertain') and retry_blocked_at is null and first_attempt_at<=clock_timestamp()-interval '23 hours'`);
     const found =
-      await db.query(`select invite_id from peragus_invite_email_outbox where environment='test'
+      await db.query(`select invite_id from peragus_invite_email_outbox where environment='${env.mode}'
       and state in ('pending','sending','uncertain') and retry_blocked_at is null and next_attempt_at<=clock_timestamp()
       order by created_at,invite_id limit 1`);
     const id = found.rows[0]?.invite_id as string | undefined;
     if (!id) {
       const accepted =
-        await db.query(`select invite_id,provider_email_id from peragus_invite_email_outbox where environment='test' and state='accepted'
+        await db.query(`select invite_id,provider_email_id from peragus_invite_email_outbox where environment='${env.mode}' and state='accepted'
         and (last_checked_at is null or last_checked_at<clock_timestamp()-interval '1 minute') order by last_checked_at nulls first limit 1`);
       const row = accepted.rows[0];
       if (!row) return false;

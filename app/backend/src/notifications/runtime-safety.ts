@@ -1,6 +1,7 @@
+import { moneyModeFor, moneyNetworkFor, providerKeyMatchesMode } from "../config/money-environment.js";
 import { OzavClientError } from "../providers/ozav-client.js";
-// Deployment location and provider mode are separate: both locations run only
-// controlled synthetic onboarding until a separately reviewed live integration.
+// Each deployment location is bound to one money mode (staging -> test,
+// production -> live); the provider key must belong to that mode.
 const projects = {
   staging: "lybdkqkbwlfwvmmvstzi",
   production: "athwkklyvnaetotmancy",
@@ -103,8 +104,10 @@ export function assertNotificationEnvironment(
     runtime,
     runtime.ONBOARDING_EMAIL_DEPLOYMENT_ENV,
   );
-  if (!/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(env.OZAV_API_KEY ?? ""))
-    throw Error("ONBOARDING_TEST_PROVIDER_REQUIRED");
+  // The provider key must belong to the deployment's money mode (staging=test, production=live).
+  const moneyMode = moneyModeFor({ PERAGUS_DEPLOYMENT_ENV: mode });
+  if (!providerKeyMatchesMode(env.OZAV_API_KEY, moneyMode))
+    throw Error(`ONBOARDING_${moneyMode.toUpperCase()}_PROVIDER_REQUIRED`);
   if (
     env.OZAV_ONRAMP_WRITES_ENABLED ||
     env.OZAV_OFFRAMP_WRITES_ENABLED ||
@@ -140,8 +143,19 @@ export function deploymentConfigurationAudit(
   const project = refs.find(
     (p) => host === `db.${p}.supabase.co` || username === `postgres.${p}`,
   );
+  const moneyMode = moneyModeFor({
+    PERAGUS_DEPLOYMENT_ENV:
+      runtime.PERAGUS_DEPLOYMENT_ENV === "production" ? "production" : "staging",
+  });
+  const providerKeyMode = /^ozav_sk_live_/.test(runtime.OZAV_API_KEY ?? "")
+    ? "live"
+    : /^ozav_sk_test_/.test(runtime.OZAV_API_KEY ?? "")
+      ? "test"
+      : "unrecognized";
   return {
     event: "deployment_configuration_audit",
+    money_mode: moneyMode,
+    network: moneyNetworkFor(moneyMode),
     environment: ["staging", "production"].includes(
       runtime.RAILWAY_ENVIRONMENT_NAME ?? "",
     )
@@ -165,7 +179,8 @@ export function deploymentConfigurationAudit(
           : "unrecognized",
     database_session_port: ["", "5432"].includes(db?.port ?? "invalid"),
     database_ssl: runtime.DATABASE_SSL === "true",
-    provider_test: /^ozav_sk_test_/.test(runtime.OZAV_API_KEY ?? ""),
+    provider_key_mode: providerKeyMode,
+    provider_matches_money_mode: providerKeyMode === moneyMode,
     financial_flags_disabled: [
       "OZAV_ONRAMP_WRITES_ENABLED",
       "OZAV_OFFRAMP_WRITES_ENABLED",

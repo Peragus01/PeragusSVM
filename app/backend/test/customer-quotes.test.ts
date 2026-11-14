@@ -1,3 +1,5 @@
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -10,27 +12,40 @@ import { PostgresOnboardingSubmissionRepository } from "../src/repositories/post
 import { PostgresCustomerQuoteRepository } from "../src/repositories/postgres-customer-quotes.js";
 import {
   CustomerQuoteService,
+  CustomerQuoteProviderError,
   normalizeQuoteBrl,
 } from "../src/quotes/customer-quotes.js";
+import { DEFAULT_PURCHASE_LIMITS } from "../src/purchases/operation-status.js";
 import {
   OzavClient,
   type OzavWriteRequest,
 } from "../src/providers/ozav-client.js";
 const db = new PGlite();
+const WIDE = { minCents: 1n, maxCents: 1000000n };
 let failSave = false;
+let connection = Promise.resolve();
+const query = async (sql: string, params?: unknown[]) => {
+  if (failSave && sql.includes("set provider_quote_id=")) {
+    failSave = false;
+    throw new Error("storage unavailable");
+  }
+  const r = await db.query(sql, params);
+  return { ...r, rowCount: r.rows.length };
+};
 const pool = {
-  query: async (sql: string, params?: unknown[]) => {
-    if (failSave && sql.includes("set provider_quote_id=")) {
-      failSave = false;
-      throw new Error("storage unavailable");
-    }
-    const r = await db.query(sql, params);
-    return { ...r, rowCount: r.rows.length };
+  query,
+  // PGlite has one session: connections (the quote claim transaction) are handed out one at a time.
+  connect: async () => {
+    const previous = connection;
+    let release!: () => void;
+    connection = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    return { query, release };
   },
 } as unknown as Pool;
 const customers = new PostgresCustomerRepository(pool),
-  submissions = new PostgresOnboardingSubmissionRepository(pool),
-  repo = new PostgresCustomerQuoteRepository(pool);
+  submissions = new PostgresOnboardingSubmissionRepository(pool,"test"),
+  repo = new PostgresCustomerQuoteRepository(pool,"test");
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 beforeAll(async () => {
   await db.exec(
@@ -41,12 +56,17 @@ beforeAll(async () => {
     .filter((f) => /^\d+_.*\.sql$/.test(f))
     .sort())
     await db.exec(await readFile(new URL(f, dir), "utf8"));
+  await db.exec(
+    "insert into peragus_database_environment(environment) values('test')",
+  );
+  // Runtime kill switches start OFF (054); this suite performs guarded actions.
+  await enableRuntimeControls(db);
 }, 30000);
 afterAll(async () => {
   await Promise.all(apps.map((a) => a.close()));
   await db.close();
 });
-async function setup(type: "pf" | "pj" = "pf") {
+async function setup(type: "pf" | "pj" = "pf", mode: "test" | "live" = "test") {
   const owner = randomUUID(),
     customer = (
       await customers.createOrGet({
@@ -58,12 +78,12 @@ async function setup(type: "pf" | "pj" = "pf") {
   const providerId = `ozav_cus_${customer.id.replaceAll("-", "")}`,
     terms = randomUUID();
   await db.query(
-    "insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until) values($1,$2,$3,now())",
+    "insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,environment) values($1,$2,$3,now(),'test')",
     [terms, customer.id, randomUUID()],
   );
   await db.query(
-    `insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode)
- values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full')`,
+    `insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,environment)
+ values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full','test')`,
     [
       randomUUID(),
       customer.id,
@@ -74,7 +94,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     ],
   );
   const caps = {
-    environment: "test",
+    environment: mode,
     entitlements: ["customers", "liquidity"],
     scopes: ["customers:read", "quotes:write"],
   };
@@ -82,6 +102,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     pending = false,
     timeout = false,
     errorStatus = 0,
+    errorCode = "",
     mutate = (r: any) => r;
   const transport = vi.fn(async (path: string) => {
     if (path === "/v2/capabilities") return { statusCode: 200, body: caps };
@@ -92,7 +113,8 @@ async function setup(type: "pf" | "pj" = "pf") {
         id: providerId,
         object: "customer",
         type: "individual",
-        external_ref: `peragus-onboarding-test:${customer.id}`,
+        // Mode-derived registration ref (live registrations carry no test marker).
+        external_ref: `${mode === "live" ? "peragus-onboarding" : "peragus-onboarding-test"}:${customer.id}`,
         status,
         verification: { mode: "full", status },
         requirements: {
@@ -139,7 +161,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     if (errorStatus)
       return {
         statusCode: errorStatus,
-        body: { error: { message: "private server details" } },
+        body: { error: { ...(errorCode ? { code: errorCode } : {}), message: "private server details" } },
       };
     return {
       statusCode: 201,
@@ -147,18 +169,20 @@ async function setup(type: "pf" | "pj" = "pf") {
     };
   });
   const provider = new OzavClient({
-    apiKey: "ozav_sk_test_quote",
+    mode, apiKey: `ozav_sk_${mode}_quote`,
     attempts: 1,
     transport,
     writeTransport,
   });
-  const service = new CustomerQuoteService(repo, submissions, provider);
+  const service = new CustomerQuoteService(repo, submissions, provider, mode, WIDE),
+    strictService = new CustomerQuoteService(repo, submissions, provider);
   return {
     owner,
     customer,
     providerId,
     caps,
     service,
+    strictService,
     provider,
     transport,
     writeTransport,
@@ -172,8 +196,9 @@ async function setup(type: "pf" | "pj" = "pf") {
     loseResponse: () => {
       timeout = true;
     },
-    fail: (n: number) => {
+    fail: (n: number, code = "") => {
       errorStatus = n;
+      errorCode = code;
     },
     mutate: (fn: (r: any) => any) => {
       mutate = fn;
@@ -184,7 +209,7 @@ const path = "/v1/me/quotes",
   headers = { authorization: "Bearer valid" };
 async function appFor(s: Awaited<ReturnType<typeof setup>>, enabled = true) {
   const app = await buildApp({
-    customerAccess: {
+    customerAccess: { legal: allAcceptedLegal,
       customers,
       authenticate: async (token) => {
         if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN");
@@ -243,9 +268,9 @@ describe("owned indicative BRL to USDT quotes", () => {
     expect(Number((empty.rows[0] as any).settlements)).toBe(0);
   });
   it("normalizes decimal strings exactly and refuses nonpositive, oversized, exponent, leading-zero, float and excess-precision inputs", () => {
-    expect(normalizeQuoteBrl("0.01")).toBe("0.01");
-    expect(normalizeQuoteBrl("1.2")).toBe("1.20");
-    expect(normalizeQuoteBrl("10000")).toBe("10000.00");
+    expect(normalizeQuoteBrl("0.01", WIDE)).toBe("0.01");
+    expect(normalizeQuoteBrl("1.2", WIDE)).toBe("1.20");
+    expect(normalizeQuoteBrl("10000", WIDE)).toBe("10000.00");
     for (const value of [
       "0",
       "0.00",
@@ -258,7 +283,7 @@ describe("owned indicative BRL to USDT quotes", () => {
       " 1 ",
       "NaN",
     ])
-      expect(() => normalizeQuoteBrl(value)).toThrow("QUOTE_AMOUNT_INVALID");
+      expect(() => normalizeQuoteBrl(value, WIDE)).toThrow("QUOTE_AMOUNT_INVALID");
   });
   it("replays the same normalized intent without a provider call, conflicts on a changed amount and isolates identical request IDs by customer", async () => {
     const s = await setup(),
@@ -587,5 +612,143 @@ describe("target-side indicative quotes", () => {
       ).rejects.toThrow();
       expect(s.writeTransport).toHaveBeenCalledTimes(1);
     }
+  });
+});
+describe("configured purchase range", () => {
+  it("quote 999.99 and 1000.01 are rejected and 1000.00 accepted with default limits", async () => {
+    const s = await setup(),
+      app = await buildApp({
+        customerAccess: { legal: allAcceptedLegal,
+          customers,
+          authenticate: async () => ({ id: s.owner, email: "private@example.test" }),
+        },
+        customerQuoteService: s.strictService,
+      });
+    apps.push(app);
+    for (const amount of ["999.99", "1000.01", "1", "10000"]) {
+      expect(() => normalizeQuoteBrl(amount, DEFAULT_PURCHASE_LIMITS)).toThrow("QUOTE_AMOUNT_OUT_OF_RANGE");
+      const r = await app.inject({
+        method: "POST",
+        url: path,
+        headers,
+        payload: { request_id: randomUUID(), source_amount_brl: amount },
+      });
+      expect(r.statusCode).toBe(422);
+      expect(r.json().error.code).toBe("QUOTE_AMOUNT_OUT_OF_RANGE");
+    }
+    expect(s.writeTransport).not.toHaveBeenCalled();
+    expect(normalizeQuoteBrl("1000", DEFAULT_PURCHASE_LIMITS)).toBe("1000.00");
+    const ok = await app.inject({
+      method: "POST",
+      url: path,
+      headers,
+      payload: { request_id: s.requestId, source_amount_brl: "1000.00" },
+    });
+    expect(ok.statusCode).toBe(201);
+    expect(ok.json().data.source.amount).toBe("1000.00");
+  });
+});
+
+describe("FX rate lock on quotes (trava de câmbio)", () => {
+  const facility = { terms_version: "2.0", capacity_guaranteed: false };
+  const stored = async (id: string) =>
+    (
+      await db.query(
+        "select facility_terms_version,locked_usdt_amount,provider_quote_id,observation from peragus_customer_indicative_quotes where id=$1",
+        [id],
+      )
+    ).rows[0] as any;
+  it("live quote requests facility_preview and stores terms_version", async () => {
+    const s = await setup("pf", "live");
+    s.mutate((row) => ({ ...row, facility }));
+    const r = await s.service.create(s.customer.id, s.requestId, "500");
+    expect(r.replayed).toBe(false);
+    expect(s.writeTransport.mock.calls[0]![0].body).toMatchObject({
+      facility_preview: true,
+    });
+    const row = await stored(r.data.id);
+    expect(row.facility_terms_version).toBe("2.0");
+    expect(row.locked_usdt_amount).toBe("100.000000");
+    expect(JSON.stringify(r.data)).not.toContain("capacity_guaranteed");
+    expect(await repo.findOwned(s.customer.id, r.data.id)).toMatchObject({
+      facilityTermsVersion: "2.0",
+      lockedUsdtAmount: "100.000000",
+    });
+  });
+  it("live quote without facility block is refused with QUOTE_RATE_LOCK_UNAVAILABLE and nothing is stored", async () => {
+    const s = await setup("pf", "live");
+    await expect(
+      s.service.create(s.customer.id, s.requestId, "500"),
+    ).rejects.toMatchObject({ code: "QUOTE_RATE_LOCK_UNAVAILABLE" });
+    const rows = (
+      await db.query(
+        "select provider_quote_id,observation,facility_terms_version,locked_usdt_amount from peragus_customer_indicative_quotes where customer_id=$1",
+        [s.customer.id],
+      )
+    ).rows as any[];
+    for (const row of rows) {
+      expect(row.provider_quote_id).toBeNull();
+      expect(row.observation).toBeNull();
+      expect(row.facility_terms_version).toBeNull();
+      expect(row.locked_usdt_amount).toBeNull();
+    }
+  });
+  it("live quote refuses a facility block without a usable terms_version", async () => {
+    for (const bad of [{}, { terms_version: "" }, { terms_version: 2 }]) {
+      const s = await setup("pf", "live");
+      s.mutate((row) => ({ ...row, facility: bad }));
+      const error = await s.service
+        .create(s.customer.id, s.requestId, "500")
+        .catch((e: unknown) => e);
+      // The malformed block is an invalid provider response: provider error, nothing stored.
+      expect(error).toBeInstanceOf(CustomerQuoteProviderError);
+      expect(error).toMatchObject({ message: "QUOTE_PROVIDER_UNAVAILABLE", providerStatus: null });
+      const rows = (
+        await db.query(
+          "select provider_quote_id,observation,facility_terms_version,locked_usdt_amount from peragus_customer_indicative_quotes where customer_id=$1",
+          [s.customer.id],
+        )
+      ).rows as any[];
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows)
+        expect(row).toEqual({
+          provider_quote_id: null,
+          observation: null,
+          facility_terms_version: null,
+          locked_usdt_amount: null,
+        });
+    }
+  });
+  it("test quote never sends facility_preview and keeps the target as the locked amount", async () => {
+    const s = await setup();
+    s.mutate((row) => ({ ...row, facility }));
+    const r = await s.service.create(s.customer.id, s.requestId, "500");
+    expect(s.writeTransport.mock.calls[0]![0].body).not.toHaveProperty(
+      "facility_preview",
+    );
+    const row = await stored(r.data.id);
+    expect(row.facility_terms_version).toBeNull();
+    expect(row.locked_usdt_amount).toBe("100.000000");
+  });
+  it("AMOUNT_BELOW_MINIMUM from OZAV maps to QUOTE_AMOUNT_OUT_OF_RANGE", async () => {
+    const s = await setup("pf", "live");
+    s.fail(400, "AMOUNT_BELOW_MINIMUM");
+    await expect(
+      s.service.create(s.customer.id, s.requestId, "500"),
+    ).rejects.toMatchObject({ code: "QUOTE_AMOUNT_OUT_OF_RANGE" });
+    const other = await setup();
+    other.fail(400, "SOMETHING_ELSE");
+    await expect(
+      other.service.create(other.customer.id, other.requestId, "500"),
+    ).rejects.toBeInstanceOf(CustomerQuoteProviderError);
+  });
+  it("the client refuses facility_preview outside live mode", async () => {
+    const s = await setup();
+    await expect(
+      s.provider.createCustomerIndicativeQuote(s.providerId, "500.00", undefined, {
+        facilityPreview: true,
+      }),
+    ).rejects.toThrow();
+    expect(s.writeTransport).not.toHaveBeenCalled();
   });
 });

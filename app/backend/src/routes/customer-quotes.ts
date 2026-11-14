@@ -1,3 +1,4 @@
+import {replyIfPaused} from "../operations/runtime-controls.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
@@ -89,14 +90,19 @@ export async function registerCustomerQuoteRoutes(
               },
             });
           } catch (error) {
+            if (replyIfPaused(error, reply)) return reply;
             if (error instanceof CustomerQuoteError)
               return reply
                 .code(
                   error.code === "QUOTE_NOT_FOUND"
                     ? 404
-                    : error.code === "QUOTE_AMOUNT_INVALID"
-                      ? 400
-                      : 409,
+                    : error.code === "QUOTE_RATE_LOCK_UNAVAILABLE"
+                      ? 503
+                      : error.code === "QUOTE_AMOUNT_OUT_OF_RANGE"
+                      ? 422
+                      : error.code === "QUOTE_AMOUNT_INVALID"
+                        ? 400
+                        : 409,
                 )
                 .send({
                   error: {

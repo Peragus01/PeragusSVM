@@ -1,11 +1,19 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import type { MoneyMode } from "../config/money-environment.js";
 import { CustomerWebhookConflict, customerEventSchema, verifyCustomerSignature, type CustomerWebhookProcessor } from "../webhooks/customer-event.js";
 
 export interface CustomerWebhookOptions {
   secret: string;
   processor: CustomerWebhookProcessor;
   now?: () => Date;
+  /** Configured money mode; only events with livemode === (mode === "live") are processed. Default "test". */
+  mode?: MoneyMode;
+  /**
+   * Called (awaited, errors swallowed) when a request fails signature verification:
+   * enqueues the webhook_signature_invalid operator e-mail. Never changes the 401.
+   */
+  onSignatureInvalid?: () => Promise<unknown>;
 }
 export async function registerCustomerWebhookRoutes(app: FastifyInstance, options?: CustomerWebhookOptions): Promise<void> {
   // Scope the raw-byte parser to this endpoint; all existing JSON routes keep their parser.
@@ -18,6 +26,10 @@ export async function registerCustomerWebhookRoutes(app: FastifyInstance, option
       if (!options) return reply.code(503).send({ error: { code: "CUSTOMER_WEBHOOKS_DISABLED" } });
       if (!Buffer.isBuffer(request.body)
         || !verifyCustomerSignature(request.body, request.headers["x-ozav-signature"], options.secret, (options.now ?? (() => new Date()))())) {
+        if (options.onSignatureInvalid) {
+          try { await options.onSignatureInvalid(); }
+          catch { request.log.warn({ event: "webhook_signature_alert_unrecorded" }); }
+        }
         return reply.code(401).send({ error: { code: "WEBHOOK_SIGNATURE_INVALID" } });
       }
       let input: unknown;
@@ -27,8 +39,9 @@ export async function registerCustomerWebhookRoutes(app: FastifyInstance, option
       if (!parsed.success || request.headers["x-ozav-event-id"] !== parsed.data.id) {
         return reply.code(400).send({ error: { code: "WEBHOOK_EVENT_INVALID" } });
       }
-      // A dashboard endpoint may receive both environments. Never refresh a test link from a live event.
-      if (parsed.data.livemode) return { received: true, result: "ignored_environment" };
+      // A dashboard endpoint may receive both environments: an event from the other
+      // environment is acknowledged and ignored without touching any state.
+      if (parsed.data.livemode !== ((options.mode ?? "test") === "live")) return { received: true, result: "ignored_environment" };
       const digest = createHash("sha256").update(request.body).digest("hex");
       try {
         const result = await options.processor.process(parsed.data, digest);

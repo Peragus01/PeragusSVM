@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CustomerOnboarding } from "@/components/peragus/customer-onboarding";
+import { browserNavigation } from "@/lib/peragus/hosted-session";
 import type { ReactNode } from "react";
 vi.mock("@tanstack/react-router", async (original) => ({
   ...(await original<typeof import("@tanstack/react-router")>()),
@@ -218,5 +219,111 @@ describe("resumable required KYC", () => {
     );
     expect(fetcher.mock.calls.some(([url]) => String(url).includes("/simulate"))).toBe(false);
     expect(screen.getByText(/Este ambiente não permite operações reais/)).toBeInTheDocument();
+  });
+});
+describe("live hosted KYC and real registration", () => {
+  const hosted = "https://verify.ozav.io/session/abc123";
+  afterEach(() => vi.unstubAllEnvs());
+  function liveFetch(options: {
+    verification?: object | null;
+    started?: object;
+    registration?: object | null;
+    terms?: object | null;
+    draft?: object | null;
+  }) {
+    vi.stubEnv("VITE_PERAGUS_MONEY_MODE", "live");
+    return vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const path = String(url);
+      if (path.endsWith("/individual")) return Response.json({ data: options.draft ?? null });
+      if (path.endsWith("/terms")) return Response.json({ data: options.terms ?? null });
+      if (path.endsWith("/screening")) return Response.json({ data: null });
+      if (path.endsWith("/status")) return Response.json({ data: null });
+      if (path.endsWith("/onboarding/submit"))
+        return Response.json({ data: { state: "linked" } }, { status: 201 });
+      if (path.endsWith("/onboarding"))
+        return Response.json({
+          data: "registration" in options ? options.registration : { state: "linked" },
+        });
+      if (path.endsWith("/verification"))
+        return Response.json(
+          { data: init?.method === "POST" ? options.started : (options.verification ?? null) },
+          { status: init?.method === "POST" ? 201 : 200 },
+        );
+      throw Error("Unexpected request " + path);
+    });
+  }
+  const pending = (url: string | null) => ({
+    status: "pending",
+    identity_outcome: null,
+    session_url: url,
+    environment: "live",
+    sandbox_only: false,
+  });
+  it("redirects to session_url in live after starting the verification", async () => {
+    const assign = vi.spyOn(browserNavigation, "assign").mockImplementation(() => {});
+    liveFetch({ started: pending(hosted) });
+    render(<CustomerOnboarding />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Iniciar verificação de identidade" }),
+    );
+    await waitFor(() => expect(assign).toHaveBeenCalledWith(hosted));
+    expect(document.body.textContent).not.toMatch(
+      /sintétic|ambiente de testes|não permite operações reais/i,
+    );
+  });
+  it.each([
+    "https://evil.example/session",
+    "http://verify.ozav.io/session",
+    "https://verify.ozav.io.evil.example/s",
+    "javascript:alert(1)",
+  ])("never redirects to a session_url outside OZAV: %s", async (url) => {
+    const assign = vi.spyOn(browserNavigation, "assign").mockImplementation(() => {});
+    liveFetch({ started: pending(url) });
+    render(<CustomerOnboarding />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Iniciar verificação de identidade" }),
+    );
+    await screen.findByText(/sessão de verificação de identidade está indisponível/i);
+    expect(assign).not.toHaveBeenCalled();
+  });
+  it("resumes an open hosted session only on the person's action", async () => {
+    const assign = vi.spyOn(browserNavigation, "assign").mockImplementation(() => {});
+    liveFetch({ verification: pending(hosted) });
+    render(<CustomerOnboarding />);
+    const resume = await screen.findByRole("button", {
+      name: "Continuar verificação de identidade",
+    });
+    expect(assign).not.toHaveBeenCalled();
+    fireEvent.click(resume);
+    expect(assign).toHaveBeenCalledWith(hosted);
+  });
+  it("sends the live truthfulness attestation, never the sandbox field", async () => {
+    const fetcher = liveFetch({
+      registration: null,
+      draft: { version: 3, individual: syntheticIndividual },
+      terms: {
+        session_id: "terms-1",
+        state: "accepted",
+        terms_url: null,
+        can_accept: false,
+        expired: false,
+      },
+    });
+    render(<CustomerOnboarding />);
+    fireEvent.click(
+      await screen.findByLabelText("Confirmo que os dados informados são meus e verdadeiros."),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Enviar cadastro para verificação" }));
+    await waitFor(() =>
+      expect(fetcher.mock.calls.some(([url]) => String(url).endsWith("/onboarding/submit"))).toBe(
+        true,
+      ),
+    );
+    const submit = fetcher.mock.calls.find(([url]) => String(url).endsWith("/onboarding/submit"))!;
+    expect(JSON.parse(String(submit[1]?.body))).toEqual({
+      draft_version: 3,
+      terms_session_id: "terms-1",
+      data_truthfulness_confirmed: true,
+    });
   });
 });

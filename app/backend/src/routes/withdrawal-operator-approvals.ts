@@ -23,7 +23,7 @@ export async function registerWithdrawalOperatorApprovalRoutes(app:FastifyInstan
      const result=await service.approve(user,params.data.id,parsed.data.request_id,parsed.data.reason);
      return reply.code(result.replayed?200:201).send({data:result.data,meta:{idempotent_replay:result.replayed}});
     }catch(error){
-     if(error instanceof OperatorApprovalError){const status=error.code.endsWith("NOT_FOUND")?404:["WITHDRAWAL_OPERATOR_REQUIRED","WITHDRAWAL_OPERATOR_MFA_REQUIRED"].includes(error.code)?403:409;return reply.code(status).send({error:{code:error.code}});}
+     if(error instanceof OperatorApprovalError){const status=error.code.endsWith("NOT_FOUND")?404:["WITHDRAWAL_OPERATOR_REQUIRED","WITHDRAWAL_OPERATOR_MFA_REQUIRED","OPERATOR_MFA_STALE"].includes(error.code)?403:409;return reply.code(status).send({error:{code:error.code}});}
      request.log.warn({event:"withdrawal_operator_approval_unavailable"});return reply.code(503).send({error:{code:"WITHDRAWAL_APPROVAL_UNAVAILABLE"}});
     }
    }

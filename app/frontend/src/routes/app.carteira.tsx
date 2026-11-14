@@ -1,3 +1,4 @@
+import { useMoneyMode } from "@/lib/peragus/config";
 import { CustomerWalletLink } from "@/components/peragus/customer-wallet-link";
 import { profileLabel } from "@/lib/peragus/customer-copy";
 import { createFileRoute } from "@tanstack/react-router";
@@ -8,6 +9,7 @@ export const Route = createFileRoute("/app/carteira")({ component: WalletPage })
 function WalletPage() {
   const wallet = usePeragusWallet();
   const { identity } = useCustomerSession();
+  const test = useMoneyMode() === "test";
   return (
     <>
       <SectionTitle
@@ -16,8 +18,9 @@ function WalletPage() {
         description="Conecte sua carteira Solana e confira o endereço público. Suas chaves continuam com você."
       />
       <CustomerNotice kind="warning">
-        A conexão disponível usa a rede de testes Solana Devnet. Não envie fundos reais. Conectar a
-        carteira aqui não altera o endereço vinculado à sua conta.
+        {test
+          ? "A conexão disponível usa a rede de testes Solana Devnet. Não envie fundos reais. Conectar a carteira aqui não altera o endereço vinculado à sua conta."
+          : "A conexão usa a rede Solana. Conectar a carteira aqui não altera o endereço vinculado à sua conta."}
       </CustomerNotice>
       <div className="customer-grid-two">
         <CustomerPanel title="Sua carteira">

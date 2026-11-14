@@ -6,10 +6,14 @@ import { notificationConfig } from "./notifications/config.js";
 import { emailNotificationReady } from "./notifications/onboarding-email.js";
 import { SandboxClosureService } from "./withdrawals/sandbox-closure.js";
 import { OperatorAlertService } from "./operations/operator-alerts.js";
+import { OperatorNotificationListService } from "./operations/operator-notification-list.js";
 import { PostgresApiRateLimiter } from "./auth/api-rate-limits.js";
 import { PilotInviteService } from "./invites/pilot-invites.js";
 import { CustomerReconciliationStatusService } from "./jobs/customer-reconciliation.js";
 import { ManualRefundService } from "./refunds/manual-refunds.js";
+import { RuntimeControlService } from "./operations/runtime-controls.js";
+import { DailyReviewService } from "./operations/daily-review.js";
+import { recordWebhookSignatureInvalid } from "./operations/operator-notifications.js";
 import {
   SandboxWithdrawalRecoveryService,
   createSandboxRecoveryReader,
@@ -21,14 +25,19 @@ import { CustomerWithdrawalResultService } from "./withdrawals/customer-withdraw
 import { SandboxWithdrawalExecutionService } from "./withdrawals/sandbox-execution.js";
 import { PostgresSandboxExecutionRepository } from "./repositories/postgres-sandbox-withdrawal-execution.js";
 import { OzavSandboxWithdrawalProvider } from "./providers/ozav-sandbox-withdrawal.js";
+import { createSolanaTokenAccountReader } from "./providers/solana-token-accounts.js";
 import { WithdrawalOperatorApprovalService } from "./withdrawals/operator-approvals.js";
 import { PostgresWithdrawalOperatorApprovalRepository } from "./repositories/postgres-withdrawal-operator-approvals.js";
 import { CustomerWithdrawalRequestService } from "./withdrawals/customer-withdrawal-requests.js";
 import { PostgresCustomerWithdrawalRequestRepository } from "./repositories/postgres-customer-withdrawal-requests.js";
-import { CustomerSandboxPixService } from "./purchases/customer-sandbox-pix.js";
+import { CustomerPixService } from "./purchases/customer-sandbox-pix.js";
 import { PostgresCustomerPixRepository } from "./repositories/postgres-customer-sandbox-pix.js";
 import { CustomerPurchaseIntentService } from "./purchases/customer-purchase-intents.js";
+import { CustomerPurchaseCancelService } from "./purchases/customer-purchase-cancel.js";
+import { PostgresPurchaseCancelRepository } from "./repositories/postgres-customer-purchase-cancel.js";
 import { PostgresCustomerPurchaseIntentRepository } from "./repositories/postgres-customer-purchase-intents.js";
+import { purchaseLimits } from "./purchases/operation-status.js";
+import { createPurchaseProgression } from "./purchases/purchase-progression-factory.js";
 import { CustomerQuoteService } from "./quotes/customer-quotes.js";
 import { PostgresCustomerQuoteRepository } from "./repositories/postgres-customer-quotes.js";
 import { CustomerWalletService } from "./wallets/customer-wallet.js";
@@ -52,10 +61,20 @@ import { PostgresCustomerWebhookProcessor } from "./repositories/postgres-custom
 import { OzavSandboxCustomerService } from "./application/ozav-sandbox-customer.js";
 import { PostgresSandboxCustomerLinkRepository } from "./repositories/postgres-sandbox-customer-link.js";
 import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
-import { verifyDatabaseConnection } from "./database/readiness.js";
+import {
+  READINESS_OZAV_TIMEOUT_MS,
+  databaseReadinessProbe,
+  queueReadinessProbe,
+  verifyDatabaseConnection,
+} from "./database/readiness.js";
 import { randomUUID } from "node:crypto";
+import { OperatorResolutionService } from "./operations/operator-resolutions.js";
+import { workerHeartbeatProbe } from "./operations/worker-heartbeat.js";
+import { setDailyReviewFloorDate } from "./operations/daily-review.js";
 import { INVITE_STAGING_ORIGIN } from "./invites/invite-email-template.js";
 import { createSupabaseAuthenticator } from "./auth/supabase-authenticator.js";
+import { LegalAcceptanceService, parseLegalRequiredDocuments } from "./legal/legal-acceptance.js";
+import { PostgresLegalAcceptanceRepository } from "./repositories/postgres-customer-legal-acceptances.js";
 import { PostgresCustomerRepository } from "./repositories/postgres-customer-repository.js";
 import { Connection, PublicKey } from "@solana/web3.js";
 import type { Pool } from "pg";
@@ -96,6 +115,8 @@ import {
 } from "./application/simulate-sandbox-pix-payment.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
+import { assertDatabaseEnvironment, runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
+import { moneyModeFor, providerKeyMatchesMode, resolveMoneyEnvironment } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import {
   createJobQueue,
@@ -124,6 +145,11 @@ import type { SettlementRepository } from "./repositories/settlement-repository.
 
 console.info(JSON.stringify(deploymentConfigurationAudit()));
 const env = getEnv();
+// Final review I8: every ended São Paulo day with activity since this date must be reviewed.
+setDailyReviewFloorDate(env.DAILY_REVIEW_FLOOR_DATE);
+const moneyMode = moneyModeFor(env);
+// Fresh-TOTP window for money-moving operator actions (OPERATOR_MFA_MAX_AGE_SECONDS, <= 300 s).
+const operatorMfaPolicy = { mfaMaxAgeSeconds: env.OPERATOR_MFA_MAX_AGE_SECONDS };
 const onboardingEmailConfig = notificationConfig();
 if (process.env.RAILWAY_ENVIRONMENT_NAME === "production" || env.PERAGUS_DEPLOYMENT_ENV === "production") {
   assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV});
@@ -198,7 +224,7 @@ if (env.CUSTOMER_WEBHOOKS_ENABLED && !env.CUSTOMER_WEBHOOK_SECRET) {
 const documentOrigins = new Set(env.CUSTOMER_DOCUMENT_UPLOAD_ORIGINS.split(",").map(v=>v.trim()).filter(Boolean));
 if (env.CUSTOMER_DOCUMENTS_ENABLED) {
   assertNotificationEnvironment(env, {...process.env, ONBOARDING_EMAIL_DEPLOYMENT_ENV:env.PERAGUS_DEPLOYMENT_ENV});
-  if (!env.OZAV_API_KEY?.startsWith("ozav_sk_test_")
+  if (!providerKeyMatchesMode(env.OZAV_API_KEY, moneyMode)
     || !env.CUSTOMER_SUBMISSION_ENABLED || !env.API_RATE_LIMITS_ENABLED || !documentOrigins.size)
     throw new Error("DOCUMENT_STAGING_CONFIGURATION_REQUIRED");
   for (const value of documentOrigins) {
@@ -278,6 +304,10 @@ if (env.DATABASE_URL) {
 
   try {
     if (process.env.RAILWAY_ENVIRONMENT_NAME) await verifyDatabaseConnection(databasePool);
+    // The database must be recorded for this process's money mode.
+    if (process.env.RAILWAY_ENVIRONMENT_NAME || env.PERAGUS_DEPLOYMENT_ENV === "production") {
+      await assertDatabaseEnvironment(databasePool, moneyModeFor(env));
+    }
     await startJobQueue(jobQueue);
     await ensureSettlementQueues(jobQueue);
   } catch (error) {
@@ -344,6 +374,7 @@ if (env.DATABASE_URL) {
       onramps,
       client: new OzavClient({
         apiKey: env.OZAV_API_KEY!,
+        mode: moneyModeFor(env),
         timeoutMs: 10_000,
         attempts: 1,
       }),
@@ -360,6 +391,7 @@ if (env.DATABASE_URL) {
 
     const ozavClient = new OzavClient({
       apiKey: env.OZAV_API_KEY!,
+      mode: moneyModeFor(env),
     });
 
     ozavOfframpInitiator = new InitiateOzavOfframpService({
@@ -459,37 +491,103 @@ if (env.DATABASE_URL) {
 
 const draftService = individualDraftCipher
   ? new IndividualDraftService(
-      new PostgresIndividualDraftRepository(pool!),
+      new PostgresIndividualDraftRepository(pool!, moneyModeFor(env)),
       individualDraftCipher,
     )
   : undefined;
 const customerTermsService =
   env.CUSTOMER_TERMS_ENABLED || env.CUSTOMER_SUBMISSION_ENABLED
     ? new CustomerTermsService(
-        new PostgresCustomerTermsRepository(pool!),
+        new PostgresCustomerTermsRepository(pool!, moneyModeFor(env)),
         new TermsVault(
           env.CUSTOMER_DATA_ENCRYPTION_KEY ?? "",
           env.CUSTOMER_DATA_ENCRYPTION_KEY_ID,
         ),
         new OzavClient({
           apiKey: env.OZAV_API_KEY!,
+          mode: moneyModeFor(env),
           attempts: 1,
           timeoutMs: 5000,
         }),
         draftService!,
+        () => new Date(),
+        moneyMode,
       )
     : undefined;
+// Read-only on-chain delivery check (getParsedTransaction) that completes a sent operation.
+// Test deployments without a configured USDT mint keep reconciling without it.
+const deliveryCheck =
+  moneyMode === "live" || env.SOLANA_USDT_MINT
+    ? {
+        usdtMint: resolveMoneyEnvironment(env).usdtMint,
+        toleranceUnits: env.USDT_DELIVERY_TOLERANCE_UNITS,
+        connection: new Connection(env.SOLANA_RPC_URL, "confirmed"),
+      }
+    : undefined;
 const app = await buildApp({
+  // GET /v1/admin/operator-status answers only whether the caller is allowlisted.
+  operatorUserIds: new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+  moneyMode,
+  // GET /ready (public): database, queue schema and OZAV capabilities, each ok/failed only.
+  ...(pool
+    ? {
+        readiness: {
+          database: databaseReadinessProbe(
+            pool,
+            process.env.RAILWAY_ENVIRONMENT_NAME || env.PERAGUS_DEPLOYMENT_ENV === "production"
+              ? () => assertDatabaseEnvironment(pool!, moneyModeFor(env))
+              : undefined,
+          ),
+          // Hosted deployments: the worker must also have beaten within 3 minutes (final review I12).
+          queue: queueReadinessProbe(
+            pool,
+            process.env.RAILWAY_ENVIRONMENT_NAME || env.PERAGUS_DEPLOYMENT_ENV === "production"
+              ? workerHeartbeatProbe(pool, moneyModeFor(env))
+              : undefined,
+          ),
+          // No OZAV key in this process: the check is skipped and reported "ok".
+          ...(env.OZAV_API_KEY
+            ? {
+                ozav: async () => {
+                  const capabilities = await new OzavClient({
+                    apiKey: env.OZAV_API_KEY!,
+                    mode: moneyModeFor(env),
+                    timeoutMs: READINESS_OZAV_TIMEOUT_MS,
+                    attempts: 1,
+                  }).getCapabilities();
+                  if (capabilities.environment !== moneyModeFor(env)) throw new Error("OZAV_ENVIRONMENT_MISMATCH");
+                },
+              }
+            : {}),
+        },
+      }
+    : {}),
   ...(pool
     ? {
         sandboxClosureService: new SandboxClosureService(
           pool,
-          new PostgresSandboxExecutionRepository(pool),
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new PostgresSandboxExecutionRepository(pool, moneyModeFor(env)),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
           env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED,
           env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED
-            ? createSandboxRecoveryReader(env.OZAV_API_KEY!)
+            ? createSandboxRecoveryReader(env.OZAV_API_KEY!, moneyMode)
             : undefined,
+        ),
+      }
+    : {}),
+  ...(pool
+    ? {
+        // Runtime kill switches (GET/PUT /v1/admin/runtime-controls): operator + fresh MFA, audited.
+        runtimeControlService: new RuntimeControlService(
+          pool,
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
+          operatorMfaPolicy,
+        ),
+        // Daily review (POST /v1/admin/daily-reviews): operator + fresh MFA; gates new operations.
+        dailyReviewService: new DailyReviewService(
+          pool,
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
+          operatorMfaPolicy,
         ),
       }
     : {}),
@@ -497,7 +595,11 @@ const app = await buildApp({
     ? {
         operatorAlertService: new OperatorAlertService(
           pool,
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
+        ),
+        operatorNotificationListService: new OperatorNotificationListService(
+          pool,
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
         ),
       }
     : {}),
@@ -508,7 +610,7 @@ const app = await buildApp({
     ? {
         pilotInviteService: new PilotInviteService(
           pool,
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
           env.PILOT_INVITES_ENABLED,
           env.PILOT_INVITE_EMAIL_HASH_KEY,
           env.INVITE_EMAIL_OUTBOX_ENABLED
@@ -525,6 +627,7 @@ const app = await buildApp({
           new CustomerReconciliationStatusService(
             pool,
             new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+            moneyModeFor(env),
           ),
       }
     : {}),
@@ -534,15 +637,49 @@ const app = await buildApp({
           pool,
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
           env.MANUAL_REFUNDS_ENABLED,
+          moneyModeFor(env),
+          // Recording a refund requires and closes a refund_pending operation (atomically).
+          true,
+          operatorMfaPolicy,
         ),
+      }
+    : {}),
+  // Ruling 39 operator resolutions: GET-only provider reads, audited local moves.
+  ...(pool && env.OZAV_API_KEY
+    ? {
+        operatorResolutionService: (() => {
+          const client = new OzavClient({ apiKey: env.OZAV_API_KEY!, mode: moneyModeFor(env), attempts: 1, timeoutMs: 5000 });
+          const reads = Object.freeze({
+            findCustomerPixTransfer: client.findCustomerPixTransfer.bind(client),
+            getTransfer: client.getTransfer.bind(client),
+          });
+          return new OperatorResolutionService({
+            pool: pool!,
+            mode: moneyModeFor(env),
+            operators: new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+            policy: operatorMfaPolicy,
+            pix: { repo: new PostgresCustomerPixRepository(pool!, moneyModeFor(env), purchaseLimits(env)), provider: reads },
+            progression: createPurchaseProgression(pool!, moneyModeFor(env), env, client),
+            ...(deliveryCheck
+              ? {
+                  delivery: {
+                    repo: new PostgresSandboxExecutionRepository(pool!, moneyModeFor(env)),
+                    provider: new OzavSandboxWithdrawalProvider(env.OZAV_API_KEY!, { mode: moneyModeFor(env) }),
+                    check: deliveryCheck,
+                  },
+                }
+              : {}),
+          });
+        })(),
       }
     : {}),
   ...(env.SANDBOX_WITHDRAWAL_RECOVERY_ENABLED
     ? {
         sandboxWithdrawalRecoveryService: new SandboxWithdrawalRecoveryService(
-          new PostgresSandboxExecutionRepository(pool!),
-          createSandboxRecoveryReader(env.OZAV_API_KEY!),
+          new PostgresSandboxExecutionRepository(pool!, moneyModeFor(env)),
+          createSandboxRecoveryReader(env.OZAV_API_KEY!, moneyMode),
           new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          deliveryCheck,
         ),
       }
     : {}),
@@ -550,7 +687,7 @@ const app = await buildApp({
     ? {
         operatorWithdrawalAuditService: new OperatorWithdrawalAuditService(
           pool,
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
         ),
       }
     : {}),
@@ -558,21 +695,21 @@ const app = await buildApp({
     ? {
         operatorWithdrawalQueueService: new OperatorWithdrawalQueueService(
           pool,
-          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+          new Set(env.WITHDRAWAL_OPERATOR_USER_IDS), moneyModeFor(env),
         ),
       }
     : {}),
   ...(pool
     ? {
         customerOperationHistoryService: new CustomerOperationHistoryService(
-          pool,
+          pool, moneyModeFor(env),
         ),
       }
     : {}),
   ...(pool
     ? {
         customerWithdrawalResultService: new CustomerWithdrawalResultService(
-          pool,
+          pool, moneyModeFor(env),
         ),
       }
     : {}),
@@ -580,12 +717,25 @@ const app = await buildApp({
     ? {
         sandboxWithdrawalExecutionService:
           new SandboxWithdrawalExecutionService(
-            new PostgresSandboxExecutionRepository(pool!),
-            new OzavSandboxWithdrawalProvider(env.OZAV_API_KEY!),
+            new PostgresSandboxExecutionRepository(pool!, moneyModeFor(env)),
+            new OzavSandboxWithdrawalProvider(env.OZAV_API_KEY!, { mode: moneyModeFor(env) }),
             new WithdrawalOperatorApprovalService(
-              new PostgresWithdrawalOperatorApprovalRepository(pool!),
+              new PostgresWithdrawalOperatorApprovalRepository(pool!, moneyModeFor(env)),
               new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+              moneyMode,
+              operatorMfaPolicy,
             ),
+            // Before a send: the destination must hold a token account for this environment's USDT mint.
+            {
+              usdtMint: resolveMoneyEnvironment(env).usdtMint,
+              reader: createSolanaTokenAccountReader(new Connection(env.SOLANA_RPC_URL, "confirmed")),
+            },
+            {
+              mfaMaxAgeSeconds: env.OPERATOR_MFA_MAX_AGE_SECONDS,
+              minDelaySeconds: env.OPERATOR_EXECUTION_MIN_DELAY_SECONDS,
+              fourEyes: env.OPERATOR_FOUR_EYES_ENABLED,
+            },
+            deliveryCheck,
           ),
       }
     : {}),
@@ -593,15 +743,18 @@ const app = await buildApp({
     ? {
         withdrawalOperatorApprovalService:
           new WithdrawalOperatorApprovalService(
-            new PostgresWithdrawalOperatorApprovalRepository(pool!),
+            new PostgresWithdrawalOperatorApprovalRepository(pool!, moneyModeFor(env)),
             new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
+            moneyMode,
+            operatorMfaPolicy,
           ),
       }
     : {}),
   ...(env.CUSTOMER_WITHDRAWAL_REQUESTS_ENABLED
     ? {
         customerWithdrawalRequestService: new CustomerWithdrawalRequestService(
-          new PostgresCustomerWithdrawalRequestRepository(pool!),
+          new PostgresCustomerWithdrawalRequestRepository(pool!, moneyModeFor(env)),
+          moneyMode,
         ),
       }
     : {}),
@@ -609,47 +762,89 @@ const app = await buildApp({
     env.CUSTOMER_SANDBOX_PIX_SIMULATION_ENABLED,
   ...(env.CUSTOMER_SANDBOX_PIX_ENABLED
     ? {
-        customerSandboxPixService: new CustomerSandboxPixService(
-          new PostgresCustomerPixRepository(pool!),
+        customerSandboxPixService: new CustomerPixService(
+          new PostgresCustomerPixRepository(pool!, moneyModeFor(env), purchaseLimits(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
+          // Records accepted -> awaiting_pix, or failed when the FX rate lock is refused.
+          new PostgresCustomerPurchaseIntentRepository(pool!, moneyModeFor(env), {
+            maxOpenGlobal: env.PURCHASE_MAX_OPEN_GLOBAL,
+            limits: purchaseLimits(env),
+          }),
+          {
+            // Final review I9: instructions hidden N minutes before min(Pix expiry, lock deadline).
+            instructionsMarginMs: env.PIX_INSTRUCTIONS_HIDE_MARGIN_MINUTES * 60_000,
+            // Final review I5: the customer "atualizar" runs progression (GET-only reads).
+            progression: createPurchaseProgression(pool!, moneyModeFor(env), env, new OzavClient({
+              apiKey: env.OZAV_API_KEY!,
+              mode: moneyModeFor(env),
+              attempts: 1,
+              timeoutMs: 5000,
+            })),
+          },
         ),
       }
     : {}),
   ...(env.CUSTOMER_PURCHASE_INTENTS_ENABLED
     ? {
         customerPurchaseIntentService: new CustomerPurchaseIntentService(
-          new PostgresCustomerPurchaseIntentRepository(pool!),
+          new PostgresCustomerPurchaseIntentRepository(pool!, moneyModeFor(env), {
+            maxOpenGlobal: env.PURCHASE_MAX_OPEN_GLOBAL,
+            limits: purchaseLimits(env),
+          }),
+          moneyMode,
+        ),
+      }
+    : {}),
+  // Customer cancel before Pix (policy 7.1): GET-only OZAV reads, then progression.
+  ...(env.CUSTOMER_PURCHASE_INTENTS_ENABLED && env.CUSTOMER_SANDBOX_PIX_ENABLED
+    ? {
+        customerPurchaseCancelService: new CustomerPurchaseCancelService(
+          new PostgresPurchaseCancelRepository(pool!, moneyModeFor(env)),
+          createPurchaseProgression(pool!, moneyModeFor(env), env, new OzavClient({
+            apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
+            attempts: 1,
+            timeoutMs: 5000,
+          })),
         ),
       }
     : {}),
   ...(env.CUSTOMER_QUOTES_ENABLED
     ? {
         customerQuoteService: new CustomerQuoteService(
-          new PostgresCustomerQuoteRepository(pool!),
-          new PostgresOnboardingSubmissionRepository(pool!),
+          new PostgresCustomerQuoteRepository(pool!, moneyModeFor(env)),
+          new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
+          purchaseLimits(env),
         ),
       }
     : {}),
   ...(env.CUSTOMER_WALLET_LINKING_ENABLED
     ? {
+        // Constructed only when enabled: the wallet proof binds to the resolved
+        // environment's domain and network (staging requires SOLANA_USDT_MINT).
         customerWalletService: new CustomerWalletService(
-          new PostgresCustomerWalletRepository(pool!),
+          new PostgresCustomerWalletRepository(pool!, moneyModeFor(env)),
+          resolveMoneyEnvironment(env),
         ),
       }
     : {}),
   ...(env.CUSTOMER_ONBOARDING_STATUS_ENABLED
     ? {
         customerOnboardingOverview: new CustomerOnboardingOverview(
-          new PostgresOnboardingOverviewRepository(pool!),
+          new PostgresOnboardingOverviewRepository(pool!, moneyModeFor(env)),
           {
             draft: env.CUSTOMER_ONBOARDING_ENABLED,
             terms: env.CUSTOMER_TERMS_ENABLED,
@@ -661,38 +856,44 @@ const app = await buildApp({
           undefined,
           async customer => onboardingEmailConfig.enabled && onboardingEmailConfig.owners.includes(customer.ownerUserId)
             ? emailNotificationReady(pool!, customer.ownerUserId) : false,
+          moneyMode,
         ),
       }
     : {}),
   ...(env.CUSTOMER_SCREENINGS_ENABLED
     ? {
         customerScreeningService: new CustomerScreeningService(
-          new PostgresCustomerScreeningRepository(pool!),
-          new PostgresOnboardingSubmissionRepository(pool!),
+          new PostgresCustomerScreeningRepository(pool!, moneyModeFor(env)),
+          new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
         ),
       }
     : {}),
   ...(env.CUSTOMER_DOCUMENTS_ENABLED ? {customerDocumentService: new CustomerDocumentService(
-    new DocumentRepository(pool!), new PostgresOnboardingSubmissionRepository(pool!),
-    new OzavClient({apiKey:env.OZAV_API_KEY!, attempts:1, timeoutMs:5000}), documentOrigins,
-    (url, bytes, mime, binding) => uploadDocumentBytes(url, bytes, mime, {apiKey: env.OZAV_API_KEY!, ...binding}),
+    new DocumentRepository(pool!, moneyModeFor(env)), new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
+    new OzavClient({apiKey: env.OZAV_API_KEY!,mode: moneyModeFor(env), attempts:1, timeoutMs:5000}), documentOrigins,
+    (url, bytes, mime, binding) => uploadDocumentBytes(url, bytes, mime, {apiKey: env.OZAV_API_KEY!, mode: moneyMode, ...binding}),
     (event) => console.warn(JSON.stringify({event:"customer_document_upload_failure", ...event})),
+    moneyMode,
   )} : {}),
   ...(env.CUSTOMER_VERIFICATIONS_ENABLED
     ? {
         customerVerificationService: new CustomerVerificationService(
-          new PostgresCustomerVerificationRepository(pool!),
-          new PostgresOnboardingSubmissionRepository(pool!),
+          new PostgresCustomerVerificationRepository(pool!, moneyModeFor(env)),
+          new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
         ),
         verificationSimulationEnabled:
           env.CUSTOMER_VERIFICATION_SIMULATION_ENABLED,
@@ -701,7 +902,7 @@ const app = await buildApp({
   ...(env.CUSTOMER_SUBMISSION_ENABLED
     ? {
         customerSubmissionService: new CustomerSubmissionService(
-          new PostgresOnboardingSubmissionRepository(pool!),
+          new PostgresOnboardingSubmissionRepository(pool!, moneyModeFor(env)),
           new SubmissionVault(
             env.CUSTOMER_DATA_ENCRYPTION_KEY ?? "",
             env.CUSTOMER_DATA_ENCRYPTION_KEY_ID,
@@ -710,9 +911,11 @@ const app = await buildApp({
           customerTermsService!,
           new OzavClient({
             apiKey: env.OZAV_API_KEY!,
+            mode: moneyModeFor(env),
             attempts: 1,
             timeoutMs: 5000,
           }),
+          moneyMode,
         ),
       }
     : {}),
@@ -726,29 +929,45 @@ const app = await buildApp({
     ? {
         customerWebhooks: {
           secret: env.CUSTOMER_WEBHOOK_SECRET!,
-          processor: new PostgresCustomerWebhookProcessor(
-            pool!,
-            new OzavClient({
+          mode: moneyModeFor(env),
+          // Operator + trusted person e-mail (outbox), at most once per hour.
+          onSignatureInvalid: () => recordWebhookSignatureInvalid(pool!, moneyModeFor(env)),
+          processor: (() => {
+            const client = new OzavClient({
               apiKey: env.OZAV_API_KEY!,
+              mode: moneyModeFor(env),
               attempts: 1,
               timeoutMs: 3000,
-            }),
-          ),
+            });
+            // transfer.* events re-read the transfer by GET and progress the purchase.
+            return new PostgresCustomerWebhookProcessor(pool!, client, moneyModeFor(env),
+              createPurchaseProgression(pool!, moneyModeFor(env), env, client));
+          })(),
         },
       }
     : {}),
   ...(env.INVITE_EMAIL_OUTBOX_ENABLED && env.INVITE_EMAIL_WEBHOOK_SECRET
-    ? { inviteDelivery: { secret: env.INVITE_EMAIL_WEBHOOK_SECRET, service: new InviteEmailDelivery(pool!) } }
+    ? { inviteDelivery: { secret: env.INVITE_EMAIL_WEBHOOK_SECRET, service: new InviteEmailDelivery(pool!, moneyModeFor(env)) } }
     : {}),
+  trustProxyHops: env.TRUST_PROXY_HOPS,
   customerAccess: {
     authenticate,
     customers: new PostgresCustomerRepository(pool!),
+    // Fail closed: customer routes never start without the required legal documents.
+    legal: (() => {
+      if (!env.LEGAL_REQUIRED_DOCUMENTS)
+        throw new Error("LEGAL_REQUIRED_DOCUMENTS is required");
+      return new LegalAcceptanceService(
+        parseLegalRequiredDocuments(env.LEGAL_REQUIRED_DOCUMENTS),
+        new PostgresLegalAcceptanceRepository(pool!, moneyModeFor(env)),
+      );
+    })(),
   },
   ...(env.OZAV_SANDBOX_CUSTOMERS_ENABLED
     ? {
         ozavSandboxCustomerService: new OzavSandboxCustomerService(
-          new PostgresSandboxCustomerLinkRepository(pool!),
-          new OzavClient({ apiKey: env.OZAV_API_KEY!, attempts: 1 }),
+          new PostgresSandboxCustomerLinkRepository(pool!, moneyModeFor(env)),
+          new OzavClient({ apiKey: env.OZAV_API_KEY!, mode: moneyModeFor(env), attempts: 1 }),
         ),
       }
     : {}),
@@ -824,6 +1043,14 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  await runMoneyEnvironmentBootChecks(
+    env,
+    {
+      ozavClient: (apiKey, mode) => new OzavClient({ apiKey, mode, attempts: 1, timeoutMs: 5000 }),
+      solanaConnection: (url) => new Connection(url, "confirmed"),
+    },
+    (e) => app.log.info(e),
+  );
   app.log.info({
     event: "sandbox_withdrawal_closure_configured",
     enabled: env.SANDBOX_WITHDRAWAL_CLOSURE_ENABLED,
@@ -919,6 +1146,9 @@ try {
     ),
     event: "api_startup_failure",
   });
-  await app.close();
+  await app.close().catch(() => undefined);
+  await boss?.stop().catch(() => undefined);
+  await pool?.end().catch(() => undefined);
   process.exitCode = 1;
+  process.exit(1);
 }

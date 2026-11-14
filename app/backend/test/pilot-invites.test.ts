@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -8,6 +9,7 @@ import { AuthenticationError } from "../src/auth/customer-access.js";
 import { PostgresCustomerRepository } from "../src/repositories/postgres-customer-repository.js";
 import { InviteEmailCipher } from "../src/invites/invite-email-cipher.js";
 import { PilotInviteService } from "../src/invites/pilot-invites.js";
+import { invitationMessage } from "../src/invites/invite-email-template.js";
 const db = new PGlite();
 const pool = {
   query: async (sql: string, args?: unknown[]) => {
@@ -24,7 +26,7 @@ const operator = {
   },
   reason = "Operador autoriza entrada no piloto fechado.";
 const service = (enabled = true) =>
-  new PilotInviteService(pool, new Set([operator.id]), enabled);
+  new PilotInviteService(pool, new Set([operator.id]),"test", enabled);
 let seeded: number;
 beforeAll(async () => {
   await db.exec(
@@ -44,6 +46,9 @@ beforeAll(async () => {
     }
     await db.exec(await readFile(new URL(f, dir), "utf8"));
   }
+  await db.exec(
+    "insert into peragus_database_environment(environment) values('test')",
+  );
   seeded = Number(
     (
       await db.query<{ n: number }>(
@@ -66,7 +71,7 @@ async function appFor(
   enabled = true,
 ) {
   const app = await buildApp({
-    customerAccess: {
+    customerAccess: { legal: allAcceptedLegal,
       customers,
       authenticate: async (token) => {
         if (token !== "synthetic")
@@ -95,7 +100,7 @@ describe("closed PF pilot invitations", () => {
     );
     const svc = new PilotInviteService(
       pool,
-      new Set([operator.id]),
+      new Set([operator.id]),"test",
       true,
       "ab".repeat(32),
       cipher,
@@ -135,7 +140,7 @@ describe("closed PF pilot invitations", () => {
     );
     const svc = new PilotInviteService(
       pool,
-      new Set([operator.id]),
+      new Set([operator.id]),"test",
       true,
       "ab".repeat(32),
       cipher,
@@ -311,7 +316,7 @@ describe("closed PF pilot invitations", () => {
       id = randomUUID(),
       code = "pginv_" + "b".repeat(43);
     await db.query(
-      "insert into peragus_pilot_invites(id,slot,target_user_id,code_hash,operator_user_id,request_id,reason,duration_hours,created_at,expires_at) values($1,1,$2,$3,$4,$5,$6,1,now()-interval '2 hours',now()-interval '1 hour')",
+      "insert into peragus_pilot_invites(id,slot,target_user_id,code_hash,operator_user_id,request_id,reason,duration_hours,created_at,expires_at,environment) values($1,1,$2,$3,$4,$5,$6,1,now()-interval '2 hours',now()-interval '1 hour','test')",
       [
         id,
         target,
@@ -564,7 +569,7 @@ describe("closed PF pilot invitations", () => {
 
 describe("email invitations before Auth signup", () => {
   const emails = () =>
-    new PilotInviteService(pool, new Set([operator.id]), true, "ab".repeat(32));
+    new PilotInviteService(pool, new Set([operator.id]),"test", true, "ab".repeat(32));
   it("validates without consuming, binds atomically to the confirmed account and replays safely", async () => {
     const request = randomUUID(),
       issued = await emails().issueEmail(
@@ -753,5 +758,39 @@ describe("email invitations before Auth signup", () => {
         })
       ).statusCode,
     ).toBe(400);
+  });
+});
+
+describe("invitation email follows the money mode", () => {
+  const code = "pginv_" + "y".repeat(43);
+  it("live invite email omits the test-environment banner", () => {
+    const message = JSON.parse(
+      invitationMessage("person@example.test", code, "contato@peragus.com.br", "https://www.peragus.com.br", "live"),
+    );
+    expect(message.subject).toBe("Seu convite para a Peragus");
+    for (const part of [message.subject, message.text, message.html]) {
+      expect(part).not.toMatch(/TESTES|AMBIENTE DE TESTES|SEM DINHEIRO REAL|sem dinheiro real/);
+    }
+    expect(message.text).toContain("https://www.peragus.com.br/cadastro");
+    expect(message.text).toContain(code);
+  });
+  it("test invite email keeps the test-environment banner", () => {
+    const message = JSON.parse(invitationMessage("person@example.test", code, "contato@peragus.com.br", undefined, "test"));
+    expect(message.subject).toContain("[TESTES]");
+    expect(message.text).toContain("AMBIENTE DE TESTES");
+    expect(message.html).toContain("AMBIENTE DE TESTES");
+  });
+  it("binds the outbox idempotency key to the row environment", async () => {
+    const r = await db.query<{ def: string }>(
+      "select pg_get_constraintdef(oid) as def from pg_constraint where conrelid='peragus_invite_email_outbox'::regclass and contype='c' and pg_get_constraintdef(oid) like '%peragus-invitation-%'",
+    );
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]!.def).toContain("environment");
+    expect(r.rows[0]!.def).not.toContain("peragus-invitation-test/");
+  });
+  it("refuses a live invitation that points at the staging frontend", () => {
+    expect(() => invitationMessage("person@example.test", code, "contato@peragus.com.br", undefined, "live")).toThrow(
+      "INVITE_FRONTEND_ORIGIN_INVALID",
+    );
   });
 });

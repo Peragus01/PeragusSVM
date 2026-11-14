@@ -1,3 +1,4 @@
+import { moneyMode, type MoneyMode } from "./config";
 export const DOCUMENT_LIMIT = 4 * 1024 * 1024;
 export type DocumentType = "identity_document" | "selfie" | "proof_of_address" | "bank_statement";
 export type DocumentSide = "front" | "back" | "single" | "none";
@@ -9,7 +10,7 @@ export interface DocumentRecord {
   doc_type: DocumentType;
   side: DocumentSide;
   state: DocumentState;
-  environment: "test";
+  environment: MoneyMode;
   identity_verified: false;
   operations_enabled: false;
 }
@@ -76,7 +77,7 @@ function parseDocument(x: unknown): DocumentRecord {
     !(x["doc_type"] === "identity_document"
       ? ["front", "back", "single"].includes(String(x["side"]))
       : x["side"] === "none") ||
-    x["environment"] !== "test" ||
+    x["environment"] !== moneyMode() ||
     x["identity_verified"] !== false ||
     x["operations_enabled"] !== false
   )
@@ -87,7 +88,7 @@ function parseDocument(x: unknown): DocumentRecord {
     doc_type: x["doc_type"] as DocumentType,
     side: x["side"] as DocumentSide,
     state: x["state"] as DocumentState,
-    environment: "test",
+    environment: moneyMode(),
     identity_verified: false,
     operations_enabled: false,
   };
@@ -144,7 +145,7 @@ export async function documentRequirements(
   const value = await request(token, "/requirements", {}, signal);
   if (
     !record(value) ||
-    value["environment"] !== "test" ||
+    value["environment"] !== moneyMode() ||
     value["identity_verified"] !== false ||
     value["operations_enabled"] !== false
   )

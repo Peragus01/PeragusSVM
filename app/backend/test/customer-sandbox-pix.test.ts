@@ -1,3 +1,5 @@
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import {randomUUID} from "node:crypto";
 import {Keypair} from "@solana/web3.js";
 import {readFile,readdir} from "node:fs/promises";
@@ -9,47 +11,56 @@ import {AuthenticationError} from "../src/auth/customer-access.js";
 import {PostgresCustomerRepository} from "../src/repositories/postgres-customer-repository.js";
 import {PostgresCustomerPurchaseIntentRepository} from "../src/repositories/postgres-customer-purchase-intents.js";
 import {CustomerPurchaseIntentService} from "../src/purchases/customer-purchase-intents.js";
-const db=new PGlite();let failInsert=false;
-const pool={query:async(sql:string,params?:unknown[])=>{
+const db=new PGlite();let failInsert=false;let connection=Promise.resolve();
+const query=async(sql:string,params?:unknown[])=>{
  if(failInsert && sql.startsWith("insert into peragus_customer_purchase_intents")){failInsert=false;throw new Error("private database details");}
  const r=await db.query(sql,params);return{...r,rowCount:r.rows.length};
+};
+// PGlite has one session: connections are handed out one at a time.
+const pool={query,connect:async()=>{
+ const previous=connection;let release!:()=>void;connection=new Promise<void>(resolve=>{release=resolve;});await previous;
+ return{query,release};
 }} as unknown as Pool;
-const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool),service=new CustomerPurchaseIntentService(repo);
+const wide={maxOpenGlobal:1000,limits:{minCents:1n,maxCents:1000000n}};
+const customers=new PostgresCustomerRepository(pool),repo=new PostgresCustomerPurchaseIntentRepository(pool,"test",wide),service=new CustomerPurchaseIntentService(repo);
 const apps:Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
  await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");const dir=new URL("../migrations/",import.meta.url);
  for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await db.exec(await readFile(new URL(f,dir),"utf8"));
+ await db.exec("insert into peragus_database_environment(environment) values('test')");
+ // Runtime kill switches start OFF (054); this suite performs guarded actions.
+ await enableRuntimeControls(db);
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 async function setup(type:"pf"|"pj"="pf"){
  const owner=randomUUID(),customer=(await customers.createOrGet({ownerUserId:owner,type,displayName:"Synthetic name"})).customer;
  const id=customer.id,provider=`ozav_cus_${id.replaceAll("-","")}`,terms=randomUUID(),wallet=Keypair.generate().publicKey.toBase58();
- await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance)
- values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now()-interval '1 day',now()-interval '2 days','{}','{}')`,[terms,id,randomUUID()]);
- await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version)
- values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full',$7,2)`,[randomUUID(),id,terms,"a".repeat(64),randomUUID(),provider,{requirements_pending:false}]);
- await db.query("insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature) values($1,$2,$3,now(),'private proof message','private proof signature')",[id,wallet,randomUUID()]);
- await db.query("insert into peragus_customer_verifications(customer_id,provider_customer_id,verification_id,observation,revision,refreshed_at) values($1,$2,$3,$4,3,now())",[id,provider,`ozav_vrf_${id.replaceAll("-","")}`,{status:"completed",checks:{kyc_document:"pass",liveness:"pass",face_match:"pass",aml_name_screening:"not_started"}}]);
- await db.query("insert into peragus_customer_screenings(customer_id,provider_customer_id,idempotency_key,screening_id,observation,revision,refreshed_at) values($1,$2,$3,$4,$5,4,now())",[id,provider,randomUUID(),`ozav_scr_${id.replaceAll("-","")}`,{status:"completed",result:"clear",matchesCount:0,suggestedDecision:"clear",lists:["sanctions","pep"]}]);
+ await db.query(`insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,state,terms_url,terms_version,expires_at,accepted_at,encrypted_token,encrypted_acceptance,environment)
+ values($1,$2,$3,now(),'accepted','https://ozav.io/terms','2.0',now()-interval '1 day',now()-interval '2 days','{}','{}','test')`,[terms,id,randomUUID()]);
+ await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,provider_status,verification_mode,provider_snapshot,snapshot_version,environment)
+ values($1,$2,1,$3,$4,$5,'{}','linked',$6,'approved','full',$7,2,'test')`,[randomUUID(),id,terms,"a".repeat(64),randomUUID(),provider,{requirements_pending:false}]);
+ await db.query("insert into peragus_customer_wallets(customer_id,wallet_address,proof_challenge_id,verified_at,proof_message,proof_signature,environment,network) values($1,$2,$3,now(),'private proof message','private proof signature','test','solana:devnet')",[id,wallet,randomUUID()]);
+ await db.query("insert into peragus_customer_verifications(customer_id,provider_customer_id,verification_id,observation,revision,refreshed_at,environment) values($1,$2,$3,$4,3,now(),'test')",[id,provider,`ozav_vrf_${id.replaceAll("-","")}`,{status:"completed",checks:{kyc_document:"pass",liveness:"pass",face_match:"pass",aml_name_screening:"not_started"}}]);
+ await db.query("insert into peragus_customer_screenings(customer_id,provider_customer_id,idempotency_key,screening_id,observation,revision,refreshed_at,environment) values($1,$2,$3,$4,$5,4,now(),'test')",[id,provider,randomUUID(),`ozav_scr_${id.replaceAll("-","")}`,{status:"completed",result:"clear",matchesCount:0,suggestedDecision:"clear",lists:["sanctions","pep"]}]);
  const makeQuote=async()=>{
   const localId=randomUUID(),providerId=`ozav_q_${localId.replaceAll("-","")}`,observation={id:providerId,customerId:provider,rateType:"floating",rate:"0.2",source:{currency:"BRL",amount:"500.00"},target:{currency:"USDT",amount:"100.000000"},spreadBps:0,rateWithoutSpread:"0.2",amountDeducted:null,expiresAt:null,createdAt:new Date().toISOString(),private_data:"never return"};
-  await db.query("insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,create_attempted,provider_quote_id,observation) values($1,$2,$3,$4,'500.00',true,$5,$6)",[localId,id,randomUUID(),provider,providerId,observation]);return localId;
+  await db.query("insert into peragus_customer_indicative_quotes(id,customer_id,request_id,provider_customer_id,source_amount_brl,create_attempted,provider_quote_id,observation,environment) values($1,$2,$3,$4,'500.00',true,$5,$6,'test')",[localId,id,randomUUID(),provider,providerId,observation]);return localId;
  };
  const actualQuoteId=await makeQuote();
  return{owner,customer,provider,terms,wallet,quoteId:actualQuoteId,makeQuote,requestId:randomUUID()};
 }
 async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
- const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
+ const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerPurchaseIntentService:service}:{})});apps.push(app);return app;
 }
 const path="/v1/me/purchase-intents",headers={authorization:"Bearer valid"};
 
 import {PostgresCustomerPixRepository} from "../src/repositories/postgres-customer-sandbox-pix.js";
-import {CustomerSandboxPixService} from "../src/purchases/customer-sandbox-pix.js";
+import {CustomerSandboxPixService,CustomerPixService} from "../src/purchases/customer-sandbox-pix.js";
 import type {OzavTransfer} from "../src/providers/ozav-client.js";
 async function fixture(){
  const s=await setup();
  await db.query("update peragus_customer_indicative_quotes set source_amount_brl=1000,observation=jsonb_set(observation,'{source,amount}','\"1000.00\"') where id=$1",[s.quoteId]);
- const p=await service.record(s.customer.id,s.requestId,s.quoteId),pixRepo=new PostgresCustomerPixRepository(pool);
+ const p=await service.record(s.customer.id,s.requestId,s.quoteId),pixRepo=new PostgresCustomerPixRepository(pool,"test");
  let posts=0,gets=0,simulations=0,listed:string|null=null;let mode="normal";
  const transfer:OzavTransfer={id:`ozav_tr_${randomUUID().replaceAll('-','')}`,status:"awaiting_payment",customerId:s.provider,
   quoteId:(await pixRepo.context(s.customer.id,p.data.id))!.providerQuoteId,
@@ -167,7 +178,7 @@ describe("customer-owned sandbox Pix",()=>{
  });
  it("requires simulation flag, auth and an empty body on the owned simulation route",async()=>{
   const f=await fixture(),charge=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id),url=`/v1/me/sandbox-pix/${charge.data.id}/simulate`;
-  const access={customers,authenticate:async()=>({id:f.s.owner})};
+  const access={legal:allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner})};
   const disabled=await buildApp({customerAccess:access,customerSandboxPixService:f.pix});apps.push(disabled);
   expect((await disabled.inject({method:"POST",url,headers})).statusCode).toBe(503);
   const app=await buildApp({customerAccess:access,customerSandboxPixService:f.pix,customerSandboxPixSimulationEnabled:true});apps.push(app);
@@ -175,13 +186,61 @@ describe("customer-owned sandbox Pix",()=>{
   expect((await app.inject({method:"POST",url,headers,payload:{provider_transfer_id:"foreign"}})).statusCode).toBe(400);
   const result=await app.inject({method:"POST",url,headers});expect(result.statusCode).toBe(200);expect(result.json().data.payment_confirmed).toBe(true);expect(result.headers["cache-control"]).toBe("no-store");
  });
+ it("moves the accepted operation to awaiting_pix when instructions are issued and reports the status",async()=>{
+  const f=await fixture(),pix=new CustomerPixService(f.pixRepo,f.provider,"test",repo);
+  const r=await pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+  expect(r.data).toMatchObject({status:"awaiting_pix",state:"awaiting_payment",payment_instructions:{br_code:"sandbox-code"}});
+  expect((await service.read(f.s.customer.id,f.p.data.id)).status).toBe("awaiting_pix");
+  const events=(await db.query<any>("select from_status,to_status,actor,reason from peragus_operation_status_events where purchase_id=$1 order by id",[f.p.data.id])).rows;
+  expect(events.at(-1)).toEqual({from_status:"accepted",to_status:"awaiting_pix",actor:"system:pix",reason:"pix_instructions_issued"});
+  // Sandbox simulation still works from awaiting_pix and never moves the operation further (Task 8).
+  expect((await pix.simulatePayment(f.s.customer.id,r.data.id)).data.payment_confirmed).toBe(true);
+  expect((await service.read(f.s.customer.id,f.p.data.id)).status).toBe("awaiting_pix");
+ });
+ it("never shows instructions for a failed or expired operation",async()=>{
+  const f=await fixture(),r=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+  expect(r.data.payment_instructions).not.toBeNull();
+  await repo.transitionOperation(f.p.data.id,"expired","system:test","expired for test");
+  expect(await f.pix.read(f.s.customer.id,r.data.id)).toMatchObject({status:"expired",payment_instructions:null});
+ });
+ it("serves the same routes under the v1/me/pix alias",async()=>{
+  const f=await fixture();
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner})},customerSandboxPixService:f.pix});apps.push(app);
+  const r=await app.inject({method:"POST",url:"/v1/me/pix",headers,payload:{request_id:f.requestId,purchase_intent_id:f.p.data.id}});
+  expect(r.statusCode).toBe(201);expect(r.headers.location).toBe(`/v1/me/pix/${r.json().data.id}`);
+  expect((await app.inject({method:"GET",url:`/v1/me/pix/${r.json().data.id}`,headers})).json().data.id).toBe(r.json().data.id);
+  expect((await app.inject({method:"POST",url:`/v1/me/pix/${r.json().data.id}/reconcile`,headers})).statusCode).toBe(200);
+  expect((await app.inject({method:"GET",url:`/v1/me/sandbox-pix/${r.json().data.id}`,headers})).statusCode).toBe(200);
+ });
  it("hides expired instructions, and route requires auth, enabled flag and strict input",async()=>{
   const f=await fixture();f.transfer.source.paymentInstructions!.expiresAt=new Date(Date.now()-1000).toISOString();
-  const app=await buildApp({customerAccess:{customers,authenticate:async()=>({id:f.s.owner})},customerSandboxPixService:f.pix});apps.push(app);
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async()=>({id:f.s.owner})},customerSandboxPixService:f.pix});apps.push(app);
   const url="/v1/me/sandbox-pix";
   expect((await app.inject({method:"POST",url,payload:{}})).statusCode).toBe(401);
   expect((await app.inject({method:"POST",url,headers,payload:{request_id:f.requestId,purchase_intent_id:f.p.data.id,amount:"1.00"}})).statusCode).toBe(400);
   const r=await app.inject({method:"POST",url,headers,payload:{request_id:f.requestId,purchase_intent_id:f.p.data.id}});expect(r.statusCode).toBe(201);expect(r.json().data.payment_instructions).toBeNull();expect(r.headers["cache-control"]).toBe("no-store");
   const disabled=await appFor(f.s,false);expect((await disabled.inject({method:"GET",url:`${url}/${r.json().data.id}`,headers})).statusCode).toBe(503);
+ });
+});
+
+describe("Pix eligibility follows the configured purchase limits",()=>{
+ it("accepts a 50 BRL purchase when PURCHASE_MIN_BRL=50.00 and refuses it under the default 1000 BRL floor",async()=>{
+  const s=await setup();
+  await db.query("update peragus_customer_indicative_quotes set source_amount_brl=50,observation=jsonb_set(observation,'{source,amount}','\"50.00\"') where id=$1",[s.quoteId]);
+  const p=await service.record(s.customer.id,s.requestId,s.quoteId);
+  const configured=new PostgresCustomerPixRepository(pool,"test",{minCents:5000n,maxCents:100000n});
+  expect((await configured.context(s.customer.id,p.data.id,"create"))?.amountBrl).toBe("50.00");
+  expect(await new PostgresCustomerPixRepository(pool,"test").context(s.customer.id,p.data.id,"create")).toBeNull();
+  expect(await new PostgresCustomerPixRepository(pool,"test",{minCents:5001n,maxCents:100000n}).context(s.customer.id,p.data.id,"create")).toBeNull();
+  expect(()=>new PostgresCustomerPixRepository(pool,"test",{minCents:0n,maxCents:1n})).toThrow("Invalid purchase limits");
+ });
+ it("final review I3: a reserved, never-claimed row is claimed by the next create with the same request_id (no endless replay)",async()=>{
+  const f=await fixture();
+  const context=(await f.pixRepo.context(f.s.customer.id,f.p.data.id,"create"))!;
+  const reserved=await f.pixRepo.reserve(f.s.customer.id,f.requestId,context,"ozav_wal_testmanaged");
+  expect(reserved.attempted).toBe(false);
+  const created=await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id);
+  expect(created.replayed).toBe(false);expect(created.data.id).toBe(reserved.id);expect(f.stats().posts).toBe(1);
+  expect((await f.pix.create(f.s.customer.id,f.requestId,f.p.data.id)).replayed).toBe(true);expect(f.stats().posts).toBe(1);
  });
 });

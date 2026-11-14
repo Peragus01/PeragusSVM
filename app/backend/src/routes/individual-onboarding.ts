@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
+import type { MoneyMode } from "../config/money-environment.js";
 import type { IndividualDraftService } from "../onboarding/individual-draft-service.js";
 import { individualDraftRequestSchema } from "../onboarding/individual-schema.js";
 import { DraftVersionConflict } from "../repositories/postgres-individual-draft.js";
-export async function registerIndividualOnboardingRoutes(app: FastifyInstance, service?: IndividualDraftService): Promise<void> {
+export async function registerIndividualOnboardingRoutes(app: FastifyInstance, service?: IndividualDraftService, mode: MoneyMode = "test"): Promise<void> {
   await app.register(async scoped => {
     // Parse sensitive JSON ourselves so malformed bodies never appear in parser errors/logs.
     scoped.removeContentTypeParser("application/json");
@@ -16,7 +17,7 @@ export async function registerIndividualOnboardingRoutes(app: FastifyInstance, s
       const customer = request.authenticatedCustomer;
       if (!customer || customer.suspended || customer.type !== "pf") return reply.code(403).send({ error: { code: "INDIVIDUAL_PROFILE_REQUIRED" } });
       try {
-        if (method === "GET") return { data: await service.read(customer.id), meta: { environment: "test", draft_only: true, operations_enabled: false } };
+        if (method === "GET") return { data: await service.read(customer.id), meta: { environment: mode, draft_only: true, operations_enabled: false } };
         let body: unknown;
         try {
           if (!Buffer.isBuffer(request.body)) throw new Error("Invalid JSON");
@@ -28,7 +29,7 @@ export async function registerIndividualOnboardingRoutes(app: FastifyInstance, s
         } });
         const data = await service.save(customer.id, parsed.data.expected_version, parsed.data.individual);
         return reply.code(parsed.data.expected_version === 0 ? 201 : 200).send({ data,
-          meta: { environment: "test", draft_only: true, provider_submitted: false, operations_enabled: false } });
+          meta: { environment: mode, draft_only: true, provider_submitted: false, operations_enabled: false } });
       } catch (error) {
         if (error instanceof DraftVersionConflict) return reply.code(409).send({ error: { code: "DRAFT_VERSION_CONFLICT" } });
         request.log.warn({ event: "individual_draft_unavailable" });

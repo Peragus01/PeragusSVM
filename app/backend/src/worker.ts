@@ -1,6 +1,9 @@
 import {CustomerReconciliationService,registerCustomerReconciliationWorker,assertCustomerReconciliationSafety,CUSTOMER_RECONCILIATION_QUEUE} from "./jobs/customer-reconciliation.js";
 import {createCustomerReconciliationReader} from "./purchases/customer-reconciliation-reader.js";
+import {createPurchaseProgression} from "./purchases/purchase-progression-factory.js";
 import { assertSmokeTestSafety, registerWorkerSmokeTest } from "./jobs/worker-smoke-test.js";
+import { OPERATOR_NOTIFICATIONS_QUEUE, STUCK_OPERATIONS_QUEUE, StuckOperationScanner, registerOperatorNotificationJobs } from "./jobs/stuck-operations.js";
+import { drainOperatorNotifications, operatorNotificationConfig, ResendOperatorNotificationSender } from "./operations/operator-notifications.js";
 import {
   Connection,
   PublicKey,
@@ -21,8 +24,13 @@ import {
 } from "./application/resolve-solana-contingency-reserve.js";
 import { TransitionSettlementService } from "./application/transition-settlement.js";
 import { getEnv } from "./config/env.js";
+import { assertDatabaseEnvironment, runMoneyEnvironmentBootChecks } from "./config/money-environment-boot.js";
+import { moneyModeFor, resolveMoneyEnvironment } from "./config/money-environment.js";
 import { createDatabasePool } from "./database/pool.js";
 import { verifyDatabaseConnection } from "./database/readiness.js";
+import { startWorkerHeartbeat } from "./operations/worker-heartbeat.js";
+import { setDailyReviewFloorDate } from "./operations/daily-review.js";
+let stopHeartbeat: (() => void) | undefined;
 import { assertNotificationEnvironment, deploymentConfigurationAudit, notificationFailure } from "./notifications/runtime-safety.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -89,6 +97,12 @@ if (env.WORKER_SMOKE_TEST_ENABLED) {
 }
 
 if(env.CUSTOMER_RECONCILIATION_ENABLED)assertCustomerReconciliationSafety(env);
+
+// Operator + trusted-person e-mail alerts: e-mail only, never a money path, so the live
+// boot guard does not refuse it. Validated here (addresses never logged).
+const operatorNotifications = env.OPERATOR_NOTIFICATIONS_ENABLED
+  ? operatorNotificationConfig(env, process.env.RESEND_API_KEY)
+  : undefined;
 
 const pool = createDatabasePool(
   env.DATABASE_URL,
@@ -177,6 +191,7 @@ if (env.SOLANA_CONTINGENCY_RESERVE_ENABLED) {
 
 const ozavClient = new OzavClient({
   apiKey: env.OZAV_API_KEY,
+  mode: moneyModeFor(env),
 });
 
 const ozavImporter = new ImportOzavOnrampEventsService({
@@ -272,6 +287,7 @@ async function shutdown(
     }),
   );
 
+  stopHeartbeat?.();
   await boss.stop({
     graceful: true,
     timeout: 30_000,
@@ -300,14 +316,54 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
+  await runMoneyEnvironmentBootChecks(
+    env,
+    {
+      ozavClient: (apiKey, mode) => new OzavClient({ apiKey, mode, attempts: 1, timeoutMs: 5000 }),
+      solanaConnection: (url) => new Connection(url, "confirmed"),
+    },
+    (e) => console.info(JSON.stringify(e)),
+  );
   if (process.env.RAILWAY_ENVIRONMENT_NAME) await verifyDatabaseConnection(pool);
   await startJobQueue(boss);
+  // Final review I8: same review floor as the API (the scanner reports every missing day).
+  setDailyReviewFloorDate(env.DAILY_REVIEW_FLOOR_DATE);
+  // Final review I12: /ready (API) fails when this beat is older than 3 minutes.
+  stopHeartbeat = startWorkerHeartbeat(pool, moneyModeFor(env), (event) => console.warn(JSON.stringify(event)));
   await ensureSettlementQueues(boss);
   if(env.CUSTOMER_RECONCILIATION_ENABLED){
-    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!)));
+    // Refuse to reconcile against a database recorded for the other money environment.
+    await assertDatabaseEnvironment(pool,moneyModeFor(env));
+    // GET-only reads; each observation progresses the purchase (system:reconciliation).
+    const progression=createPurchaseProgression(pool,moneyModeFor(env),env,new OzavClient({apiKey:env.OZAV_API_KEY!,mode:moneyModeFor(env),attempts:1,timeoutMs:10000}));
+    // Read-only on-chain delivery check (getParsedTransaction) for completed sends. Test deployments
+    // without a configured USDT mint keep the previous behaviour (no delivery verification).
+    const delivery=moneyModeFor(env)==="live" || env.SOLANA_USDT_MINT
+      ?{usdtMint:resolveMoneyEnvironment(env).usdtMint,toleranceUnits:env.USDT_DELIVERY_TOLERANCE_UNITS,connection:new Connection(env.SOLANA_RPC_URL,"confirmed")}
+      :undefined;
+    // Final review I3: accepted operations without a claimed Pix expire after the TTL (each tick).
+    const ttlMs=env.ACCEPTED_OPERATION_TTL_MINUTES*60_000;
+    await registerCustomerReconciliationWorker(boss,new CustomerReconciliationService(pool,createCustomerReconciliationReader(pool,env.OZAV_API_KEY!,moneyModeFor(env),undefined,progression,delivery),moneyModeFor(env),
+      ()=>progression.expireAbandonedAccepted(ttlMs)));
     console.info(JSON.stringify({event:"customer_reconciliation_configured",enabled:true,providerReadsOnly:true}));
   }else{
     await boss.unschedule(CUSTOMER_RECONCILIATION_QUEUE);
+  }
+
+  if (operatorNotifications) {
+    // Refuse to e-mail about a database recorded for the other money environment.
+    await assertDatabaseEnvironment(pool, operatorNotifications.mode);
+    const sender = new ResendOperatorNotificationSender(operatorNotifications.apiKey);
+    const scanner = new StuckOperationScanner(pool, operatorNotifications.mode);
+    await registerOperatorNotificationJobs(boss, {
+      drain: () => drainOperatorNotifications(pool, sender, operatorNotifications),
+      scan: () => scanner.scan(),
+      log: (event) => console.info(JSON.stringify(event)),
+    });
+    console.info(JSON.stringify({ event: "operator_notifications_configured", enabled: true }));
+  } else {
+    await boss.unschedule(OPERATOR_NOTIFICATIONS_QUEUE);
+    await boss.unschedule(STUCK_OPERATIONS_QUEUE);
   }
 
   if (env.WORKER_SMOKE_TEST_ENABLED) {
@@ -451,9 +507,10 @@ try {
     JSON.stringify({
       event: "worker_started",
       customerReconciliationEnabled:env.CUSTOMER_RECONCILIATION_ENABLED,
+      operatorNotificationsEnabled: env.OPERATOR_NOTIFICATIONS_ENABLED,
       queue: SETTLEMENT_ORCHESTRATION_QUEUE,
       concurrency: env.JOB_CONCURRENCY,
-      ozavEnvironment: "test",
+      ozavEnvironment: moneyModeFor(env),
       ozavOnrampWritesEnabled:
         env.OZAV_ONRAMP_WRITES_ENABLED,
       solanaContingencyReserveEnabled:

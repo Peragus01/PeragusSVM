@@ -1,9 +1,16 @@
 import type {Pool} from 'pg';
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {z} from 'zod';
 import type {AuthenticatedUser} from '../auth/customer-access.js';
 import {authorizeWithdrawalOperator} from '../withdrawals/operator-approvals.js';
 
-const kind=z.enum(['reconciliation_review','reconciliation_stalled','withdrawal_uncertain','withdrawal_review','refund_pending_review','refund_approved']);
+// operation_review: a purchase operation in needs_review (e.g. live Pix with unknown lock outcome).
+// pix_open_after_close: the operation failed/expired but its OZAV transfer is still payable, was
+// paid or even completed (money in custody; OZAV offers no transfer cancel endpoint).
+// withdrawal_refused_transfer_found: OZAV answered a send as refused, yet a transfer for it exists
+// (found by metadata, GET only). Money may have moved; nothing is re-sent or bound automatically.
+const kind=z.enum(['reconciliation_review','reconciliation_stalled','withdrawal_uncertain','withdrawal_review','withdrawal_refused_transfer_found','refund_pending_review','refund_approved','operation_review','pix_open_after_close']);
 const cursorSchema=z.object({priority:z.union([z.literal(0),z.literal(1)]),at:z.iso.datetime({precision:6}),id:z.string().uuid(),kind}).strict();
 export class OperatorAlertInputError extends Error {}
 export function parseAlertQuery(query:unknown){
@@ -31,7 +38,8 @@ interface Row {
 
 /** Derived stored-data alerts, never calls a provider or changes an operation. */
 export class OperatorAlertService {
- constructor(private readonly pool:Pick<Pool,'query'>,private readonly operators:ReadonlySet<string>){}
+ private readonly e:RowEnvironment;
+ constructor(private readonly pool:Pick<Pool,'query'>,private readonly operators:ReadonlySet<string>,mode:MoneyMode){this.e=rowEnvironment(mode);}
  async list(user:AuthenticatedUser,query:unknown){
   authorizeWithdrawalOperator(user,this.operators);
   const options=parseAlertQuery(query),cursor=options.cursor;
@@ -40,26 +48,45 @@ export class OperatorAlertService {
     else 'reconciliation_stalled' end as kind,0 as priority,c.created_at as recorded_at,
     c.purchase_intent_id,c.pix_id,c.withdrawal_request_id,null::uuid as refund_request_id
    from peragus_customer_reconciliation c
-   where c.environment='test' and (c.state='needs_review' or c.manual_review_required or
+   where c.environment='${this.e.mode}' and (c.state='needs_review' or c.manual_review_required or
     (c.state='pending' and c.next_check_at<=now()-interval '15 minutes' and (c.lease_until is null or c.lease_until<=now())))
    union all
    select e.id,
-    case when e.observation is null then 'withdrawal_uncertain' else 'withdrawal_review' end,
+    case when e.observation is null and e.provider_refusal_code is null then 'withdrawal_uncertain' else 'withdrawal_review' end,
     0,e.created_at,w.purchase_intent_id,e.pix_id,e.withdrawal_request_id,null::uuid
    from peragus_sandbox_withdrawal_executions e
-   join peragus_customer_withdrawal_requests w on w.id=e.withdrawal_request_id and w.customer_id=e.customer_id and w.environment='test'
-   where e.environment='test' and e.create_attempted and (
+   join peragus_customer_withdrawal_requests w on w.id=e.withdrawal_request_id and w.customer_id=e.customer_id and w.environment='${this.e.mode}'
+   where e.environment='${this.e.mode}' and e.create_attempted and (
     e.observation is null or e.observation->>'status' in ('needs_review','failed','cancelled','expired')
     or (e.observation->>'status'='completed' and (
      e.observation->>'sourceLegStatus' is distinct from 'completed'
      or e.observation->>'destinationLegStatus' is distinct from 'completed')))
+   union all
+   select e.id,'withdrawal_refused_transfer_found',0,e.updated_at,w.purchase_intent_id,e.pix_id,e.withdrawal_request_id,null::uuid
+   from peragus_sandbox_withdrawal_executions e
+   join peragus_customer_withdrawal_requests w on w.id=e.withdrawal_request_id and w.customer_id=e.customer_id and w.environment='${this.e.mode}'
+   where e.environment='${this.e.mode}' and e.refused_transfer_id is not null
    union all
    select r.id,case when d.id is null then 'refund_pending_review' else 'refund_approved' end,
     1,r.created_at,r.purchase_intent_id,r.pix_id,null::uuid,r.id
    from peragus_customer_refund_requests r
    left join peragus_manual_refund_decisions d on d.refund_request_id=r.id and d.customer_id=r.customer_id
    left join peragus_manual_refund_completions f on f.refund_request_id=r.id and f.customer_id=r.customer_id
-   where r.environment='test' and f.id is null and (d.id is null or d.decision='approved')
+   where r.environment='${this.e.mode}' and f.id is null and (d.id is null or d.decision='approved')
+   union all
+   select p.id,'operation_review',0,p.status_changed_at,p.id,x.id,null::uuid,null::uuid
+   from peragus_customer_purchase_intents p
+   left join peragus_customer_sandbox_pix x on x.purchase_intent_id=p.id and x.customer_id=p.customer_id
+   where p.environment='${this.e.mode}' and p.status='needs_review'
+   union all
+   select x.id,'pix_open_after_close',0,p.status_changed_at,p.id,x.id,null::uuid,null::uuid
+   from peragus_customer_sandbox_pix x
+   join peragus_customer_purchase_intents p on p.id=x.purchase_intent_id and p.customer_id=x.customer_id
+   where x.environment='${this.e.mode}' and p.status in ('failed','expired') and x.observation is not null
+    and (x.observation->>'status' in ('awaiting_payment','payment_confirmed','converting','payout_initiated','needs_review','completed')
+     or x.observation->>'sourceLegStatus'='completed')
+    and not exists(select 1 from peragus_operation_status_events m where m.purchase_id=p.id and m.actor='system:migration_045')
+    and not exists(select 1 from peragus_operator_refund_decisions o where o.purchase_id=p.id)
   ) select id,kind,priority,
    to_char(recorded_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as recorded_at,
    purchase_intent_id,pix_id,withdrawal_request_id,refund_request_id
@@ -74,9 +101,9 @@ export class OperatorAlertService {
    first_recorded_at:row.recorded_at,purchase_intent_id:row.purchase_intent_id,pix_id:row.pix_id,
    withdrawal_request_id:row.withdrawal_request_id,refund_request_id:row.refund_request_id,
    detail_path:row.refund_request_id?`/v1/admin/refund-requests/${row.refund_request_id}`:
-    row.kind.startsWith('reconciliation_')?'/v1/admin/customer-reconciliation':`/v1/admin/withdrawal-requests/${row.withdrawal_request_id}/audit`,
-   environment:'test',stored_evidence_only:true,execution_authorized:false
+    row.kind.startsWith('reconciliation_') || row.kind==='operation_review' || row.kind==='pix_open_after_close'?'/v1/admin/customer-reconciliation':`/v1/admin/withdrawal-requests/${row.withdrawal_request_id}/audit`,
+   environment:this.e.mode,stored_evidence_only:true,execution_authorized:false
   })),meta:{has_more:hasMore,next_cursor:hasMore && last?Buffer.from(JSON.stringify({priority:last.priority,at:last.recorded_at,id:last.id,kind:last.kind})).toString('base64url'):null,
-   environment:'test',provider_refreshed:false,notifications_sent:false}};
+   environment:this.e.mode,provider_refreshed:false,notifications_sent:false}};
  }
 }

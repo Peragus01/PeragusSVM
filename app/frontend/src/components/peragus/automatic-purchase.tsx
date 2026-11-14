@@ -1,5 +1,5 @@
 import { CustomerPix } from "./customer-pix";
-import { journeyRequest } from "@/lib/peragus/journey";
+import { journeyRequest, pausedMessage } from "@/lib/peragus/journey";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowDown, ArrowRight, ShieldCheck } from "lucide-react";
@@ -8,6 +8,8 @@ import { usePeragusWallet } from "./wallet-context";
 import { CustomerWalletLink } from "./customer-wallet-link";
 import { useLinkedWallet } from "./use-linked-wallet";
 import { formatAmount } from "./customer-operations";
+import { moneyNetwork, useMoneyMode } from "@/lib/peragus/config";
+import { environmentNotice } from "@/lib/peragus/customer-copy";
 import {
   normalizePurchaseAmount,
   purchaseRequest,
@@ -86,6 +88,8 @@ export function AutomaticPurchaseForm({
   token: string;
 }) {
   const wallet = usePeragusWallet();
+  const mode = useMoneyMode();
+  const testNotice = environmentNotice(mode);
   const { linked, setLinked, error: walletError } = useLinkedWallet();
   const [capabilities, setCapabilities] = useState<{
     quote: boolean;
@@ -158,11 +162,11 @@ export function AutomaticPurchaseForm({
       .then((c) => {
         if (abort.signal.aborted) return;
         if (
-          c.environment !== "test" ||
+          c.environment !== mode ||
           c.operations_enabled !== false ||
-          c.real_purchase !== false ||
+          c.real_purchase !== (mode === "live") ||
           c.required_costs_complete !== false ||
-          c.network !== "solana:devnet" ||
+          c.network !== moneyNetwork(mode) ||
           !(["quote", "record", "pix"] as const).every((k) => typeof c[k] === "boolean")
         )
           throw Error();
@@ -173,7 +177,7 @@ export function AutomaticPurchaseForm({
           setError("Não foi possível confirmar a disponibilidade da compra.");
       });
     return () => abort.abort();
-  }, [token]);
+  }, [token, mode]);
   useEffect(() => {
     setReview(false);
   }, [linked?.wallet_address]);
@@ -269,6 +273,39 @@ export function AutomaticPurchaseForm({
       if (epoch.current !== turn) return;
       const problem =
         e instanceof PurchaseError ? e : new PurchaseError("LOCAL_STORAGE_UNAVAILABLE");
+      // A quote never moves money: when the lock was unavailable or the attempt cannot be
+      // recovered, the explicit retry asks for a new quote under a fresh request_id.
+      if (
+        problem.code === "QUOTE_RATE_LOCK_UNAVAILABLE" ||
+        problem.code === "QUOTE_RECOVERY_REQUIRED"
+      ) {
+        const fresh: Receipt = {
+          side: r.side,
+          input: r.input,
+          quoteRequestId: crypto.randomUUID(),
+          purchaseRequestId: crypto.randomUUID(),
+        };
+        try {
+          persist(customerId, fresh);
+          receipt.current = fresh;
+        } catch {
+          // Keep the previous receipt; the retry then repeats the same identifiers.
+        }
+        setBlocked(true);
+        setError(
+          problem.code === "QUOTE_RATE_LOCK_UNAVAILABLE"
+            ? "A trava de câmbio não está disponível agora. Tente novamente para pedir uma nova cotação."
+            : "Não foi possível recuperar a cotação anterior. Tente novamente para pedir uma nova cotação.",
+        );
+        return;
+      }
+      // Kill switch: nothing was quoted; the explicit retry repeats the same request_id.
+      const paused = pausedMessage(problem.code);
+      if (paused) {
+        setBlocked(true);
+        setError(paused);
+        return;
+      }
       if (problem.quoteId) {
         const saved = { ...r, quoteId: problem.quoteId };
         try {
@@ -353,7 +390,8 @@ export function AutomaticPurchaseForm({
       if (epoch.current === turn) {
         setBlocked(true);
         setError(
-          `Não foi possível confirmar o registro (${e instanceof PurchaseError ? e.code : "OUTCOME_UNKNOWN"}). Consulte o resultado com os mesmos identificadores.`,
+          (e instanceof PurchaseError && pausedMessage(e.code)) ||
+            `Não foi possível confirmar o registro (${e instanceof PurchaseError ? e.code : "OUTCOME_UNKNOWN"}). Consulte o resultado com os mesmos identificadores.`,
         );
       }
     } finally {
@@ -372,10 +410,12 @@ export function AutomaticPurchaseForm({
           Solana
         </span>
       </div>
-      <p className="premium-test-notice">
-        <ShieldCheck size={15} />
-        Ambiente de testes · sem dinheiro real
-      </p>
+      {testNotice && (
+        <p className="premium-test-notice">
+          <ShieldCheck size={15} />
+          {testNotice}
+        </p>
+      )}
       <div className="premium-amount-panel">
         <label htmlFor="automatic-brl">Você paga</label>
         <div className="premium-amount-line">
@@ -541,10 +581,13 @@ export function AutomaticPurchaseForm({
             {formatAmount(quote.source.amount, "BRL")} → {formatAmount(quote.target.amount, "USDT")}{" "}
             estimados
           </p>
-          <p className="premium-address">Destino: {linked.wallet_address} · Solana Devnet</p>
+          <p className="premium-address">
+            Destino: {linked.wallet_address} · {mode === "test" ? "Solana Devnet" : "Solana"}
+          </p>
           <CustomerNotice kind="warning">
-            Esta confirmação salva apenas um registro de teste. Não gera Pix, não cobra reais e não
-            envia USDT.
+            {mode === "test"
+              ? "Esta confirmação salva apenas um registro de teste. Não gera Pix, não cobra reais e não envia USDT."
+              : "Esta confirmação registra a compra. Ela ainda não gera Pix, não cobra reais e não envia USDT."}
           </CustomerNotice>
           <button
             type="button"
@@ -553,12 +596,13 @@ export function AutomaticPurchaseForm({
             aria-describedby={!capabilities?.record ? "record-unavailable" : undefined}
             onClick={() => void confirm()}
           >
-            Confirmar registro de teste
+            {mode === "test" ? "Confirmar registro de teste" : "Confirmar registro"}
           </button>
           {!capabilities?.record && (
             <p id="record-unavailable" role="status">
-              O registro de teste está desabilitado neste ambiente. Você pode revisar a estimativa,
-              mas não confirmar uma operação.
+              {mode === "test"
+                ? "O registro de teste está desabilitado neste ambiente. Você pode revisar a estimativa, mas não confirmar uma operação."
+                : "O registro de compras está desabilitado no momento. Você pode revisar a estimativa, mas não confirmar uma operação."}
             </p>
           )}
         </div>
@@ -574,7 +618,7 @@ export function AutomaticPurchaseForm({
       )}
       {record && (
         <div className="premium-record-success" role="status">
-          <h3>Registro de teste salvo</h3>
+          <h3>{mode === "test" ? "Registro de teste salvo" : "Compra registrada"}</h3>
           <p>Sem cobrança e sem envio de USDT.</p>
           <Link to="/app/operacoes/$id" params={{ id: record.id }} className="customer-link">
             Acompanhar no histórico

@@ -40,7 +40,7 @@ try {
   if (!databaseUrl || !apiKey || !transferId || !customerId || !walletId) {
     throw new Error("Configure DATABASE_URL e os quatro identificadores OZAV no .env");
   }
-  const client = new OzavClient({ apiKey });
+  const client = new OzavClient({ apiKey, mode: "test" });
   const transfer = await client.getTransfer(transferId);
   if (!transfer.quoteId) throw new Error("O on-ramp precisa de uma quote_id");
   pool = new Pool({ connectionString: databaseUrl, max: 1, connectionTimeoutMillis: 10_000,

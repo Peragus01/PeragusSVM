@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Writable } from "node:stream";
@@ -22,7 +23,7 @@ const rawSession = () => ({ id: secret, object: "terms_session", status: "pendin
 describe("provider terms transport and token protection", () => {
   it("sends idempotent creation and explicit acceptance without leaking a token on replay", async () => {
     const sent: any[] = [];
-    const client = new OzavClient({ apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async request => {
+    const client = new OzavClient({ mode: "test", apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async request => {
       sent.push(request);
       return request.path.endsWith("/accept") ? { statusCode: 200, body: { ...rawSession(), id: undefined, status: "accepted", accepted_at: request.body.accepted_at } }
         : { statusCode: 201, body: rawSession() };
@@ -34,11 +35,11 @@ describe("provider terms transport and token protection", () => {
     expect(sent[0]).toMatchObject({ path: "/v2/customers/terms-sessions", body: {}, idempotencyKey: id });
     expect(sent[1].body).toEqual({ terms_session_id: secret, ...evidence });
     expect(sent[1].body.ip_address).toBeUndefined();
-    const replay = new OzavClient({ apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async () => ({ statusCode: 200, body: { ...rawSession(), id: undefined } }) });
+    const replay = new OzavClient({ mode: "test", apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async () => ({ statusCode: 200, body: { ...rawSession(), id: undefined } }) });
     expect((await replay.createCustomerTerms(id)).token).toBeNull();
   });
   it.each(["https://evil.example/terms", "javascript:alert(1)", "https://ozav.io/terms?token=secret"])("rejects an untrusted terms URL %s", async terms_url => {
-    const client = new OzavClient({ apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async () => ({ statusCode: 201, body: { ...rawSession(), terms_url } }) });
+    const client = new OzavClient({ mode: "test", apiKey: "ozav_sk_test_terms", attempts: 1, writeTransport: async () => ({ statusCode: 201, body: { ...rawSession(), terms_url } }) });
     await expect(client.createCustomerTerms(`peragus-terms-${randomUUID()}`)).rejects.toThrow();
   });
   it("separates token and evidence purposes and authenticates customer/session/version metadata", () => {
@@ -65,12 +66,13 @@ const pool = { query, connect: async () => {
   tail = new Promise<void>(resolve => { release = resolve; }); await prior;
   return { query, release };
 } } as unknown as Pool;
-const repo = new PostgresCustomerTermsRepository(pool), customers = new PostgresCustomerRepository(pool);
+const repo = new PostgresCustomerTermsRepository(pool,"test"), customers = new PostgresCustomerRepository(pool);
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 beforeAll(async () => {
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
   const dir = new URL("../migrations/", import.meta.url);
   for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file, dir), "utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
 }, 30000);
 afterAll(async () => { await Promise.all(apps.map(app => app.close())); await db.close(); });
 async function setup(type: "pf" | "pj" = "pf") {
@@ -85,7 +87,7 @@ async function setup(type: "pf" | "pj" = "pf") {
 }
 const path = "/v1/me/onboarding/terms", headers = { authorization: "Bearer valid" };
 async function appFor(s: Awaited<ReturnType<typeof setup>>, enabled = true, output?: Writable) {
-  const app = await buildApp({ customerAccess: { customers, authenticate: async token => {
+  const app = await buildApp({ customerAccess: { legal: allAcceptedLegal, customers, authenticate: async token => {
     if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN"); return { id: s.owner, email: "private@example.test" };
   } }, ...(enabled ? { customerTermsService: s.service } : {}), ...(output ? { logger: { level: "debug", stream: output } } : {}) });
   apps.push(app); return app;

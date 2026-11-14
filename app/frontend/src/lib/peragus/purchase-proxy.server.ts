@@ -1,14 +1,16 @@
 import { forwardCustomerRead } from "./customer-proxy.server";
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const detail = new RegExp(`^v1/me/(quotes|purchase-intents)/${uuid}$`, "i");
+const cancel = new RegExp(`^v1/me/purchase-intents/${uuid}/cancel$`, "i");
 export function purchaseMethods(path: string): string[] {
-  if (["v1/me/quotes", "v1/me/purchase-intents"].includes(path)) return ["POST"];
+  if (["v1/me/quotes", "v1/me/purchase-intents"].includes(path) || cancel.test(path))
+    return ["POST"];
   return detail.test(path) ? ["GET"] : [];
 }
 const headers = { "Cache-Control": "no-store", Vary: "Authorization" };
 const error = (status: number, code: string) =>
   Response.json({ error: { code } }, { status, headers });
-/** Only indicative quotes and record-only intentions; no Pix, simulations or withdrawals. */
+/** Quotes, purchase intents and the customer cancel request; no Pix, simulations or withdrawals. */
 export async function forwardPurchase(request: Request, target: URL, path: string) {
   const methods = purchaseMethods(path);
   if (!methods.length) return error(404, "NOT_FOUND");
@@ -80,29 +82,42 @@ export async function forwardPurchase(request: Request, target: URL, path: strin
     const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     try {
       const parsed = JSON.parse(body);
-      const keys =
-        path === "v1/me/quotes"
-          ? [
-              "request_id",
-              typeof parsed.target_amount_usdt === "string"
-                ? "target_amount_usdt"
-                : "source_amount_brl",
-            ]
-          : ["request_id", "quote_id"];
-      if (
-        !parsed ||
-        typeof parsed !== "object" ||
-        Array.isArray(parsed) ||
-        Object.keys(parsed).length !== 2 ||
-        !keys.every((k) => typeof parsed[k] === "string") ||
-        !new RegExp(`^${uuid}$`, "i").test(parsed.request_id) ||
-        (path === "v1/me/quotes"
-          ? !(typeof parsed.target_amount_usdt === "string"
-              ? /^(0|[1-9]\d{0,5})\.\d{6}$/.test(parsed.target_amount_usdt)
-              : /^(0|[1-9]\d{0,8})\.\d{2}$/.test(parsed.source_amount_brl))
-          : !new RegExp(`^${uuid}$`, "i").test(parsed.quote_id))
-      )
-        return error(400, "VALIDATION_ERROR");
+      // Cancel carries only its idempotency key (backend schema is strict).
+      if (cancel.test(path)) {
+        if (
+          !parsed ||
+          typeof parsed !== "object" ||
+          Array.isArray(parsed) ||
+          Object.keys(parsed).length !== 1 ||
+          typeof parsed.request_id !== "string" ||
+          !new RegExp(`^${uuid}$`, "i").test(parsed.request_id)
+        )
+          return error(400, "VALIDATION_ERROR");
+      } else {
+        const keys =
+          path === "v1/me/quotes"
+            ? [
+                "request_id",
+                typeof parsed.target_amount_usdt === "string"
+                  ? "target_amount_usdt"
+                  : "source_amount_brl",
+              ]
+            : ["request_id", "quote_id"];
+        if (
+          !parsed ||
+          typeof parsed !== "object" ||
+          Array.isArray(parsed) ||
+          Object.keys(parsed).length !== 2 ||
+          !keys.every((k) => typeof parsed[k] === "string") ||
+          !new RegExp(`^${uuid}$`, "i").test(parsed.request_id) ||
+          (path === "v1/me/quotes"
+            ? !(typeof parsed.target_amount_usdt === "string"
+                ? /^(0|[1-9]\d{0,5})\.\d{6}$/.test(parsed.target_amount_usdt)
+                : /^(0|[1-9]\d{0,8})\.\d{2}$/.test(parsed.source_amount_brl))
+            : !new RegExp(`^${uuid}$`, "i").test(parsed.quote_id))
+        )
+          return error(400, "VALIDATION_ERROR");
+      }
     } catch {
       return error(400, "VALIDATION_ERROR");
     }

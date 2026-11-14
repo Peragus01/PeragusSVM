@@ -1,3 +1,5 @@
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -10,28 +12,37 @@ import { verificationChecks } from "../src/onboarding/verification-types.js";
 import { PostgresCustomerVerificationRepository } from "../src/repositories/postgres-customer-verification.js";
 import { PostgresOnboardingSubmissionRepository } from "../src/repositories/postgres-onboarding-submission.js";
 import { PostgresCustomerRepository } from "../src/repositories/postgres-customer-repository.js";
+import { PostgresCustomerWebhookProcessor } from "../src/repositories/postgres-customer-webhook.js";
 import { OzavClient, type OzavWriteRequest } from "../src/providers/ozav-client.js";
 
-const db = new PGlite(); let failSave = false;
-const pool = { query: async (sql: string, params?: unknown[]) => {
+const db = new PGlite(); let failSave = false; let connection = Promise.resolve();
+const query = async (sql: string, params?: unknown[]) => {
   if (failSave && sql.includes("set verification_id=")) { failSave = false; throw new Error("observation unavailable"); }
   const r = await db.query(sql,params); return { ...r, rowCount: r.rows.length };
+};
+// PGlite has one session: connections (the verification claim transaction) are handed out one at a time.
+const pool = { query, connect: async () => {
+  const previous = connection; let release!: () => void; connection = new Promise<void>(resolve => { release = resolve; }); await previous;
+  return { query, release };
 } } as unknown as Pool;
-const customers = new PostgresCustomerRepository(pool), submissions = new PostgresOnboardingSubmissionRepository(pool), repo = new PostgresCustomerVerificationRepository(pool);
+const customers = new PostgresCustomerRepository(pool), submissions = new PostgresOnboardingSubmissionRepository(pool,"test"), repo = new PostgresCustomerVerificationRepository(pool,"test");
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 beforeAll(async () => {
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
   const dir = new URL("../migrations/", import.meta.url);
   for (const file of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file,dir),"utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
+  // Runtime kill switches start OFF (054); this suite performs guarded actions.
+  await enableRuntimeControls(db);
 }, 30000);
 afterAll(async () => { await Promise.all(apps.map(app=>app.close())); await db.close(); });
 async function setup(type: "pf" | "pj" = "pf") {
   const owner = randomUUID(), actor = (await customers.createOrGet({ ownerUserId: owner, type, displayName: "Local test" })).customer;
   const providerId = `ozav_cus_${actor.id.replaceAll("-","")}`, verificationId = `ozav_vrf_${randomUUID().replaceAll("-","")}`;
   const termsId = randomUUID();
-  await db.query("insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until) values($1,$2,$3,now())",[termsId,actor.id,randomUUID()]);
-  await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,verification_mode)
-    values($1,$2,1,$3,$4,$5,'{}','linked',$6,'full')`,[randomUUID(),actor.id,termsId,"a".repeat(64),randomUUID(),providerId]);
+  await db.query("insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,environment) values($1,$2,$3,now(),'test')",[termsId,actor.id,randomUUID()]);
+  await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,verification_mode,environment)
+    values($1,$2,1,$3,$4,$5,'{}','linked',$6,'full','test')`,[randomUUID(),actor.id,termsId,"a".repeat(64),randomUUID(),providerId]);
   const caps = { environment: "test",entitlements:["customers","compliance"],scopes:["customers:read","verifications:read","verifications:write"] };
   let session: any = null, mode="full", customerStatus="approved", timeout=false, noCreate=false, contradictory=false, otherCustomer=false, hostileUrl=false, postConflict=false;
   const rawSession = (outcome: string="not_started", status="pending") => ({ id: verificationId, object:"verification",customer_id:otherCustomer?"ozav_cus_other":providerId,status,
@@ -59,7 +70,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     if(!contradictory) { session=rawSession(request.body.outcome==="approved"?"pass":"fail","completed");customerStatus=String(request.body.outcome); }
     return {statusCode:200,body:session};
   });
-  const provider = new OzavClient({apiKey:"ozav_sk_test_verification",attempts:1,transport,writeTransport});
+  const provider = new OzavClient({mode: "test", apiKey:"ozav_sk_test_verification",attempts:1,transport,writeTransport});
   const service=new CustomerVerificationService(repo,submissions,provider);
   return {owner,actor,providerId,verificationId,caps,provider,service,transport,writeTransport,
     timeout: (created=true)=>{timeout=true;noCreate=!created;}, setMode:(value:string)=>{mode=value;},
@@ -68,7 +79,7 @@ async function setup(type: "pf" | "pj" = "pf") {
 }
 const path="/v1/me/onboarding/verification",headers={authorization:"Bearer valid"};
 async function appFor(s:Awaited<ReturnType<typeof setup>>, enabled=true, simulation=false){
-  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},
     ...(enabled?{customerVerificationService:s.service,verificationSimulationEnabled:simulation}:{})});apps.push(app);return app;
 }
 describe("sandbox identity verification",()=>{
@@ -85,7 +96,8 @@ describe("sandbox identity verification",()=>{
   });
   it("recovers a timeout-created verification by customer lookup without repeating POST",async()=>{
     const s=await setup();s.timeout();
-    await expect(s.service.start(s.actor.id)).rejects.toThrow("OZAV connection failed");
+    // The failed create is followed at once by a GET-only lookup that finds the session.
+    expect((await s.service.start(s.actor.id)).data?.verification_id).toBe(s.verificationId);
     expect((await repo.find(s.actor.id))?.createAttempted).toBe(true);
     expect((await s.service.start(s.actor.id)).data?.verification_id).toBe(s.verificationId);
     expect(s.writeTransport).toHaveBeenCalledTimes(1);
@@ -102,11 +114,30 @@ describe("sandbox identity verification",()=>{
     const result=await s.service.refresh(s.actor.id);
     expect(result?.observed_outcome).toBeNull();expect(result?.checks.liveness).toBeUndefined();
   });
-  it("does not blindly repeat a create when its result cannot be found",async()=>{
+  it("final review I10: a failed create that left no session (OZAV lists none) releases the claim so the customer can retry",async()=>{
     const s=await setup();s.timeout(false);
-    await expect(s.service.start(s.actor.id)).rejects.toThrow();
-    await expect(s.service.start(s.actor.id)).rejects.toThrow("VERIFICATION_RECOVERY_REQUIRED");
+    await expect(s.service.start(s.actor.id)).rejects.toThrow("VERIFICATION_SESSION_UNAVAILABLE");
+    expect((await repo.find(s.actor.id))?.createAttempted).toBe(false);
     expect(s.writeTransport).toHaveBeenCalledTimes(1);
+  });
+  it("final review I10: a stale claim with no listed session is released on the next start; a fresh one is not",async()=>{
+    const s=await setup();
+    await repo.reserve(s.actor.id,s.providerId);
+    await db.query("update peragus_customer_verifications set create_attempted=true,updated_at=now() where customer_id=$1",[s.actor.id]);
+    await expect(s.service.start(s.actor.id)).rejects.toThrow("VERIFICATION_RECOVERY_REQUIRED");
+    expect(s.writeTransport).toHaveBeenCalledTimes(0);
+    await db.query("update peragus_customer_verifications set updated_at=now()-interval '3 minutes' where customer_id=$1",[s.actor.id]);
+    expect((await s.service.start(s.actor.id)).data?.verification_id).toBe(s.verificationId);
+    expect(s.writeTransport).toHaveBeenCalledTimes(1);
+  });
+  it("final review I10: an expired hosted session allows a new one; the ended id is kept as history",async()=>{
+    const s=await setup();await s.service.start(s.actor.id);
+    // Still open: a second start replays, never a new POST.
+    expect((await s.service.start(s.actor.id)).replayed).toBe(true);expect(s.writeTransport).toHaveBeenCalledTimes(1);
+    s.seed({...s.rawSession(),status:"expired"});await s.service.refresh(s.actor.id);
+    const again=await s.service.start(s.actor.id);
+    expect(again.replayed).toBe(false);expect(s.writeTransport).toHaveBeenCalledTimes(2);
+    expect((await db.query("select previous_verification_ids from peragus_customer_verifications where customer_id=$1",[s.actor.id])).rows[0]).toEqual({previous_verification_ids:[s.verificationId]});
   });
   it("recovers after local persistence failure with one provider create",async()=>{
     const s=await setup();failSave=true;
@@ -187,5 +218,113 @@ describe("sandbox identity verification",()=>{
     const r=await db.query(`select relrowsecurity,has_table_privilege('anon','peragus_customer_verifications','SELECT') as anon_select,
       has_table_privilege('authenticated','peragus_customer_verifications','INSERT') as auth_insert from pg_class where relname='peragus_customer_verifications'`);
     expect(r.rows[0]).toEqual({relrowsecurity:true,anon_select:false,auth_insert:false});
+  });
+});
+
+// Live money mode on a PGlite database recorded as 'live'. No real OZAV: transports are fakes.
+describe("live hosted identity verification", () => {
+  const liveDb = new PGlite();
+  const liveQuery = async (sql: string, params?: unknown[]) => { const r = await liveDb.query(sql, params); return { ...r, rowCount: r.rows.length }; };
+  const livePool = { query: liveQuery, connect: async () => ({ query: liveQuery, release: () => {} }) } as unknown as Pool;
+  const liveCustomers = new PostgresCustomerRepository(livePool), liveSubmissions = new PostgresOnboardingSubmissionRepository(livePool, "live"),
+    liveRepo = new PostgresCustomerVerificationRepository(livePool, "live");
+  const hosted = "https://verify.ozav.io/session/abc123";
+  beforeAll(async () => {
+    await liveDb.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
+    const dir = new URL("../migrations/", import.meta.url);
+    for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await liveDb.exec(await readFile(new URL(file, dir), "utf8"));
+    await liveDb.exec("insert into peragus_database_environment(environment) values('live')");
+    // Runtime kill switches start OFF (054); this suite performs guarded actions.
+    await enableRuntimeControls(liveDb);
+  }, 30000);
+  afterAll(async () => { await liveDb.close(); });
+  async function live() {
+    const owner = randomUUID(), actor = (await liveCustomers.createOrGet({ ownerUserId: owner, type: "pf", displayName: "Live person" })).customer;
+    const providerId = `ozav_cus_${actor.id.replaceAll("-", "")}`, verificationId = `ozav_vrf_${randomUUID().replaceAll("-", "")}`, termsId = randomUUID();
+    await liveDb.query("insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,environment) values($1,$2,$3,now(),'live')", [termsId, actor.id, randomUUID()]);
+    await liveDb.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,verification_mode,environment)
+      values($1,$2,1,$3,$4,$5,'{}','linked',$6,'full','live')`, [randomUUID(), actor.id, termsId, "b".repeat(64), randomUUID(), providerId]);
+    const caps = { environment: "live", entitlements: ["customers", "compliance"], scopes: ["customers:read", "verifications:read", "verifications:write"] };
+    let sessionUrl: string | undefined = hosted, status = "pending", outcome = "not_started", postStatus = 201, getUrl: string | undefined = hosted;
+    const raw = (url: string | undefined) => ({ id: verificationId, object: "verification", customer_id: providerId, status,
+      checks: Object.fromEntries(verificationChecks.map(check => [check, { outcome }])), ...(url === undefined ? {} : { session_url: url }) });
+    const transport = vi.fn(async (p: string) => {
+      if (p === "/v2/capabilities") return { statusCode: 200, body: caps };
+      if (p.startsWith("/v2/verifications?")) return { statusCode: 200, body: { data: [], has_more: false, next_cursor: null } };
+      if (p.startsWith("/v2/verifications/")) return { statusCode: 200, body: raw(getUrl) };
+      return { statusCode: 200, body: { id: providerId, object: "customer", type: "individual", external_ref: `peragus-onboarding:${actor.id}`, status: "pending",
+        verification: { mode: "full", status }, requirements: { due: [], due_codes: [], missing_fields: [], documents_due: [] } } };
+    });
+    const writeTransport = vi.fn(async (request: OzavWriteRequest) => {
+      expect(request.path).toBe("/v2/verifications");
+      if (postStatus === 503) { postStatus = 201; return { statusCode: 503, body: { error: { code: "VERIFICATION_SESSION_UNAVAILABLE" } } }; }
+      return { statusCode: 201, body: raw(sessionUrl) };
+    });
+    const provider = new OzavClient({ mode: "live", apiKey: "ozav_sk_live_verification", attempts: 1, transport, writeTransport });
+    const service = new CustomerVerificationService(liveRepo, liveSubmissions, provider, "live");
+    return { owner, actor, providerId, verificationId, service, transport, writeTransport, provider,
+      setSession: (value: string | undefined) => { sessionUrl = value; getUrl = value; }, setGetUrl: (value: string | undefined) => { getUrl = value; },
+      complete: () => { status = "completed"; outcome = "pass"; }, unavailableOnce: () => { postStatus = 503; } };
+  }
+  async function liveApp(s: Awaited<ReturnType<typeof live>>) {
+    const app = await buildApp({ moneyMode: "live", customerAccess: { legal: allAcceptedLegal, customers: liveCustomers, authenticate: async token => {
+      if (token !== "valid") throw new AuthenticationError("INVALID_TOKEN"); return { id: s.owner, email: "person@real-mail.test" }; } },
+      customerVerificationService: s.service }); apps.push(app); return app;
+  }
+  it("live start returns the hosted session_url and replays it without a second create", async () => {
+    const s = await live(), app = await liveApp(s);
+    const first = await app.inject({ method: "POST", url: path, headers, payload: {} });
+    expect(first.statusCode).toBe(201);
+    expect(first.json().data).toMatchObject({ verification_id: s.verificationId, status: "pending", session_url: hosted, environment: "live", sandbox_only: false });
+    const replay = await app.inject({ method: "POST", url: path, headers, payload: {} });
+    expect(replay.statusCode).toBe(200); expect(replay.json().data.session_url).toBe(hosted);
+    expect((await app.inject({ method: "GET", url: path, headers })).json().data.session_url).toBe(hosted);
+    expect(s.writeTransport).toHaveBeenCalledTimes(1);
+  });
+  it("live without session_url fails with VERIFICATION_SESSION_UNAVAILABLE (fail closed) and never re-creates", async () => {
+    const s = await live(), app = await liveApp(s); s.setSession(undefined);
+    const first = await app.inject({ method: "POST", url: path, headers, payload: {} });
+    expect(first.statusCode).toBe(503); expect(first.json().error.code).toBe("VERIFICATION_SESSION_UNAVAILABLE");
+    await expect(s.service.start(s.actor.id)).rejects.toThrow("VERIFICATION_SESSION_UNAVAILABLE");
+    expect(s.writeTransport).toHaveBeenCalledTimes(1);
+    expect((await liveRepo.find(s.actor.id))?.verificationId).toBe(s.verificationId);
+  });
+  it("retries a documented 503 VERIFICATION_SESSION_UNAVAILABLE create, since OZAV persisted nothing", async () => {
+    const s = await live(); s.unavailableOnce();
+    await expect(s.service.start(s.actor.id)).rejects.toThrow("VERIFICATION_SESSION_UNAVAILABLE");
+    expect((await s.service.start(s.actor.id)).data?.session_url).toBe(hosted);
+    expect(s.writeTransport).toHaveBeenCalledTimes(2);
+  });
+  it.each(["http://verify.ozav.io/s", "https://verify.ozav.io.evil.example/s", "https://evilozav.io/s", "https://user:pw@verify.ozav.io/s",
+    "https://verify.ozav.io:8443/s", "javascript:alert(1)", "https://evil.example/s"])("refuses a hosted session URL outside OZAV: %s", async url => {
+    const s = await live(); s.setSession(url);
+    await expect(s.service.start(s.actor.id)).rejects.toThrow();
+    expect(JSON.stringify((await liveRepo.find(s.actor.id))?.observation ?? null)).not.toContain(url);
+  });
+  it("keeps the session link across a GET that omits it and hides it once the session is completed", async () => {
+    const s = await live(); await s.service.start(s.actor.id); s.setGetUrl(undefined);
+    expect((await s.service.refresh(s.actor.id))?.session_url).toBe(hosted);
+    s.complete();
+    expect(await s.service.refresh(s.actor.id)).toMatchObject({ status: "completed", identity_outcome: "approved", session_url: null });
+    // Final review I10: the closed session's link is no longer stored at all.
+    expect(JSON.stringify((await liveRepo.find(s.actor.id))?.observation ?? null)).not.toContain(hosted);
+  });
+  it("never simulates in live: no route and the service refuses before any provider call", async () => {
+    const s = await live(), app = await liveApp(s); await s.service.start(s.actor.id);
+    expect((await app.inject({ method: "POST", url: `${path}/simulate`, headers, payload: { outcome: "approved" } })).statusCode).toBe(404);
+    await expect(s.service.simulate(s.actor.id, "approved")).rejects.toThrow("VERIFICATION_SIMULATION_UNAVAILABLE");
+    await expect(s.provider.simulateCustomerVerification(s.providerId, s.verificationId, "approved")).rejects.toThrow();
+    expect(s.writeTransport).toHaveBeenCalledTimes(1);
+  });
+  it("verification.updated triggers a GET refresh of the verification (the GET is the truth)", async () => {
+    const s = await live(); await s.service.start(s.actor.id); s.complete();
+    const processor = new PostgresCustomerWebhookProcessor(livePool, s.provider, "live");
+    const event = { id: `ozav_evt_${randomUUID().replaceAll("-", "")}`, object: "event" as const, type: "verification.updated", livemode: true,
+      created_at: new Date().toISOString(), data: { verification: { id: s.verificationId, customer_id: s.providerId, status: "rejected" } } };
+    expect(await processor.process(event, "c".repeat(64))).toBe("processed");
+    expect(s.transport.mock.calls.map(([p]) => p)).toContain(`/v2/verifications/${s.verificationId}`);
+    expect(await s.service.read(s.actor.id)).toMatchObject({ status: "completed", identity_outcome: "approved" });
+    expect((await liveSubmissions.find(s.actor.id))?.snapshot?.verification_status).toBe("completed");
+    expect(await processor.process(event, "c".repeat(64))).toBe("duplicate");
   });
 });

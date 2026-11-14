@@ -1,3 +1,5 @@
+import { notifyLegalRequired } from "./legal-acceptance";
+import { moneyMode, moneyNetwork, type MoneyMode, type MoneyNetwork } from "./config";
 export interface Quote {
   id: string;
   request_id: string;
@@ -7,21 +9,21 @@ export interface Quote {
   rate: string;
   exchange_conditions?: { amount_deducted: string | null; spread_bps?: number };
   expires_at: string | null;
-  environment: "test";
+  environment: MoneyMode;
   indicative: true;
   executable: false;
   operations_enabled: false;
   external_delivery_costs_evaluated: false;
 }
 export interface PurchaseRecord {
-  destination?: { wallet_address: string; proof_network: "solana:devnet" };
+  destination?: { wallet_address: string; proof_network: MoneyNetwork };
   id: string;
   request_id: string;
   quote_id: string;
   source: Quote["source"];
   estimated_target: Quote["target"];
   state: "recorded";
-  environment: "test";
+  environment: MoneyMode;
   record_only: true;
   funding_started: false;
   job_enqueued: false;
@@ -116,6 +118,7 @@ export async function purchaseRequest(
         typeof e?.["code"] === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(e["code"])
           ? e["code"]
           : "PURCHASE_UNAVAILABLE";
+      notifyLegalRequired(code);
       throw new PurchaseError(code, uuid(e?.["quote_id"]) ? e["quote_id"] : undefined);
     }
     if (!record(json)) throw new PurchaseError("INVALID_RESPONSE");
@@ -135,7 +138,7 @@ export function validateQuote(value: unknown, plan: PurchasePlan): Quote {
     value["request_id"] !== plan.quoteRequestId ||
     (plan.quoteId && value["id"] !== plan.quoteId) ||
     value["state"] !== "quoted" ||
-    value["environment"] !== "test" ||
+    value["environment"] !== moneyMode() ||
     value["indicative"] !== true ||
     value["executable"] !== false ||
     value["operations_enabled"] !== false ||
@@ -173,11 +176,11 @@ export function validatePurchase(value: unknown, plan: PurchasePlan, quote: Quot
     value["request_id"] !== plan.purchaseRequestId ||
     (plan.purchaseId && value["id"] !== plan.purchaseId) ||
     value["quote_id"] !== quote.id ||
-    value["environment"] !== "test" ||
+    value["environment"] !== moneyMode() ||
     value["state"] !== "recorded" ||
     (value["destination"] !== undefined &&
       (!record(value["destination"]) ||
-        value["destination"]["proof_network"] !== "solana:devnet" ||
+        value["destination"]["proof_network"] !== moneyNetwork(moneyMode()) ||
         typeof value["destination"]["wallet_address"] !== "string" ||
         !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value["destination"]["wallet_address"]))) ||
     value["record_only"] !== true ||

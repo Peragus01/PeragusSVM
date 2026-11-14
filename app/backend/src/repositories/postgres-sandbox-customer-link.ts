@@ -1,4 +1,6 @@
 import type { Pool } from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
 import { SandboxCustomerError, type SandboxCustomerLink, type SandboxCustomerLinkRepository } from "../application/ozav-sandbox-customer.js";
 import type { OzavSandboxCustomer, OzavCustomerSnapshot } from "../providers/ozav-client.js";
 interface Row {
@@ -12,24 +14,25 @@ const map = (r: Row): SandboxCustomerLink => ({ customerId: r.customer_id, envir
   ozavCustomerId: r.ozav_customer_id, providerStatus: r.provider_status, verificationMode: r.verification_mode, snapshot: r.provider_snapshot, snapshotVersion: r.snapshot_version,
   refreshedAt: r.refreshed_at == null ? null : new Date(r.refreshed_at).toISOString() });
 export class PostgresSandboxCustomerLinkRepository implements SandboxCustomerLinkRepository {
-  constructor(private readonly pool: Pool) {}
+  private readonly e: RowEnvironment;
+  constructor(private readonly pool: Pool, mode: MoneyMode) { this.e = rowEnvironment(mode); }
   async find(customerId: string) {
-    const r = await this.pool.query<Row>("select * from peragus_ozav_sandbox_customer_links where customer_id=$1 and environment='test'", [customerId]);
+    const r = await this.pool.query<Row>(`select * from peragus_ozav_sandbox_customer_links where customer_id=$1 and environment='${this.e.mode}'`, [customerId]);
     return r.rows[0] ? map(r.rows[0]) : null;
   }
   async saveSnapshot(customerId: string, providerId: string, version: number, snapshot: OzavCustomerSnapshot) {
     const r = await this.pool.query<Row>(`update peragus_ozav_sandbox_customer_links
       set provider_snapshot=$4::jsonb, provider_status=$5, verification_mode=$6,
         snapshot_version=snapshot_version+1, refreshed_at=now(), updated_at=now()
-      where customer_id=$1 and environment='test' and state='linked' and ozav_customer_id=$2
+      where customer_id=$1 and environment='${this.e.mode}' and state='linked' and ozav_customer_id=$2
         and snapshot_version=$3 returning *`,
       [customerId, providerId, version, JSON.stringify(snapshot), snapshot.provider_status, snapshot.verification_mode]);
     if (!r.rows[0]) throw new SandboxCustomerError("SANDBOX_CUSTOMER_CONFLICT");
     return map(r.rows[0]);
   }
   async reserve(customerId: string, hash: string, key: string) {
-    await this.pool.query(`insert into peragus_ozav_sandbox_customer_links(customer_id, request_hash, idempotency_key)
-      values($1,$2,$3) on conflict(customer_id) do nothing`, [customerId, hash, key]);
+    await this.pool.query(`insert into peragus_ozav_sandbox_customer_links(customer_id, request_hash, idempotency_key, environment)
+      values($1,$2,$3,$4) on conflict(customer_id) do nothing`, [customerId, hash, key, this.e.mode]);
     const row = await this.find(customerId);
     if (!row || row.requestHash !== hash || row.idempotencyKey !== key) throw new SandboxCustomerError("SANDBOX_CUSTOMER_CONFLICT");
     return row;
@@ -38,7 +41,7 @@ export class PostgresSandboxCustomerLinkRepository implements SandboxCustomerLin
     try {
       const r = await this.pool.query<Row>(`update peragus_ozav_sandbox_customer_links
         set state='linked', ozav_customer_id=$3, provider_status=$4, verification_mode=$5, updated_at=now()
-        where customer_id=$1 and environment='test' and request_hash=$2
+        where customer_id=$1 and environment='${this.e.mode}' and request_hash=$2
           and (ozav_customer_id is null or ozav_customer_id=$3) returning *`,
       [customerId, hash, result.id, result.status, result.verificationMode]);
       if (!r.rows[0]) throw new SandboxCustomerError("SANDBOX_CUSTOMER_CONFLICT");

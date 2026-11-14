@@ -1,3 +1,4 @@
+import { useMoneyMode } from "@/lib/peragus/config";
 import { CustomerNotice, CustomerPanel } from "./customer-ui";
 export type OnboardingReview = {
   review_state:
@@ -11,9 +12,12 @@ export type OnboardingReview = {
 };
 export function OnboardingReceipt({ review }: { review: OnboardingReview | null }) {
   const state = review?.review_state;
+  const test = useMoneyMode() === "test";
   const title =
     state === "approved"
-      ? "Verificações concluídas em teste"
+      ? test
+        ? "Verificações concluídas em teste"
+        : "Verificações concluídas"
       : state === "rejected"
         ? "Análise concluída: cadastro não aprovado"
         : state === "in_review"
@@ -28,7 +32,9 @@ export function OnboardingReceipt({ review }: { review: OnboardingReview | null 
           {state === "in_review"
             ? "Estamos verificando seus dados. Você pode acompanhar o andamento em Minha conta."
             : state === "approved"
-              ? "As verificações deste cadastro de teste foram concluídas. Compras, pagamentos e transferências reais continuam indisponíveis."
+              ? test
+                ? "As verificações deste cadastro de teste foram concluídas. Compras, pagamentos e transferências reais continuam indisponíveis."
+                : "As verificações do seu cadastro foram concluídas."
               : state === "rejected"
                 ? "O cadastro não foi aprovado. Consulte o estado da verificação em Minha conta."
                 : state === "action_required"
@@ -47,7 +53,7 @@ export function OnboardingReceipt({ review }: { review: OnboardingReview | null 
           </p>
         )}
       </div>
-      {(state === "pending_identity" || !state) && (
+      {test && (state === "pending_identity" || !state) && (
         <CustomerNotice>
           Ambiente de testes: a captura de documentos não está disponível. Não envie documentos
           reais.

@@ -4,7 +4,14 @@ import { useCustomerSession } from "@/lib/peragus/customer-session";
 import { usePeragusWallet } from "./wallet-context";
 import { CustomerNotice } from "./customer-ui";
 import { journeyRequest, journeyMessage } from "@/lib/peragus/journey";
-export type LinkedWallet = { wallet_address: string; network: "solana:devnet" };
+import {
+  moneyNetwork,
+  useMoneyMode,
+  walletProofDomain,
+  type MoneyNetwork,
+} from "@/lib/peragus/config";
+import { walletNetworkNotice } from "@/lib/peragus/customer-copy";
+export type LinkedWallet = { wallet_address: string; network: MoneyNetwork };
 type WalletStatus = {
   environment: string;
   customer: { id: string };
@@ -20,11 +27,12 @@ type WalletChallenge = {
   expires_at: string;
   challenge_id: string;
 };
-type WalletConfirmation = { environment: string; network: "solana:devnet"; wallet_address: string };
+type WalletConfirmation = { environment: string; network: MoneyNetwork; wallet_address: string };
 export function CustomerWalletLink({
   onLinked,
 }: { onLinked?: (wallet: LinkedWallet) => void } = {}) {
   const wallet = usePeragusWallet();
+  const mode = useMoneyMode();
   const { accessToken, identity } = useCustomerSession();
   const { linked, setLinked, error: readError } = useLinkedWallet();
   const [busy, setBusy] = useState(false);
@@ -58,10 +66,10 @@ export function CustomerWalletLink({
       );
       if (epoch.current !== turn) return;
       if (
-        c.environment !== "test" ||
-        c.network !== "solana:devnet" ||
+        c.environment !== mode ||
+        c.network !== moneyNetwork(mode) ||
         c.wallet_address !== address ||
-        c.domain !== "peragussvm-staging.up.railway.app" ||
+        c.domain !== walletProofDomain(mode) ||
         typeof c.message !== "string" ||
         !c.message.startsWith(
           `${c.domain} requests proof of control of this Solana wallet:\n${address}\n`,
@@ -82,8 +90,8 @@ export function CustomerWalletLink({
       );
       if (epoch.current !== turn) return;
       if (
-        result.environment !== "test" ||
-        result.network !== "solana:devnet" ||
+        result.environment !== mode ||
+        result.network !== moneyNetwork(mode) ||
         result.wallet_address !== address
       )
         throw Error();
@@ -131,10 +139,7 @@ export function CustomerWalletLink({
         </div>
       )}
       {readError && <p className="customer-muted">{readError}</p>}
-      <p className="customer-muted">
-        Rede de testes Solana Devnet. A assinatura comprova controle do endereço e não autoriza
-        pagamentos. Um endereço já vinculado não é substituído por esta tela.
-      </p>
+      <p className="customer-muted">{walletNetworkNotice(mode)}</p>
     </div>
   );
 }

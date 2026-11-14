@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -25,7 +26,7 @@ const authenticated = async (token: string) => {
   if (!id) throw new AuthenticationError("INVALID_TOKEN");
   return { id, email: `${token}@example.test` };
 };
-const options = { customerAccess: { authenticate: authenticated, customers }, settlementRepository: repository,
+const options = { customerAccess: { legal: allAcceptedLegal, authenticate: authenticated, customers }, settlementRepository: repository,
   settlementJobPublisher: publisher, demoWalletFunder: funder };
 let app: Awaited<ReturnType<typeof buildApp>>;
 let disabled: Awaited<ReturnType<typeof buildApp>>;

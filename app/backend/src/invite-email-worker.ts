@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { getEnv } from "./config/env.js";
+import { moneyModeFor } from "./config/money-environment.js";
 import {
   assertDeploymentDatabase,
   deploymentConfigurationAudit,
@@ -42,13 +43,13 @@ try {
     JSON.stringify({
       event: "invite_email_worker_ready",
       environment: env.PERAGUS_DEPLOYMENT_ENV,
-      provider_environment: "test",
+      provider_environment: moneyModeFor(env),
     }),
   );
   while (!stopping) {
     const client = await pool.connect();
     try {
-      await processInviteEmail(client, cipher, provider);
+      await processInviteEmail(client, cipher, provider, moneyModeFor(env));
     } catch (error) {
       console.warn(
         JSON.stringify({

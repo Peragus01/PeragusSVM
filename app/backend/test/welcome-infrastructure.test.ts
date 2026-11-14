@@ -2,8 +2,9 @@ import { PGlite } from '@electric-sql/pglite';
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
-const history = (name: string) => readFile(new URL(`../../../supabase/migrations/${name}`, import.meta.url), 'utf8');
-const expansion = await readFile(new URL('../migrations/037_expand_operator_invites.sql', import.meta.url), 'utf8');
+const lf = (text: string) => text.replace(/\r\n?/g, '\n');
+const history = async (name: string) => lf(await readFile(new URL(`../../../supabase/migrations/${name}`, import.meta.url), 'utf8'));
+const expansion = lf(await readFile(new URL('../migrations/037_expand_operator_invites.sql', import.meta.url), 'utf8'));
 const reconciliation = await readFile(new URL('../scripts/sql/reconcile-operator-invites-ledger.sql', import.meta.url), 'utf8');
 
 async function inviteDatabase(source = expansion) {

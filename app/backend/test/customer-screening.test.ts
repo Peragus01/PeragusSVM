@@ -1,3 +1,4 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -15,20 +16,21 @@ const pool = { query: async (sql: string, params?: unknown[]) => {
   if (failSave && sql.includes("set screening_id=")) { failSave=false; throw new Error("save unavailable"); }
   const r=await db.query(sql,params);return {...r,rowCount:r.rows.length};
 } } as unknown as Pool;
-const customers=new PostgresCustomerRepository(pool), submissions=new PostgresOnboardingSubmissionRepository(pool), repo=new PostgresCustomerScreeningRepository(pool);
+const customers=new PostgresCustomerRepository(pool), submissions=new PostgresOnboardingSubmissionRepository(pool,"test"), repo=new PostgresCustomerScreeningRepository(pool,"test");
 const apps: Awaited<ReturnType<typeof buildApp>>[]=[];
 beforeAll(async()=>{
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
   const dir=new URL("../migrations/",import.meta.url);
   for(const file of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file,dir),"utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
 },30000);
 afterAll(async()=>{await Promise.all(apps.map(a=>a.close()));await db.close();});
 async function setup(type:"pf"|"pj"="pf") {
   const owner=randomUUID(),actor=(await customers.createOrGet({ownerUserId:owner,type,displayName:"Synthetic test"})).customer;
   const providerId=`ozav_cus_${actor.id.replaceAll("-","")}`,screeningId=`ozav_scr_${randomUUID().replaceAll("-","")}`, terms=randomUUID();
-  await db.query("insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until) values($1,$2,$3,now())",[terms,actor.id,randomUUID()]);
-  await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,verification_mode)
-    values($1,$2,1,$3,$4,$5,'{}','linked',$6,'full')`,[randomUUID(),actor.id,terms,"a".repeat(64),randomUUID(),providerId]);
+  await db.query("insert into peragus_customer_terms_sessions(id,customer_id,idempotency_key,lease_until,environment) values($1,$2,$3,now(),'test')",[terms,actor.id,randomUUID()]);
+  await db.query(`insert into peragus_customer_onboarding_submissions(id,customer_id,draft_version,terms_session_id,request_hash,idempotency_key,encrypted_payload,state,provider_customer_id,verification_mode,environment)
+    values($1,$2,1,$3,$4,$5,'{}','linked',$6,'full','test')`,[randomUUID(),actor.id,terms,"a".repeat(64),randomUUID(),providerId]);
   const caps={environment:"test",entitlements:["customers","compliance"],scopes:["customers:read","screenings:read","screenings:write"]};
   let screenings:any[]=[], timeout=false, missList=false;
   const raw=()=>({id:screeningId,object:"screening",subject:{customer_id:providerId},lists:["sanctions","pep"],status:"completed",result:"clear",matches:[],suggested_decision:"clear",signals:[{private_data:"do not retain"}]});
@@ -46,13 +48,13 @@ async function setup(type:"pf"|"pj"="pf") {
     if(timeout){timeout=false;throw new Error("lost response");}
     return {statusCode:201,body:screenings[0]};
   });
-  const provider=new OzavClient({apiKey:"ozav_sk_test_screening",attempts:1,transport,writeTransport});
+  const provider=new OzavClient({mode: "test", apiKey:"ozav_sk_test_screening",attempts:1,transport,writeTransport});
   const service=new CustomerScreeningService(repo,submissions,provider);
   return {owner,actor,providerId,screeningId,caps,service,provider,transport,writeTransport,writes,raw,
     seed:(rows:any[])=>{screenings=rows;}, loseResponse:(hide=false)=>{timeout=true;missList=hide;}};
 }
 async function appFor(s:Awaited<ReturnType<typeof setup>>,enabled=true){
-  const app=await buildApp({customerAccess:{customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerScreeningService:s.service}:{})});apps.push(app);return app;
+  const app=await buildApp({customerAccess:{ legal: allAcceptedLegal,customers,authenticate:async token=>{if(token!=="valid")throw new AuthenticationError("INVALID_TOKEN");return{id:s.owner,email:"private@example.test"};}},...(enabled?{customerScreeningService:s.service}:{})});apps.push(app);return app;
 }
 const path="/v1/me/onboarding/screening",headers={authorization:"Bearer valid"};
 describe("test-only screening evidence",()=>{
@@ -105,12 +107,12 @@ describe("test-only screening evidence",()=>{
   });
   it("validates complete pagination before linking existing evidence",async()=>{
     const s=await setup();let pages=0;
-    const client=new OzavClient({apiKey:"ozav_sk_test_pages",attempts:1,transport:async(path)=>{
+    const client=new OzavClient({mode: "test", apiKey:"ozav_sk_test_pages",attempts:1,transport:async(path)=>{
       expect(path).toContain("/v2/screenings?");pages++;
       return {statusCode:200,body:pages===1?{data:[s.raw()],has_more:true,next_cursor:"next"}:{data:[],has_more:false,next_cursor:null}};
     }});
     expect(await client.listCustomerScreenings(s.providerId)).toHaveLength(1);expect(pages).toBe(2);
-    const duplicate=new OzavClient({apiKey:"ozav_sk_test_pages",attempts:1,transport:async()=>({statusCode:200,body:{data:[s.raw()],has_more:true,next_cursor:"same"}})});
+    const duplicate=new OzavClient({mode: "test", apiKey:"ozav_sk_test_pages",attempts:1,transport:async()=>({statusCode:200,body:{data:[s.raw()],has_more:true,next_cursor:"same"}})});
     await expect(duplicate.listCustomerScreenings(s.providerId)).rejects.toThrow();
   });
   it("requires scoped test capabilities and a submitted customer",async()=>{

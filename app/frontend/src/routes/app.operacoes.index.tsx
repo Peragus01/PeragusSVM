@@ -1,3 +1,4 @@
+import { useMoneyMode } from "@/lib/peragus/config";
 import { useState } from "react";
 import { refundLabels } from "@/lib/peragus/refunds";
 import { createFileRoute, Link } from "@tanstack/react-router";
@@ -17,6 +18,7 @@ import {
 export const Route = createFileRoute("/app/operacoes/")({ component: CustomerOperations });
 export function CustomerOperations() {
   const { data, state, error, more, retry } = useOperations(20);
+  const test = useMoneyMode() === "test";
   const [from, setFrom] = useState("");
   const [until, setUntil] = useState("");
   const [stage, setStage] = useState("");
@@ -39,8 +41,9 @@ export function CustomerOperations() {
         description="Acompanhe valores, pagamentos e a entrega na sua carteira."
       />
       <CustomerNotice>
-        Ambiente de testes · sem dinheiro real. Um registro ou processamento finalizado não
-        significa USDT entregue.
+        {test
+          ? "Ambiente de testes · sem dinheiro real. Um registro ou processamento finalizado não significa USDT entregue."
+          : "Um registro ou processamento finalizado não significa USDT entregue."}
       </CustomerNotice>
       <CustomerPanel
         title="Suas compras"
@@ -63,7 +66,9 @@ export function CustomerOperations() {
             Etapa
             <select value={stage} onChange={(e) => setStage(e.target.value)}>
               <option value="">Todas as etapas</option>
-              <option value="purchase_recorded">Registro de teste</option>
+              <option value="purchase_recorded">
+                {test ? "Registro de teste" : "Compra registrada"}
+              </option>
               <option value="pix">Pix / conversão</option>
               <option value="withdrawal">Entrega</option>
             </select>
@@ -116,7 +121,11 @@ export function CustomerOperations() {
         {state !== "error" && data?.data.length === 0 && (
           <CustomerEmpty
             title="Nenhum registro disponível"
-            description="Suas compras e registros de teste aparecerão aqui."
+            description={
+              test
+                ? "Suas compras e registros de teste aparecerão aqui."
+                : "Suas compras aparecerão aqui."
+            }
           />
         )}
         {data && visible.length > 0 && (
@@ -127,7 +136,9 @@ export function CustomerOperations() {
             tabIndex={0}
           >
             <table className="customer-table premium-history-table">
-              <caption className="sr-only">Operações da sua conta no ambiente de testes</caption>
+              <caption className="sr-only">
+                {test ? "Operações da sua conta no ambiente de testes" : "Operações da sua conta"}
+              </caption>
               <thead>
                 <tr>
                   <th>Data</th>

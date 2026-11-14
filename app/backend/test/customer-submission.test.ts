@@ -1,3 +1,5 @@
+import { enableRuntimeControls } from "./helpers/runtime-controls.js";
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -29,8 +31,8 @@ const query = async (sql: string, params?: unknown[]) => {
 };
 const pool = { query, connect: async () => { const previous = tail; let release!: () => void; tail = new Promise<void>(resolve => { release = resolve; }); await previous; return { query, release }; } } as unknown as Pool;
 const key = randomBytes(32).toString("base64"), termsVault = new TermsVault(key, "v1"), submissionVault = new SubmissionVault(key, "v1");
-const customers = new PostgresCustomerRepository(pool), repo = new PostgresOnboardingSubmissionRepository(pool), termsRepo = new PostgresCustomerTermsRepository(pool);
-const drafts = new IndividualDraftService(new PostgresIndividualDraftRepository(pool), new DraftCipher(key, "v1"));
+const customers = new PostgresCustomerRepository(pool), repo = new PostgresOnboardingSubmissionRepository(pool,"test"), termsRepo = new PostgresCustomerTermsRepository(pool,"test");
+const drafts = new IndividualDraftService(new PostgresIndividualDraftRepository(pool,"test"), new DraftCipher(key, "v1"));
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 const fixedNow = new Date("2026-10-18T18:00:00Z"), expiresAt = "2026-10-19T16:12:34.882Z", token = "ts_secret_submission_token_once_123456";
 const fixture = () => individualDraftSchema(fixedNow).parse({ legal_name: "Pessoa Sintetica", cpf: "52998224725", date_of_birth: "1990-01-01", nationality: "BR",
@@ -40,6 +42,9 @@ beforeAll(async () => {
   await db.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
   const dir = new URL("../migrations/", import.meta.url);
   for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(file, dir), "utf8"));
+  await db.exec("insert into peragus_database_environment(environment) values('test')");
+  // Runtime kill switches start OFF (054); this suite performs guarded actions.
+  await enableRuntimeControls(db);
 }, 30000);
 afterAll(async () => { await Promise.all(apps.map(app => app.close())); await db.close(); });
 async function setup(type: "pf" | "pj" = "pf") {
@@ -48,8 +53,8 @@ async function setup(type: "pf" | "pj" = "pf") {
   const termsId = randomUUID(), context = { id: termsId, customerId: actor.id, termsUrl: "https://ozav.io/terms", termsVersion: "2.0", expiresAt };
   const evidence = { accepted_by: { legal_name: fixture().legal_name }, accepted_at: fixedNow.toISOString() };
   await db.query(`insert into peragus_customer_terms_sessions
-    (id,customer_id,state,idempotency_key,lease_until,encrypted_token,terms_url,terms_version,expires_at,encrypted_acceptance,accepted_at)
-    values($1,$2,'accepted',$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10)`,
+    (id,customer_id,state,idempotency_key,lease_until,encrypted_token,terms_url,terms_version,expires_at,encrypted_acceptance,accepted_at,environment)
+    values($1,$2,'accepted',$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10,'test')`,
     [termsId, actor.id, randomUUID(), fixedNow.toISOString(), JSON.stringify(termsVault.seal(context,"token",{token})), context.termsUrl,context.termsVersion,expiresAt,
       JSON.stringify(termsVault.seal(context,"acceptance",evidence)),evidence.accepted_at]);
   let now = fixedNow, writeError: number | null = null, failNetwork = false, resultMode = "full", status = "approved", externalId = `ozav_cus_form${actor.id.replaceAll("-", "")}`;
@@ -64,7 +69,7 @@ async function setup(type: "pf" | "pj" = "pf") {
     id: externalId, object: "customer", type: "individual", external_ref: `peragus-onboarding-test:${actor.id}`,
     status, verification: { mode: "full", status }, requirements: { due: ["private address"], due_codes: ["residential_address"], missing_fields: ["private"], documents_due: [] },
   } });
-  const provider = new OzavClient({ apiKey: "ozav_sk_test_registration", attempts: 1, transport, writeTransport });
+  const provider = new OzavClient({ mode: "test", apiKey: "ozav_sk_test_registration", attempts: 1, transport, writeTransport });
   const terms = new CustomerTermsService(termsRepo, termsVault, provider, drafts, () => now);
   const service = new CustomerSubmissionService(repo, submissionVault, drafts, terms, provider);
   return { actor, owner, termsId, context, caps, provider, service, terms, transport, writeTransport,
@@ -73,7 +78,7 @@ async function setup(type: "pf" | "pj" = "pf") {
 }
 const path = "/v1/me/onboarding", headers = { authorization: "Bearer valid" };
 async function appFor(s: Awaited<ReturnType<typeof setup>>, enabled = true) {
-  const app = await buildApp({ customerAccess: { customers, authenticate: async value => {
+  const app = await buildApp({ customerAccess: { legal: allAcceptedLegal, customers, authenticate: async value => {
     if (value !== "valid") throw new AuthenticationError("INVALID_TOKEN"); return { id: s.owner, email: "actual-user-private@example.test" };
   } }, ...(enabled ? { customerSubmissionService: s.service } : {}) });
   apps.push(app); return app;
@@ -134,8 +139,8 @@ describe("form registration from encrypted draft and accepted terms", () => {
     const reliance = await setup(); reliance.setMode("reliance");
     await expect(reliance.service.submit(reliance.actor.id, 1, reliance.termsId)).rejects.toThrow();
     const fixtureId = await setup();
-    await db.query(`insert into peragus_ozav_sandbox_customer_links(customer_id,idempotency_key,request_hash,state,ozav_customer_id)
-      values($1,$2,$3,'linked',$4)`, [fixtureId.actor.id, randomUUID(), "a".repeat(64), fixtureId.getId()]);
+    await db.query(`insert into peragus_ozav_sandbox_customer_links(customer_id,idempotency_key,request_hash,state,ozav_customer_id,environment)
+      values($1,$2,$3,'linked',$4,'test')`, [fixtureId.actor.id, randomUUID(), "a".repeat(64), fixtureId.getId()]);
     await expect(fixtureId.service.submit(fixtureId.actor.id, 1, fixtureId.termsId)).rejects.toThrow("ONBOARDING_CONFLICT");
   });
   it("requires explicit synthetic confirmation and isolates owners, PJ, suspended, disabled and anonymous callers", async () => {
@@ -152,7 +157,7 @@ describe("form registration from encrypted draft and accepted terms", () => {
   });
   it("refreshes the submitted binding through the signed-event processor and atomically rolls back failures", async () => {
     const s = await setup(); await s.service.submit(s.actor.id, 1, s.termsId); s.setStatus("rejected");
-    const processor = new PostgresCustomerWebhookProcessor(pool, s.provider);
+    const processor = new PostgresCustomerWebhookProcessor(pool, s.provider,"test");
     const e = { id: `ozav_evt_${randomUUID().replaceAll("-", "")}`, object: "event" as const, type: "customer.updated", livemode: false, created_at: fixedNow.toISOString(), data: { customer: { id: s.getId(), status: "approved" } } };
     const hash = createHash("sha256").update(JSON.stringify(e)).digest("hex");
     failReceipt = true; await expect(processor.process(e, hash)).rejects.toThrow("receipt failed");
@@ -182,5 +187,106 @@ describe("form registration from encrypted draft and accepted terms", () => {
     expect(r.rows[0]).toEqual({ relrowsecurity: true, anon_select: false, auth_insert: false });
     const s = await setup(); await s.service.submit(s.actor.id, 1, s.termsId);
     await expect(db.query("update peragus_customer_onboarding_submissions set environment='live' where customer_id=$1", [s.actor.id])).rejects.toThrow();
+  });
+  it("records the sandbox attestation in test and refuses the live attestation field there", async () => {
+    const s = await setup(), app = await appFor(s);
+    expect((await app.inject({ method: "POST", url: `${path}/submit`, headers, payload: { draft_version: 1, terms_session_id: s.termsId, data_truthfulness_confirmed: true } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: `${path}/submit`, headers, payload: bodyFor(s) })).statusCode).toBe(201);
+    const row = (await db.query<{ attestation: string; attested_at: unknown }>("select attestation, attested_at from peragus_customer_onboarding_submissions where customer_id=$1", [s.actor.id])).rows[0];
+    expect(row?.attestation).toBe("sandbox_data_confirmed"); expect(row?.attested_at).not.toBeNull();
+  });
+});
+
+// Live money mode on a PGlite database recorded as 'live'. No real OZAV: transports are fakes.
+describe("live registration of a real person", () => {
+  const liveDb = new PGlite();
+  const liveQuery = async (sql: string, params?: unknown[]) => { const r = await liveDb.query(sql, params); return { ...r, rowCount: r.rows.length }; };
+  const livePool = { query: liveQuery, connect: async () => ({ query: liveQuery, release: () => {} }) } as unknown as Pool;
+  const liveCustomers = new PostgresCustomerRepository(livePool), liveRepo = new PostgresOnboardingSubmissionRepository(livePool, "live"),
+    liveTerms = new PostgresCustomerTermsRepository(livePool, "live");
+  const liveDrafts = new IndividualDraftService(new PostgresIndividualDraftRepository(livePool, "live"), new DraftCipher(key, "v1"));
+  const realEmail = "Maria.Silva@Real-Mail.test";
+  beforeAll(async () => {
+    await liveDb.exec("create role anon; create role authenticated; alter default privileges grant all on tables to anon,authenticated;");
+    const dir = new URL("../migrations/", import.meta.url);
+    for (const file of (await readdir(dir)).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) await liveDb.exec(await readFile(new URL(file, dir), "utf8"));
+    await liveDb.exec("insert into peragus_database_environment(environment) values('live')");
+    // Runtime kill switches start OFF (054); this suite performs guarded actions.
+    await enableRuntimeControls(liveDb);
+  }, 30000);
+  afterAll(async () => { await liveDb.close(); });
+  async function live() {
+    const owner = randomUUID(), actor = (await liveCustomers.createOrGet({ ownerUserId: owner, type: "pf", displayName: "Maria" })).customer;
+    await liveDrafts.save(actor.id, 0, fixture());
+    const termsId = randomUUID(), context = { id: termsId, customerId: actor.id, termsUrl: "https://ozav.io/terms", termsVersion: "2.0", expiresAt };
+    const evidence = { accepted_by: { legal_name: fixture().legal_name }, accepted_at: fixedNow.toISOString() };
+    await liveDb.query(`insert into peragus_customer_terms_sessions
+      (id,customer_id,state,idempotency_key,lease_until,encrypted_token,terms_url,terms_version,expires_at,encrypted_acceptance,accepted_at,environment)
+      values($1,$2,'accepted',$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10,'live')`,
+      [termsId, actor.id, randomUUID(), fixedNow.toISOString(), JSON.stringify(termsVault.seal(context, "token", { token })), context.termsUrl, context.termsVersion, expiresAt,
+        JSON.stringify(termsVault.seal(context, "acceptance", evidence)), evidence.accepted_at]);
+    const providerId = `ozav_cus_live${actor.id.replaceAll("-", "")}`;
+    const caps = { environment: "live", entitlements: ["customers", "custody"], scopes: ["customers:write", "customers:read"] };
+    const writeTransport = vi.fn(async (r: OzavWriteRequest) => ({ statusCode: 201, body: { id: providerId, object: "customer", type: "individual",
+      email: String(r.body.email).toUpperCase(), external_ref: r.body.external_ref, status: "pending", verification: { mode: "full" } } }));
+    const transport = vi.fn(async (p: string) => p === "/v2/capabilities" ? { statusCode: 200, body: caps } : { statusCode: 200, body: {
+      id: providerId, object: "customer", type: "individual", external_ref: `peragus-onboarding:${actor.id}`, status: "pending",
+      verification: { mode: "full", status: "pending" }, requirements: { due: [], due_codes: [], missing_fields: [], documents_due: [] } } });
+    const provider = new OzavClient({ mode: "live", apiKey: "ozav_sk_live_registration", attempts: 1, transport, writeTransport });
+    const terms = new CustomerTermsService(liveTerms, termsVault, provider, liveDrafts, () => fixedNow, "live");
+    const service = new CustomerSubmissionService(liveRepo, submissionVault, liveDrafts, terms, provider, "live");
+    const app = await buildApp({ moneyMode: "live", customerAccess: { legal: allAcceptedLegal, customers: liveCustomers, authenticate: async value => {
+      if (value !== "valid") throw new AuthenticationError("INVALID_TOKEN"); return { id: owner, email: realEmail, emailConfirmedAt: "2026-11-01T10:00:00Z" }; } }, customerSubmissionService: service });
+    apps.push(app);
+    return { actor, termsId, providerId, provider, service, app, writeTransport, transport };
+  }
+  const liveBody = (termsId: string) => ({ draft_version: 1, terms_session_id: termsId, data_truthfulness_confirmed: true });
+  it("submits the authenticated user's real e-mail and real draft with live refs, and records the truthfulness attestation", async () => {
+    const s = await live();
+    const first = await s.app.inject({ method: "POST", url: `${path}/submit`, headers, payload: liveBody(s.termsId) });
+    expect(first.statusCode).toBe(201);
+    expect(first.json().data).toMatchObject({ environment: "live", sandbox_submission: false, state: "linked", provider_customer_id: s.providerId });
+    const sent = s.writeTransport.mock.calls[0]![0];
+    expect(sent.idempotencyKey).toBe(`peragus-registration-${s.actor.id}`);
+    expect(sent.body).toMatchObject({ type: "individual", external_ref: `peragus-onboarding:${s.actor.id}`, email: realEmail.toLowerCase(),
+      individual: { legal_name: fixture().legal_name, tax_id: { country: "BR", type: "cpf", value: "52998224725" } }, terms_session_id: token, verification_mode: "full" });
+    const serialized = JSON.stringify(sent);
+    for (const synthetic of ["example.com", "peragus-onboarding-test", "peragus_onboarding_test", "registration-test"]) expect(serialized).not.toContain(synthetic);
+    const row = (await liveDb.query<{ attestation: string; attested_at: unknown }>("select attestation, attested_at from peragus_customer_onboarding_submissions where customer_id=$1", [s.actor.id])).rows[0];
+    expect(row?.attestation).toBe("data_truthfulness_confirmed"); expect(row?.attested_at).not.toBeNull();
+    expect(JSON.stringify(row)).not.toContain(realEmail.toLowerCase());
+    expect((await s.app.inject({ method: "POST", url: `${path}/refresh`, headers, payload: {} })).json().data.provider_snapshot).toMatchObject({ provider_status: "pending" });
+  });
+  it("validates the attestation per mode: live refuses the sandbox field and a missing confirmation", async () => {
+    const s = await live();
+    for (const payload of [{ draft_version: 1, terms_session_id: s.termsId, sandbox_data_confirmed: true }, { draft_version: 1, terms_session_id: s.termsId },
+      { ...liveBody(s.termsId), data_truthfulness_confirmed: false }, { ...liveBody(s.termsId), sandbox_data_confirmed: true }])
+      expect((await s.app.inject({ method: "POST", url: `${path}/submit`, headers, payload })).statusCode).toBe(400);
+    await expect(s.service.submit(s.actor.id, 1, s.termsId)).rejects.toThrow("ONBOARDING_ATTESTATION_REQUIRED");
+    await expect(s.service.submit(s.actor.id, 1, s.termsId, { attestation: "sandbox_data_confirmed", email: realEmail })).rejects.toThrow("ONBOARDING_ATTESTATION_REQUIRED");
+    await expect(s.service.submit(s.actor.id, 1, s.termsId, { attestation: "data_truthfulness_confirmed", email: "not-an-email" })).rejects.toThrow("ONBOARDING_EMAIL_REQUIRED");
+    // Final review I10: live registration needs the e-mail confirmation Supabase reported.
+    await expect(s.service.submit(s.actor.id, 1, s.termsId, { attestation: "data_truthfulness_confirmed", email: realEmail })).rejects.toThrow("ONBOARDING_EMAIL_NOT_CONFIRMED");
+    await expect(s.service.submit(s.actor.id, 1, s.termsId, { attestation: "data_truthfulness_confirmed", email: realEmail, emailConfirmedAt: "not-a-date" })).rejects.toThrow("ONBOARDING_EMAIL_NOT_CONFIRMED");
+    expect(s.writeTransport).not.toHaveBeenCalled();
+  });
+  it("the database refuses a sandbox attestation on a live row", async () => {
+    const s = await live(); await s.app.inject({ method: "POST", url: `${path}/submit`, headers, payload: liveBody(s.termsId) });
+    await expect(liveDb.query("update peragus_customer_onboarding_submissions set attestation='sandbox_data_confirmed' where customer_id=$1", [s.actor.id])).rejects.toThrow();
+  });
+  it("the client refuses synthetic refs in live and real refs in test", async () => {
+    const s = await live(), id = randomUUID();
+    const payload = (ref: string, email: string, metadata: Record<string, string>) => ({ type: "individual" as const, external_ref: ref, email,
+      individual: { ...fixture(), tax_id: { country: "BR" as const, type: "cpf" as const, value: "52998224725" } }, terms_session_id: token,
+      verification_mode: "full" as const, custody_model: "managed" as const, monitoring: false as const, metadata }) as never;
+    await expect(s.provider.createOnboardingCustomer(payload(`peragus-onboarding-test:${id}`, `peragus-onboarding-test-${id}@example.com`, { peragus_onboarding_test: "true" }),
+      `peragus-registration-test-${id}`)).rejects.toThrow();
+    await expect(s.provider.createOnboardingCustomer(payload(`peragus-onboarding:${id}`, "person@example.com", { peragus_onboarding: "true" }),
+      `peragus-registration-${id}`)).rejects.toThrow();
+    expect(s.writeTransport).not.toHaveBeenCalled();
+    const testClient = new OzavClient({ mode: "test", apiKey: "ozav_sk_test_registration", attempts: 1, transport: vi.fn(), writeTransport: s.writeTransport });
+    await expect(testClient.createOnboardingCustomer(payload(`peragus-onboarding:${id}`, realEmail.toLowerCase(), { peragus_onboarding: "true" }),
+      `peragus-registration-${id}`)).rejects.toThrow();
+    expect(s.writeTransport).not.toHaveBeenCalled();
   });
 });

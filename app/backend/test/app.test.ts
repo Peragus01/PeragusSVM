@@ -1,6 +1,8 @@
+import { allAcceptedLegal } from "./helpers/legal-double.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import { createReadinessChecker, type ReadinessProbes } from "../src/database/readiness.js";
 
 const applications: Awaited<ReturnType<typeof buildApp>>[] = [];
 
@@ -30,5 +32,288 @@ describe("GET /health", () => {
 
     expect(Number.isNaN(Date.parse(body.timestamp))).toBe(false);
     expect(body.uptimeSeconds).toEqual(expect.any(Number));
+  });
+});
+
+describe("money mode drives customer-facing environment", () => {
+  const customer = {
+    id: "11111111-1111-4111-8111-111111111111",
+    ownerUserId: "owner-1",
+    type: "pf" as const,
+    displayName: "Cliente",
+    verificationStatus: "draft" as const,
+    suspended: false,
+  };
+  const customerAccess = { legal: allAcceptedLegal,
+    authenticate: async () => ({ id: "owner-1", email: "c@example.test" }),
+    customers: {
+      findByOwner: async () => customer,
+      createOrGet: async () => ({ customer, created: false }),
+      ownsSettlement: async () => false,
+    },
+  };
+  const headers = { authorization: "Bearer valid" };
+  const pix = {
+    simulatePayment: async () => {
+      throw new Error("must not run");
+    },
+  } as never;
+  const verification = {
+    simulate: async () => {
+      throw new Error("must not run");
+    },
+  } as never;
+
+  it("live capabilities report mainnet and real_purchase true", async () => {
+    const app = await buildApp({ customerAccess, moneyMode: "live" });
+    applications.push(app);
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/me/purchase-capabilities",
+      headers,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      environment: "live",
+      network: "solana:mainnet",
+      real_purchase: true,
+    });
+  });
+
+  it("test capabilities keep devnet and no real purchase", async () => {
+    const app = await buildApp({ customerAccess });
+    applications.push(app);
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/me/purchase-capabilities",
+      headers,
+    });
+    expect(response.json().data).toMatchObject({
+      environment: "test",
+      network: "solana:devnet",
+      real_purchase: false,
+    });
+  });
+
+  it("simulate routes are not registered in live", async () => {
+    const app = await buildApp({
+      customerAccess,
+      moneyMode: "live",
+      customerSandboxPixService: pix,
+      customerSandboxPixSimulationEnabled: true,
+      customerVerificationService: verification,
+      verificationSimulationEnabled: true,
+      ozavSandboxCustomerService: {} as never,
+    });
+    applications.push(app);
+    const id = "22222222-2222-4222-8222-222222222222";
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/v1/me/sandbox-pix/${id}/simulate`,
+          headers,
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/v1/me/onboarding/verification/simulate",
+          headers,
+          payload: { outcome: "approved" },
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/v1/me/ozav-sandbox-customer",
+          headers,
+        })
+      ).statusCode,
+    ).toBe(404);
+  });
+
+  it("simulate routes stay registered in test", async () => {
+    const app = await buildApp({
+      customerAccess,
+      customerSandboxPixService: pix,
+    });
+    applications.push(app);
+    const id = "22222222-2222-4222-8222-222222222222";
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/me/sandbox-pix/${id}/simulate`,
+      headers,
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe(
+      "CUSTOMER_SANDBOX_PIX_SIMULATION_DISABLED",
+    );
+  });
+
+  it("verification simulate and sandbox-customer routes stay registered in test", async () => {
+    const app = await buildApp({
+      customerAccess,
+      customerVerificationService: verification,
+    });
+    applications.push(app);
+    const simulate = await app.inject({
+      method: "POST",
+      url: "/v1/me/onboarding/verification/simulate",
+      headers,
+      payload: { outcome: "approved" },
+    });
+    expect(simulate.statusCode).toBe(503);
+    expect(simulate.json().error.code).toBe("VERIFICATION_SIMULATION_DISABLED");
+    const sandboxCustomer = await app.inject({
+      method: "GET",
+      url: "/v1/me/ozav-sandbox-customer",
+      headers,
+    });
+    expect(sandboxCustomer.statusCode).not.toBe(404);
+    expect(sandboxCustomer.statusCode).toBe(503);
+  });
+});
+
+describe("GET /ready", () => {
+  const ok = async () => undefined;
+  const boom = async () => {
+    throw new Error("secret-host.internal: password authentication failed");
+  };
+
+  async function ready(readiness: ReadinessProbes) {
+    const app = await buildApp({ readiness });
+    applications.push(app);
+    return app.inject({ method: "GET", url: "/ready" });
+  }
+
+  it("is 200 when all pass", async () => {
+    const response = await ready({ database: ok, queue: ok, ozav: ok });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      status: "ready",
+      checks: { database: "ok", queue: "ok", ozav: "ok" },
+    });
+  });
+
+  it("is 200 and skips OZAV when no OZAV probe is configured", async () => {
+    const response = await ready({ database: ok, queue: ok });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.ozav).toBe("ok");
+  });
+
+  it("is 503 when the database probe fails, without leaking the error", async () => {
+    const response = await ready({ database: boom, queue: ok, ozav: ok });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      status: "not_ready",
+      checks: { database: "failed", queue: "ok", ozav: "ok" },
+    });
+    expect(response.body).not.toContain("secret-host");
+  });
+
+  it("is 503 when the queue probe fails", async () => {
+    const response = await ready({ database: ok, queue: boom, ozav: ok });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks).toEqual({ database: "ok", queue: "failed", ozav: "ok" });
+  });
+
+  it("is 503 when OZAV capabilities fails", async () => {
+    const response = await ready({ database: ok, queue: ok, ozav: boom });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks).toEqual({ database: "ok", queue: "ok", ozav: "failed" });
+    expect(response.body).not.toContain("secret-host");
+  });
+
+  it("is 503 when the database probe hangs past the timeout", async () => {
+    const response = await ready({ database: () => new Promise<void>(() => undefined), queue: ok });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks.database).toBe("failed");
+  }, 6_000);
+
+  it("is not_ready when no database or queue probe is wired", async () => {
+    const app = await buildApp();
+    applications.push(app);
+    expect((await app.inject({ method: "GET", url: "/ready" })).statusCode).toBe(503);
+  });
+
+  it("caches the OZAV result for 30 seconds", async () => {
+    let calls = 0;
+    let clock = 1_000;
+    const checker = createReadinessChecker(
+      { database: ok, queue: ok, ozav: async () => { calls += 1; } },
+      { now: () => clock },
+    );
+    await checker();
+    await checker();
+    expect(calls).toBe(1);
+    clock += 30_001;
+    await checker();
+    expect(calls).toBe(2);
+  });
+
+  it("shares one in-flight database/queue probe among concurrent requests and caches it for 2 s", async () => {
+    let db = 0, queue = 0, clock = 1_000;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const checker = createReadinessChecker(
+      { database: async () => { db += 1; await gate; }, queue: async () => { queue += 1; } },
+      { now: () => clock },
+    );
+    const concurrent = [checker(), checker(), checker()];
+    release();
+    expect((await Promise.all(concurrent)).every((r) => r.status === "ready")).toBe(true);
+    expect([db, queue]).toEqual([1, 1]);
+    clock += 1_999;
+    await checker();
+    expect([db, queue]).toEqual([1, 1]);
+    clock += 2;
+    await checker();
+    expect([db, queue]).toEqual([2, 2]);
+  });
+
+  it("the queue check fails when the worker heartbeat is stale (> 3 min)", async () => {
+    const { workerHeartbeatProbe, recordWorkerHeartbeat } = await import("../src/operations/worker-heartbeat.js");
+    const { queueReadinessProbe } = await import("../src/database/readiness.js");
+    const { PGlite } = await import("@electric-sql/pglite");
+    const { readFile, readdir } = await import("node:fs/promises");
+    const db = new PGlite();
+    try {
+      await db.exec("create role anon; create role authenticated; create schema pgboss; create table pgboss.job(id int);");
+      const dir = new URL("../migrations/", import.meta.url);
+      for (const f of (await readdir(dir)).filter((f) => /^\d+_.*\.sql$/.test(f)).sort()) await db.exec(await readFile(new URL(f, dir), "utf8"));
+      const pool = { query: (sql: string, params?: unknown[]) => db.query(sql, params) } as never;
+      const check = createReadinessChecker({ database: ok, queue: queueReadinessProbe(pool, workerHeartbeatProbe(pool, "test")) }, { databaseCacheMs: 0 });
+      expect((await check()).checks.queue).toBe("failed");
+      await recordWorkerHeartbeat(pool, "test");
+      expect((await check()).checks.queue).toBe("ok");
+      await db.query("update peragus_worker_heartbeats set beat_at=now()-interval '181 seconds'");
+      expect((await check()).checks.queue).toBe("failed");
+      // The other environment's heartbeat does not count.
+      await db.query("delete from peragus_worker_heartbeats");
+      await recordWorkerHeartbeat(pool, "live");
+      expect((await check()).checks.queue).toBe("failed");
+    } finally {
+      await db.close();
+    }
+  }, 60_000);
+
+  it("is reachable with auth and rate limiting configured, and /health is unchanged", async () => {
+    const app = await buildApp({
+      readiness: { database: ok, queue: ok, ozav: ok },
+      customerAccess: {
+        legal: allAcceptedLegal,
+        authenticate: async () => { throw new Error("must not run"); },
+        customers: { findByOwner: async () => undefined, createOrGet: async () => { throw new Error("x"); }, ownsSettlement: async () => false },
+      } as never,
+      apiRateLimiter: { consume: async () => ({ allowed: false }) } as never,
+    });
+    applications.push(app);
+    expect((await app.inject({ method: "GET", url: "/ready" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
   });
 });

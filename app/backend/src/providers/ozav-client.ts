@@ -1,5 +1,7 @@
 import type { IndividualDraft } from "../onboarding/individual-schema.js";
 import https from "node:https";
+import { providerKeyMatchesMode, type MoneyMode } from "../config/money-environment.js";
+import { isAllowedHostedSessionUrl } from "./ozav-hosted-session.js";
 
 export interface OzavResponse {
   statusCode: number;
@@ -28,13 +30,47 @@ export type OzavWriteTransport = (
 export class OzavClientError extends Error {
   readonly statusCode: number | undefined;
   readonly retryable: boolean;
+  /** OZAV error.code slug (e.g. AMOUNT_BELOW_MINIMUM) when the response carried a well-formed one. */
+  readonly ozavErrorCode: string | undefined;
 
-  constructor(message: string, retryable: boolean, statusCode?: number) {
+  constructor(
+    message: string,
+    retryable: boolean,
+    statusCode?: number,
+    ozavErrorCode?: string,
+  ) {
     super(message);
     this.name = "OzavClientError";
     this.retryable = retryable;
     this.statusCode = statusCode;
+    this.ozavErrorCode = ozavErrorCode;
   }
+}
+
+/**
+ * OZAV refused the FX rate lock on POST /transfers (422 FACILITY_LOCK_UNAVAILABLE or
+ * FACILITY_TERMS_VERSION_REQUIRED). Unlike other non-201 outcomes this is not
+ * ambiguous: OZAV documents that nothing was created.
+ */
+export class OzavFacilityLockRefusedError extends OzavClientError {
+  /** `details.reason` slug (e.g. client_not_exempt), when well-formed. */
+  readonly reason: string | null;
+  constructor(statusCode: number, ozavErrorCode: string, reason: string | null) {
+    super("OZAV refused the FX rate lock", false, statusCode, ozavErrorCode);
+    this.name = "OzavFacilityLockRefusedError";
+    this.reason = reason;
+  }
+}
+
+/** Create-time FX rate lock outcome (`facility` on the 201). GET never returns it. */
+export interface OzavFacilityOutcome {
+  locked: boolean;
+  state: "locked" | "not_locked" | "refused" | "undetermined";
+  reason: string | null;
+  /** What the customer receives at the locked conditions (major units); only when locked. */
+  amount: string | null;
+  currency: string | null;
+  deadlineAt: string | null;
 }
 
 export interface OzavSandboxCustomerInput {
@@ -108,19 +144,37 @@ export interface OzavVerification {
       "pass" | "fail" | "review" | "pending" | "not_started"
     >
   >;
+  /**
+   * Live only: the hosted session link, already validated as an https OZAV URL.
+   * A test key never receives one, so a test response carrying it is refused.
+   */
+  sessionUrl?: string | null;
+}
+/**
+ * A live registration carries the person's own e-mail: a plausible address that is
+ * not on a reserved example domain (RFC 2606) nor a generated synthetic fixture.
+ */
+export function isLiveRegistrationEmail(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 254 || value !== value.trim().toLowerCase()) return false;
+  const match = /^([^\s@"<>()[\]\\,;:]{1,64})@((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})$/.exec(value);
+  if (!match) return false;
+  const domain = match[2]!;
+  return !/(^|\.)example\.(com|net|org)$/.test(domain) && !match[1]!.startsWith("peragus-onboarding-test-");
 }
 function parseVerification(
   input: unknown,
   customerId: string,
+  mode: MoneyMode,
   expectedId?: string,
 ): OzavVerification {
   const row = object(input);
   const id = identifier(row.id, "ozav_vrf_");
+  const hasSession = row.session_url !== undefined && row.session_url !== null;
   if (
     row.object !== "verification" ||
     row.customer_id !== customerId ||
     (expectedId && id !== expectedId) ||
-    (row.session_url !== undefined && row.session_url !== null)
+    (hasSession && (mode !== "live" || !isAllowedHostedSessionUrl(row.session_url)))
   )
     return invalidResponse();
   if (
@@ -154,6 +208,7 @@ function parseVerification(
     customerId,
     status: row.status as OzavVerification["status"],
     checks,
+    ...(mode === "live" ? { sessionUrl: hasSession ? (row.session_url as string) : null } : {}),
   };
 }
 
@@ -168,7 +223,8 @@ export interface OzavRegistrationPayload {
   verification_mode: "full";
   custody_model: "managed";
   monitoring: false;
-  metadata: { peragus_onboarding_test: "true" };
+  /** Test registrations are marked synthetic; live registrations carry no test marker. */
+  metadata: { peragus_onboarding_test: "true" } | { peragus_onboarding: "true" };
 }
 export interface OzavTermsSession {
   token: string | null;
@@ -281,6 +337,8 @@ export interface OzavQuote {
 export interface OzavIndicativeQuote extends OzavQuote {
   rateWithoutSpread: string | null;
   amountDeducted: string | null;
+  /** FX rate lock terms, present only when facility_preview was requested and OZAV offered it. */
+  facility?: { termsVersion: string };
 }
 export interface CreateOzavQuoteInput {
   customerId: string;
@@ -294,6 +352,8 @@ export interface CreateOzavTransferInput {
   quoteId: string;
   idempotencyKey: string;
   metadata: Readonly<Record<string, string>>;
+  /** Live only (required there): the facility terms version accepted with the quote. */
+  facilityTermsVersion?: string;
 }
 
 export interface OzavPayoutDestination {
@@ -387,6 +447,61 @@ function paymentInstructions(value: unknown): OzavPaymentInstructions | null {
     qrCodeImage: optionalText(row.qr_code_image),
     expiresAt: timestamp(row.expires_at),
   };
+}
+
+const slug = (value: unknown): string | null =>
+  typeof value === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(value) ? value : null;
+
+/** A malformed or inconsistent block is returned as null: "no usable lock". */
+function facilityOutcome(value: unknown): OzavFacilityOutcome | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const states = ["locked", "not_locked", "refused", "undetermined"] as const;
+  const state = states.find((s) => s === row.state);
+  if (typeof row.locked !== "boolean" || !state || row.locked !== (state === "locked"))
+    return null;
+  if (!row.locked)
+    return { locked: false, state, reason: slug(row.reason), amount: null, currency: null, deadlineAt: null };
+  if (
+    typeof row.amount !== "string" ||
+    !/^\d+(?:\.\d{1,6})?$/.test(row.amount) ||
+    typeof row.currency !== "string" ||
+    !/^[A-Z]{2,10}$/.test(row.currency)
+  )
+    return null;
+  return {
+    locked: true,
+    state,
+    reason: null,
+    amount: row.amount,
+    currency: row.currency,
+    // Passed through as received; the Pix service parses it strictly and fails
+    // closed (LOCK_DEADLINE_INVALID) when it is missing, malformed or past.
+    deadlineAt:
+      typeof row.deadline_at === "string" && row.deadline_at.length <= 64
+        ? row.deadline_at
+        : null,
+  };
+}
+
+function providerErrorReason(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const error = (body as { error?: unknown }).error;
+  if (typeof error !== "object" || error === null) return null;
+  const details = (error as { details?: unknown }).details;
+  if (typeof details !== "object" || details === null) return null;
+  return slug((details as { reason?: unknown }).reason);
+}
+
+/** Only a well-formed upper-snake slug is surfaced; messages and details never are. */
+function providerErrorCode(body: unknown): string | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const error = (body as { error?: unknown }).error;
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
+    ? code
+    : undefined;
 }
 
 function quote(value: unknown): OzavQuote {
@@ -630,6 +745,7 @@ export const httpsOzavWriteTransport: OzavWriteTransport = (
 
 export interface OzavClientOptions {
   apiKey: string;
+  mode: MoneyMode;
   transport?: OzavTransport;
   writeTransport?: OzavWriteTransport;
   timeoutMs?: number;
@@ -637,9 +753,11 @@ export interface OzavClientOptions {
   wait?: (milliseconds: number) => Promise<void>;
 }
 
-/** Sandbox-only OZAV client. State changes require explicit method calls. */
+/** OZAV client bound to one money mode (key prefix and capabilities). State changes require explicit method calls. */
 export class OzavClient {
   private readonly apiKey: string;
+  /** Money mode the key belongs to; provider capabilities must report the same environment. */
+  readonly mode: MoneyMode;
   private readonly transport: OzavTransport;
   private readonly writeTransport: OzavWriteTransport;
   private readonly timeoutMs: number;
@@ -647,10 +765,13 @@ export class OzavClient {
   private readonly wait: (milliseconds: number) => Promise<void>;
 
   constructor(options: OzavClientOptions) {
-    if (!/^ozav_sk_test_[A-Za-z0-9_-]+$/.test(options.apiKey)) {
-      throw new OzavClientError("A sandbox OZAV key is required", false);
+    if (
+      !providerKeyMatchesMode(options.apiKey, options.mode)
+    ) {
+      throw new OzavClientError("An OZAV key matching the money mode is required", false);
     }
     this.apiKey = options.apiKey;
+    this.mode = options.mode;
     this.transport = options.transport ?? httpsOzavTransport;
     this.writeTransport = options.writeTransport ?? httpsOzavWriteTransport;
     this.timeoutMs = options.timeoutMs ?? 15_000;
@@ -713,6 +834,7 @@ export class OzavClient {
             `OZAV HTTP ${result.statusCode}`,
             [408, 429].includes(result.statusCode) || result.statusCode >= 500,
             result.statusCode,
+            providerErrorCode(result.body),
           );
         }
         return result;
@@ -743,28 +865,31 @@ export class OzavClient {
     return this.get(`/v2/customers/${customerId}/documents?limit=100${cursor ? `&starting_after=${encodeURIComponent(cursor)}` : ""}`);
   }
 
-  async getCapabilities(): Promise<{ environment: "test"; scopes: string[] }> {
+  async getCapabilities(): Promise<{ environment: "test" | "live"; scopes: string[] }> {
     const row = object(await this.get("/v2/capabilities"));
-    if (row.environment !== "test" || !Array.isArray(row.scopes)) {
+    if (
+      (row.environment !== "test" && row.environment !== "live")
+      || !Array.isArray(row.scopes)
+    ) {
       return invalidResponse();
     }
-    return { environment: "test", scopes: row.scopes.map(text) };
+    return { environment: row.environment, scopes: row.scopes.map(text) };
   }
 
   async getCustomerCapabilities(): Promise<{
-    environment: "test";
+    environment: MoneyMode;
     entitlements: string[];
     scopes: string[];
   }> {
     const row = object(await this.get("/v2/capabilities"));
     if (
-      row.environment !== "test" ||
+      row.environment !== this.mode ||
       !Array.isArray(row.entitlements) ||
       !Array.isArray(row.scopes)
     )
       return invalidResponse();
     return {
-      environment: "test",
+      environment: this.mode,
       entitlements: row.entitlements.map(text),
       scopes: row.scopes.map(text),
     };
@@ -924,18 +1049,27 @@ export class OzavClient {
     payload: OzavRegistrationPayload,
     idempotencyKey: string,
   ): Promise<OzavSandboxCustomer & { verificationMode: "full" }> {
+    // Test: only the generated synthetic fixture shape. Live: the person's real e-mail and
+    // mode-derived refs, never a synthetic/test marker (each mode refuses the other's shape).
+    const metadata = JSON.stringify(payload.metadata);
+    const shaped =
+      this.mode === "live"
+        ? /^peragus-registration-[0-9a-f-]{36}$/.test(idempotencyKey) &&
+          /^peragus-onboarding:[0-9a-f-]{36}$/.test(payload.external_ref) &&
+          isLiveRegistrationEmail(payload.email) &&
+          metadata === JSON.stringify({ peragus_onboarding: "true" })
+        : /^peragus-registration-test-[0-9a-f-]{36}$/.test(idempotencyKey) &&
+          /^peragus-onboarding-test:[0-9a-f-]{36}$/.test(payload.external_ref) &&
+          /^peragus-onboarding-test-[0-9a-f-]{36}@example.com$/.test(payload.email) &&
+          metadata === JSON.stringify({ peragus_onboarding_test: "true" });
     if (
-      !/^peragus-registration-test-[0-9a-f-]{36}$/.test(idempotencyKey) ||
-      !/^peragus-onboarding-test:[0-9a-f-]{36}$/.test(payload.external_ref) ||
-      !/^peragus-onboarding-test-[0-9a-f-]{36}@example.com$/.test(
-        payload.email,
-      ) ||
+      !shaped ||
       payload.verification_mode !== "full" ||
       payload.custody_model !== "managed" ||
       payload.type !== "individual" ||
       !/^ts_[A-Za-z0-9_-]{8,256}$/.test(payload.terms_session_id)
     )
-      throw new OzavClientError("Invalid sandbox registration", false);
+      throw new OzavClientError("Invalid onboarding registration", false);
     const row = object(
       (
         await this.post({
@@ -949,7 +1083,9 @@ export class OzavClient {
       row.object !== "customer" ||
       row.type !== "individual" ||
       row.external_ref !== payload.external_ref ||
-      row.email !== payload.email ||
+      typeof row.email !== "string" ||
+      // E-mail domains and (in practice) local parts are case-insensitive at the provider.
+      row.email.toLowerCase() !== payload.email.toLowerCase() ||
       object(row.verification).mode !== "full"
     )
       return invalidResponse();
@@ -1049,7 +1185,7 @@ export class OzavClient {
       )
         return invalidResponse();
       for (const item of row.data) {
-        const session = parseVerification(item, customerId);
+        const session = parseVerification(item, customerId, this.mode);
         if (seen.has(session.id)) return invalidResponse();
         seen.add(session.id);
         sessions.push(session);
@@ -1081,7 +1217,7 @@ export class OzavClient {
         ],
       },
     });
-    return parseVerification(response.body, customerId);
+    return parseVerification(response.body, customerId, this.mode);
   }
   async getCustomerVerification(
     customerId: string,
@@ -1092,6 +1228,7 @@ export class OzavClient {
     return parseVerification(
       await this.get(`/v2/verifications/${encodeURIComponent(verificationId)}`),
       customerId,
+      this.mode,
       verificationId,
     );
   }
@@ -1104,6 +1241,9 @@ export class OzavClient {
     identifier(verificationId, "ozav_vrf_");
     if (outcome !== "approved" && outcome !== "rejected")
       throw new OzavClientError("Invalid simulation outcome", false);
+    // Sandbox-only provider helper: never called with a live key.
+    if (this.mode !== "test")
+      throw new OzavClientError("Verification simulation requires test mode", false);
     return parseVerification(
       (
         await this.post({
@@ -1112,6 +1252,7 @@ export class OzavClient {
         })
       ).body,
       customerId,
+      this.mode,
       verificationId,
     );
   }
@@ -1171,8 +1312,13 @@ export class OzavClient {
     customerId: string,
     amountBrl: string,
     targetAmountUsdt?: string,
+    options: { facilityPreview?: boolean } = {},
   ): Promise<OzavIndicativeQuote> {
     identifier(customerId, "ozav_cus_");
+    const facilityPreview = options.facilityPreview === true;
+    // The facility is contracted for the live key only; test keys never ask for it.
+    if (facilityPreview && this.mode !== "live")
+      throw new OzavClientError("Rate lock preview requires live mode", false);
     if (targetAmountUsdt !== undefined) {
       if (
         !/^(0|[1-9]\d{0,5})\.\d{6}$/.test(targetAmountUsdt) ||
@@ -1202,6 +1348,7 @@ export class OzavClient {
             },
             source_rail: "pix",
             spread_bps: 0,
+            ...(facilityPreview ? { facility_preview: true } : {}),
           },
         })
       ).body,
@@ -1271,11 +1418,23 @@ export class OzavClient {
     const normalizedSource = targetAmountUsdt
       ? `${sourceCents / 100n}.${String(sourceCents % 100n).padStart(2, "0")}`
       : amountBrl;
+    let facility: { termsVersion: string } | undefined;
+    // Absence of the block means "not available for this account", never an error here.
+    if (facilityPreview && row.facility != null) {
+      const termsVersion = object(row.facility).terms_version;
+      if (
+        typeof termsVersion !== "string" ||
+        !/^[A-Za-z0-9._-]{1,64}$/.test(termsVersion)
+      )
+        return invalidResponse();
+      facility = { termsVersion };
+    }
     return {
       ...result,
       source: { currency: "BRL", amount: normalizedSource },
       rateWithoutSpread: without,
       amountDeducted: deducted,
+      ...(facility ? { facility } : {}),
     };
   }
 
@@ -1309,14 +1468,26 @@ export class OzavClient {
   }
 
   /** Customer Pix path: exactly one POST; preserve degraded-success IDs for GET recovery. */
-  async createCustomerPixTransfer(
-    input: CreateOzavTransferInput,
-  ): Promise<{ id: string; transfer: OzavTransfer | null }> {
+  async createCustomerPixTransfer(input: CreateOzavTransferInput): Promise<{
+    id: string;
+    transfer: OzavTransfer | null;
+    /** Live only: the create-time FX rate lock outcome; null when absent or unusable. */
+    facility: OzavFacilityOutcome | null;
+  }> {
     identifier(input.customerId, "ozav_cus_");
     identifier(input.walletId, "ozav_wal_");
     identifier(input.quoteId, "ozav_q_");
     if (!/^peragus-pix-[0-9a-f-]{36}$/.test(input.idempotencyKey))
       throw new OzavClientError("Invalid Pix key", false);
+    // Live Pix is created only with the FX rate lock accepted; test keys never send it.
+    const live = this.mode === "live";
+    if (
+      live
+        ? typeof input.facilityTermsVersion !== "string" ||
+          !/^[A-Za-z0-9._-]{1,64}$/.test(input.facilityTermsVersion)
+        : input.facilityTermsVersion !== undefined
+    )
+      throw new OzavClientError("Invalid FX rate lock acceptance", false);
     // Do not use post(): its retries are appropriate for other paths, but this
     // path recovers unknown outcomes through listing/GET, never another POST.
     const response = await this.writeTransport(
@@ -1333,6 +1504,12 @@ export class OzavClient {
             chain: "solana",
           },
           metadata: input.metadata,
+          ...(live
+            ? {
+                facility_terms_accepted: true,
+                facility_terms_version: input.facilityTermsVersion,
+              }
+            : {}),
         },
       },
       this.apiKey,
@@ -1342,16 +1519,27 @@ export class OzavClient {
       const row = object(response.body);
       if (row.object !== "transfer" || row.status !== "needs_review")
         return invalidResponse();
-      return { id: identifier(row.id, "ozav_tr_"), transfer: null };
+      return { id: identifier(row.id, "ozav_tr_"), transfer: null, facility: null };
     }
+    const code = providerErrorCode(response.body);
+    if (
+      response.statusCode === 422 &&
+      (code === "FACILITY_LOCK_UNAVAILABLE" || code === "FACILITY_TERMS_VERSION_REQUIRED")
+    )
+      throw new OzavFacilityLockRefusedError(422, code, providerErrorReason(response.body));
     if (response.statusCode !== 201)
       throw new OzavClientError(
         "Pix outcome requires reconciliation",
         false,
         response.statusCode,
+        code,
       );
     const row = transfer(response.body);
-    return { id: row.id, transfer: row };
+    return {
+      id: row.id,
+      transfer: row,
+      facility: live ? facilityOutcome(object(response.body).facility) : null,
+    };
   }
 
   async getCustomerManagedWallet(customerId: string): Promise<string> {

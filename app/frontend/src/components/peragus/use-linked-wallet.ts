@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import { journeyRequest } from "@/lib/peragus/journey";
+import { moneyNetwork, useMoneyMode } from "@/lib/peragus/config";
 import type { LinkedWallet } from "./customer-wallet-link";
 type WalletStatus = {
   environment: string;
@@ -10,6 +11,7 @@ type WalletStatus = {
 };
 export function useLinkedWallet() {
   const { accessToken, identity } = useCustomerSession();
+  const mode = useMoneyMode();
   const customerId = identity?.customer?.id;
   const [linked, setLinked] = useState<LinkedWallet | null>(null);
   const [error, setError] = useState("");
@@ -28,7 +30,7 @@ export function useLinkedWallet() {
       .then((data) => {
         if (controller.signal.aborted) return;
         if (
-          data.environment !== "test" ||
+          data.environment !== mode ||
           data.customer?.id !== customerId ||
           data.operations_enabled !== false
         )
@@ -36,7 +38,7 @@ export function useLinkedWallet() {
         const w = data.wallet;
         if (
           w &&
-          w.network === "solana:devnet" &&
+          w.network === moneyNetwork(mode) &&
           /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w.wallet_address)
         )
           setLinked(w);
@@ -46,6 +48,6 @@ export function useLinkedWallet() {
           setError("Não foi possível confirmar a carteira vinculada.");
       });
     return () => controller.abort();
-  }, [accessToken, customerId]);
+  }, [accessToken, customerId, mode]);
   return { linked, setLinked, error };
 }

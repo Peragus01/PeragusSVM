@@ -3,16 +3,21 @@ const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const customer = new RegExp(`^v1/me/operations/${uuid}/refund-request$`, "i");
 const detail = new RegExp(`^v1/admin/refund-requests/${uuid}$`, "i");
 const decision = new RegExp(`^v1/admin/refund-requests/${uuid}/decision$`, "i");
+const completion = new RegExp(`^v1/admin/refund-requests/${uuid}/completion$`, "i");
+const operationDecision = new RegExp(`^v1/admin/operations/${uuid}/refund-decision$`, "i");
 export function refundMethods(path: string): string[] {
   if (customer.test(path)) return ["GET", "POST"];
   if (path === "v1/admin/refund-requests" || detail.test(path)) return ["GET"];
-  if (decision.test(path)) return ["POST"];
+  if (decision.test(path) || completion.test(path) || operationDecision.test(path)) return ["POST"];
   return [];
 }
 const headers = { "Cache-Control": "no-store", Vary: "Authorization" };
 const error = (status: number, code: string) =>
   Response.json({ error: { code } }, { status, headers });
-/** Exact refund resources only. Completion, withdrawal execution and other admin routes stay closed. */
+/**
+ * Exact refund resources only: customer request, operator list/read/decision, the operator
+ * refund decision on an operation and the completion record (both record-only, fresh MFA).
+ */
 export async function forwardRefund(request: Request, target: URL, path: string) {
   const methods = refundMethods(path);
   if (!methods.length) return error(404, "NOT_FOUND");
@@ -22,6 +27,17 @@ export async function forwardRefund(request: Request, target: URL, path: string)
     return response;
   }
   if (request.method === "GET") return forwardCustomerRead(request, target);
+  return forwardJsonWrite(request, target);
+}
+/**
+ * Bounded JSON write (POST/PUT, same method upstream) with the bearer only: no query string,
+ * no cookies, 4 KiB body, JSON answers only. Callers check the path/method allowlist first.
+ */
+export async function forwardJsonWrite(
+  request: Request,
+  target: URL,
+  options: { emptyBody?: boolean } = {},
+) {
   const authorization = request.headers.get("authorization");
   if (
     !authorization ||
@@ -38,7 +54,8 @@ export async function forwardRefund(request: Request, target: URL, path: string)
     return error(502, "BACKEND_UNAVAILABLE");
   if (
     target.search ||
-    !/^application\/json(?:\s*;|$)/i.test(request.headers.get("content-type") ?? "")
+    (!options.emptyBody &&
+      !/^application\/json(?:\s*;|$)/i.test(request.headers.get("content-type") ?? ""))
   )
     return error(400, "VALIDATION_ERROR");
   const controller = new AbortController();
@@ -81,19 +98,23 @@ export async function forwardRefund(request: Request, target: URL, path: string)
       offset += chunk.length;
     }
     const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    try {
-      JSON.parse(body);
-    } catch {
-      return error(400, "VALIDATION_ERROR");
+    if (options.emptyBody) {
+      if (size) return error(400, "VALIDATION_ERROR");
+    } else {
+      try {
+        JSON.parse(body);
+      } catch {
+        return error(400, "VALIDATION_ERROR");
+      }
     }
     const upstream = await fetch(target, {
-      method: "POST",
+      method: request.method === "PUT" ? "PUT" : "POST",
       headers: {
         Accept: "application/json",
-        "Content-Type": "application/json",
+        ...(options.emptyBody ? {} : { "Content-Type": "application/json" }),
         Authorization: authorization,
       },
-      body,
+      ...(options.emptyBody ? {} : { body }),
       cache: "no-store",
       credentials: "omit",
       redirect: "error",

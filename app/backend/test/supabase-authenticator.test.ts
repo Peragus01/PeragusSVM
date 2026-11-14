@@ -8,7 +8,7 @@ describe("Supabase server token validation", () => {
   it("uses the configured project Auth server and returns only verified identity", async () => {
     const fetcher = mockFetch(user);
     const auth = createSupabaseAuthenticator(origin, "sb_publishable_test", fetcher);
-    expect(await auth("opaque-access-token")).toEqual({ id: user.id, email: user.email });
+    expect(await auth("opaque-access-token")).toEqual({ id: user.id, email: user.email, emailConfirmedAt: user.email_confirmed_at });
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${origin}/auth/v1/user`);
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer opaque-access-token");
@@ -37,5 +37,23 @@ describe("verified operator assurance",()=>{
  });
  it.each([{aal:"aal1"},{sub:randomUUID()},{iss:"https://other.supabase.co/auth/v1"},{exp:0},{aud:"service_role"}])("does not grant operator assurance from mismatched claims",async claims=>{
   expect((await createSupabaseAuthenticator(origin,"key",mockFetch(user))(jwt(claims))).assuranceLevel).toBeUndefined();
+ });
+});
+describe("verified fresh MFA timestamp (amr)",()=>{
+ const now=Math.floor(Date.now()/1000);
+ const jwt=(claims:Record<string,unknown>)=>`header.${Buffer.from(JSON.stringify({sub:user.id,iss:`${origin}/auth/v1`,aud:"authenticated",exp:now+600,aal:"aal2",...claims})).toString("base64url")}.signature`;
+ it("reads the totp amr timestamp only after Auth accepts the token",async()=>{
+  const token=jwt({amr:[{method:"password",timestamp:now-1000},{method:"totp",timestamp:now-30}]});
+  expect(await createSupabaseAuthenticator(origin,"key",mockFetch(user))(token)).toMatchObject({assuranceLevel:"aal2",mfaVerifiedAt:now-30});
+  await expect(createSupabaseAuthenticator(origin,"key",mockFetch({},401))(token)).rejects.toThrow("INVALID_TOKEN");
+ });
+ it.each([
+  {amr:[{method:"password",timestamp:now-10}]},
+  {amr:"totp"},
+  {amr:[{method:"totp",timestamp:"recent"}]},
+  {amr:[{method:"totp",timestamp:now-10}],aal:"aal1"},
+  {amr:[{method:"totp",timestamp:now-10}],sub:randomUUID()},
+ ])("has no MFA timestamp without a verified totp amr entry",async claims=>{
+  expect((await createSupabaseAuthenticator(origin,"key",mockFetch(user))(jwt(claims))).mfaVerifiedAt).toBeUndefined();
  });
 });

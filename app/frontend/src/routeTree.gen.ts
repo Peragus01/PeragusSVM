@@ -24,8 +24,13 @@ import { Route as AppComprarUsdtRouteImport } from './routes/app.comprar-usdt'
 import { Route as AppDocumentosRouteImport } from './routes/app.documentos'
 import { Route as AppMinhaContaRouteImport } from './routes/app.minha-conta'
 import { Route as AppOperacoesRouteImport } from './routes/app.operacoes'
+import { Route as OperadorIndexRouteImport } from './routes/operador.index'
+import { Route as OperadorAlertasRouteImport } from './routes/operador.alertas'
+import { Route as OperadorControlesRouteImport } from './routes/operador.controles'
 import { Route as OperadorConvitesRouteImport } from './routes/operador.convites'
 import { Route as OperadorEstornosRouteImport } from './routes/operador.estornos'
+import { Route as OperadorRevisaoDiariaRouteImport } from './routes/operador.revisao-diaria'
+import { Route as OperadorSaquesRouteImport } from './routes/operador.saques'
 import { Route as AppOperacoesIndexRouteImport } from './routes/app.operacoes.index'
 import { Route as AppOperacoesIdRouteImport } from './routes/app.operacoes.$id'
 
@@ -104,6 +109,21 @@ const AppOperacoesRoute = AppOperacoesRouteImport.update({
   path: '/operacoes',
   getParentRoute: () => AppRoute,
 } as any)
+const OperadorIndexRoute = OperadorIndexRouteImport.update({
+  id: '/operador/',
+  path: '/operador/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OperadorAlertasRoute = OperadorAlertasRouteImport.update({
+  id: '/operador/alertas',
+  path: '/operador/alertas',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OperadorControlesRoute = OperadorControlesRouteImport.update({
+  id: '/operador/controles',
+  path: '/operador/controles',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OperadorConvitesRoute = OperadorConvitesRouteImport.update({
   id: '/operador/convites',
   path: '/operador/convites',
@@ -112,6 +132,16 @@ const OperadorConvitesRoute = OperadorConvitesRouteImport.update({
 const OperadorEstornosRoute = OperadorEstornosRouteImport.update({
   id: '/operador/estornos',
   path: '/operador/estornos',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OperadorRevisaoDiariaRoute = OperadorRevisaoDiariaRouteImport.update({
+  id: '/operador/revisao-diaria',
+  path: '/operador/revisao-diaria',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OperadorSaquesRoute = OperadorSaquesRouteImport.update({
+  id: '/operador/saques',
+  path: '/operador/saques',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppOperacoesIndexRoute = AppOperacoesIndexRouteImport.update({
@@ -140,9 +170,14 @@ export interface FileRoutesByFullPath {
   '/app/documentos': typeof AppDocumentosRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
   '/app/operacoes': typeof AppOperacoesRouteWithChildren
+  '/operador/alertas': typeof OperadorAlertasRoute
+  '/operador/controles': typeof OperadorControlesRoute
   '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
+  '/operador/revisao-diaria': typeof OperadorRevisaoDiariaRoute
+  '/operador/saques': typeof OperadorSaquesRoute
   '/app/': typeof AppIndexRoute
+  '/operador/': typeof OperadorIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
   '/app/operacoes/': typeof AppOperacoesIndexRoute
 }
@@ -159,9 +194,14 @@ export interface FileRoutesByTo {
   '/app/comprar-usdt': typeof AppComprarUsdtRoute
   '/app/documentos': typeof AppDocumentosRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
+  '/operador/alertas': typeof OperadorAlertasRoute
+  '/operador/controles': typeof OperadorControlesRoute
   '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
+  '/operador/revisao-diaria': typeof OperadorRevisaoDiariaRoute
+  '/operador/saques': typeof OperadorSaquesRoute
   '/app': typeof AppIndexRoute
+  '/operador': typeof OperadorIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
   '/app/operacoes': typeof AppOperacoesIndexRoute
 }
@@ -181,9 +221,14 @@ export interface FileRoutesById {
   '/app/documentos': typeof AppDocumentosRoute
   '/app/minha-conta': typeof AppMinhaContaRoute
   '/app/operacoes': typeof AppOperacoesRouteWithChildren
+  '/operador/alertas': typeof OperadorAlertasRoute
+  '/operador/controles': typeof OperadorControlesRoute
   '/operador/convites': typeof OperadorConvitesRoute
   '/operador/estornos': typeof OperadorEstornosRoute
+  '/operador/revisao-diaria': typeof OperadorRevisaoDiariaRoute
+  '/operador/saques': typeof OperadorSaquesRoute
   '/app/': typeof AppIndexRoute
+  '/operador/': typeof OperadorIndexRoute
   '/app/operacoes/$id': typeof AppOperacoesIdRoute
   '/app/operacoes/': typeof AppOperacoesIndexRoute
 }
@@ -204,9 +249,14 @@ export interface FileRouteTypes {
     | '/app/documentos'
     | '/app/minha-conta'
     | '/app/operacoes'
+    | '/operador/alertas'
+    | '/operador/controles'
     | '/operador/convites'
     | '/operador/estornos'
+    | '/operador/revisao-diaria'
+    | '/operador/saques'
     | '/app/'
+    | '/operador/'
     | '/app/operacoes/$id'
     | '/app/operacoes/'
   fileRoutesByTo: FileRoutesByTo
@@ -223,9 +273,14 @@ export interface FileRouteTypes {
     | '/app/comprar-usdt'
     | '/app/documentos'
     | '/app/minha-conta'
+    | '/operador/alertas'
+    | '/operador/controles'
     | '/operador/convites'
     | '/operador/estornos'
+    | '/operador/revisao-diaria'
+    | '/operador/saques'
     | '/app'
+    | '/operador'
     | '/app/operacoes/$id'
     | '/app/operacoes'
   id:
@@ -244,9 +299,14 @@ export interface FileRouteTypes {
     | '/app/documentos'
     | '/app/minha-conta'
     | '/app/operacoes'
+    | '/operador/alertas'
+    | '/operador/controles'
     | '/operador/convites'
     | '/operador/estornos'
+    | '/operador/revisao-diaria'
+    | '/operador/saques'
     | '/app/'
+    | '/operador/'
     | '/app/operacoes/$id'
     | '/app/operacoes/'
   fileRoutesById: FileRoutesById
@@ -260,8 +320,13 @@ export interface RootRouteChildren {
   RecuperarSenhaRoute: typeof RecuperarSenhaRoute
   SettlementsRoute: typeof SettlementsRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  OperadorAlertasRoute: typeof OperadorAlertasRoute
+  OperadorControlesRoute: typeof OperadorControlesRoute
   OperadorConvitesRoute: typeof OperadorConvitesRoute
   OperadorEstornosRoute: typeof OperadorEstornosRoute
+  OperadorRevisaoDiariaRoute: typeof OperadorRevisaoDiariaRoute
+  OperadorSaquesRoute: typeof OperadorSaquesRoute
+  OperadorIndexRoute: typeof OperadorIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -371,6 +436,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOperacoesRouteImport
       parentRoute: typeof AppRoute
     }
+    '/operador/': {
+      id: '/operador/'
+      path: '/operador'
+      fullPath: '/operador/'
+      preLoaderRoute: typeof OperadorIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/operador/alertas': {
+      id: '/operador/alertas'
+      path: '/operador/alertas'
+      fullPath: '/operador/alertas'
+      preLoaderRoute: typeof OperadorAlertasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/operador/controles': {
+      id: '/operador/controles'
+      path: '/operador/controles'
+      fullPath: '/operador/controles'
+      preLoaderRoute: typeof OperadorControlesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/operador/convites': {
       id: '/operador/convites'
       path: '/operador/convites'
@@ -383,6 +469,20 @@ declare module '@tanstack/react-router' {
       path: '/operador/estornos'
       fullPath: '/operador/estornos'
       preLoaderRoute: typeof OperadorEstornosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/operador/revisao-diaria': {
+      id: '/operador/revisao-diaria'
+      path: '/operador/revisao-diaria'
+      fullPath: '/operador/revisao-diaria'
+      preLoaderRoute: typeof OperadorRevisaoDiariaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/operador/saques': {
+      id: '/operador/saques'
+      path: '/operador/saques'
+      fullPath: '/operador/saques'
+      preLoaderRoute: typeof OperadorSaquesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app/operacoes/': {
@@ -447,8 +547,13 @@ const rootRouteChildren: RootRouteChildren = {
   RecuperarSenhaRoute: RecuperarSenhaRoute,
   SettlementsRoute: SettlementsRoute,
   ApiSplatRoute: ApiSplatRoute,
+  OperadorAlertasRoute: OperadorAlertasRoute,
+  OperadorControlesRoute: OperadorControlesRoute,
   OperadorConvitesRoute: OperadorConvitesRoute,
   OperadorEstornosRoute: OperadorEstornosRoute,
+  OperadorRevisaoDiariaRoute: OperadorRevisaoDiariaRoute,
+  OperadorSaquesRoute: OperadorSaquesRoute,
+  OperadorIndexRoute: OperadorIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

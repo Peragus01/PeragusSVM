@@ -1,0 +1,36 @@
+/* Operator console (/operador/*): small additions on top of the customer UI. */
+.operator-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin: 0 0 1rem;
+}
+.operator-dialog {
+  border-left: 4px solid currentColor;
+  margin: 1rem 0;
+}
+.operator-code {
+  display: block;
+  font-size: 0.8rem;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}
+.operator-deadline-ok {
+  font-weight: 600;
+}
+.operator-deadline-warn {
+  font-weight: 700;
+  color: #9a6700;
+}
+.operator-deadline-danger,
+.operator-deadline-overdue {
+  font-weight: 700;
+  color: #b42318;
+}
+.operator-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  list-style: none;
+  padding: 0;
+}

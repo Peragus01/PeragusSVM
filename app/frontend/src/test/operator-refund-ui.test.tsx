@@ -2,6 +2,7 @@ import type { ComponentType, ReactNode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
+  search: {} as { operacao?: string },
   session: {
     status: "authenticated",
     identity: { user: { id: "operator" }, customer: null as null | { id: string } },
@@ -16,7 +17,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/peragus/customer-session", () => ({ useCustomerSession: () => mocks.session }));
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => (options: unknown) => ({ options }),
+  createFileRoute: () => (options: unknown) => ({ options, useSearch: () => mocks.search }),
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
 }));
 import { Route } from "@/routes/operador.estornos";
@@ -110,5 +111,66 @@ describe("operator refund screen", () => {
       decision: "approved",
       confirmation: "MANUAL_REVIEW_COMPLETED",
     });
+  });
+  async function decideApproved() {
+    fireEvent.click(await screen.findByRole("button", { name: "Analisar pedido" }));
+    fireEvent.change(screen.getByLabelText("Decisão"), { target: { value: "approved" } });
+    fireEvent.change(screen.getByLabelText("Motivo interno"), {
+      target: { value: "Conferencia manual realizada." },
+    });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Registrar decisão" }));
+  }
+  const stale = () => Response.json({ error: { code: "OPERATOR_MFA_STALE" } }, { status: 403 });
+  it("on OPERATOR_MFA_STALE asks for a current TOTP, re-verifies and retries the same request once with the new token", async () => {
+    mocks.session.verifyOperatorMfa.mockResolvedValueOnce("synthetic.fresh");
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(page([row]))
+      .mockResolvedValueOnce(stale())
+      .mockResolvedValueOnce(
+        Response.json({
+          data: {
+            ...row,
+            state: "approved",
+            decision: { id, operator_user_id: purchase, reason: "Conferencia manual realizada." },
+          },
+        }),
+      );
+    render(<Page />);
+    await decideApproved();
+    expect(await screen.findByText(/confirme um código atual do autenticador/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Código atual do autenticador"), {
+      target: { value: "654321" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar e repetir" }));
+    await screen.findByText(/Devolução pendente. A execução externa/);
+    expect(mocks.session.verifyOperatorMfa).toHaveBeenCalledWith("654321");
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    const first = JSON.parse(String(fetcher.mock.calls[1]![1]?.body));
+    const retry = JSON.parse(String(fetcher.mock.calls[2]![1]?.body));
+    expect(retry.request_id).toBe(first.request_id);
+    expect(new Headers(fetcher.mock.calls[2]![1]?.headers).get("authorization")).toBe(
+      "Bearer synthetic.fresh",
+    );
+  });
+  it("retries only once: a second OPERATOR_MFA_STALE is shown without another automatic attempt", async () => {
+    mocks.session.verifyOperatorMfa.mockResolvedValueOnce("synthetic.fresh");
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(page([row]))
+      .mockResolvedValueOnce(stale())
+      .mockResolvedValueOnce(stale());
+    render(<Page />);
+    await decideApproved();
+    fireEvent.change(await screen.findByLabelText("Código atual do autenticador"), {
+      target: { value: "654321" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar e repetir" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText(/confirme um código atual do autenticador/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Código atual do autenticador")).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 });

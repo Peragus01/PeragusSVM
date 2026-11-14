@@ -1,0 +1,2 @@
+app/frontend/public/legal/*.html text eol=lf
+app/backend/migrations/*.sql text eol=lf

@@ -1,9 +1,12 @@
 import type { Pool } from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "./row-environment.js";
 import type { OnboardingOverviewRepository, OverviewFacts } from "../onboarding/customer-onboarding-overview.js";
 // A single statement observes one PostgreSQL snapshot. Never select ciphertext,
 // acceptance evidence, provider payloads, auth IDs or personally identifying form fields.
 export class PostgresOnboardingOverviewRepository implements OnboardingOverviewRepository {
-  constructor(private readonly pool: Pool) {}
+  private readonly e: RowEnvironment;
+  constructor(private readonly pool: Pool, mode: MoneyMode) { this.e = rowEnvironment(mode); }
   async read(customerId: string): Promise<OverviewFacts> {
     const r = await this.pool.query<OverviewFacts>(`
       select
@@ -29,13 +32,13 @@ export class PostgresOnboardingOverviewRepository implements OnboardingOverviewR
           'matches_count',sc.observation->'matchesCount','suggested_decision',sc.observation->'suggestedDecision',
           'refreshed_at',sc.refreshed_at) end as screening
       from peragus_customers c
-      left join peragus_individual_onboarding_drafts d on d.customer_id=c.id and d.environment='test'
-      left join peragus_customer_onboarding_submissions s on s.customer_id=c.id and s.environment='test'
-      left join peragus_customer_terms_sessions t on t.customer_id=c.id and t.environment='test'
+      left join peragus_individual_onboarding_drafts d on d.customer_id=c.id and d.environment='${this.e.mode}'
+      left join peragus_customer_onboarding_submissions s on s.customer_id=c.id and s.environment='${this.e.mode}'
+      left join peragus_customer_terms_sessions t on t.customer_id=c.id and t.environment='${this.e.mode}'
         and ((s.customer_id is not null and t.id=s.terms_session_id) or (s.customer_id is null and t.active))
-      left join peragus_customer_verifications v on v.customer_id=c.id and v.environment='test'
-      left join peragus_customer_screenings sc on sc.customer_id=c.id and sc.environment='test'
-      left join peragus_customer_wallets w on w.customer_id=c.id and w.environment='test' and w.network='solana:devnet'
+      left join peragus_customer_verifications v on v.customer_id=c.id and v.environment='${this.e.mode}'
+      left join peragus_customer_screenings sc on sc.customer_id=c.id and sc.environment='${this.e.mode}'
+      left join peragus_customer_wallets w on w.customer_id=c.id and w.environment='${this.e.mode}' and w.network='${this.e.network}'
       where c.id=$1`, [customerId]);
     if (r.rows.length !== 1) throw new Error("ONBOARDING_OVERVIEW_UNAVAILABLE");
     return r.rows[0]!;

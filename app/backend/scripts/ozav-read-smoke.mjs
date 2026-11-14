@@ -7,7 +7,7 @@ try {
   if (!apiKey || !transferId || !customerId || !walletId) {
     throw new Error("Configure OZAV_API_KEY, OZAV_TRANSFER_ID, OZAV_CUSTOMER_ID e OZAV_WALLET_ID no .env");
   }
-  const client = new OzavClient({ apiKey });
+  const client = new OzavClient({ apiKey, mode: "test" });
   const capabilities = await client.getCapabilities();
   for (const scope of ["transfers:read", "events:read"]) {
     if (!capabilities.scopes.includes(scope)) {

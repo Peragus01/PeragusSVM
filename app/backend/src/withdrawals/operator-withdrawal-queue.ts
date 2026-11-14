@@ -1,4 +1,6 @@
 import type {Pool} from "pg";
+import type {MoneyMode} from "../config/money-environment.js";
+import {rowEnvironment,type RowEnvironment} from "../repositories/row-environment.js";
 import {z} from "zod";
 import type {AuthenticatedUser} from "../auth/customer-access.js";
 import {parseHistoryQuery,OperationHistoryInputError} from "../purchases/customer-operation-history.js";
@@ -19,7 +21,8 @@ interface Row {
 }
 /** Database-only operator discovery. No approval, send, reconcile or slot-release dependency. */
 export class OperatorWithdrawalQueueService {
- constructor(private readonly pool:Pick<Pool,"query">,private readonly operators:ReadonlySet<string>){}
+ private readonly e:RowEnvironment;
+ constructor(private readonly pool:Pick<Pool,"query">,private readonly operators:ReadonlySet<string>,mode:MoneyMode){this.e=rowEnvironment(mode);}
  async list(user:AuthenticatedUser,query:unknown){
   authorizeWithdrawalOperator(user,this.operators);
   const {limit,cursor,state}=parseOperatorQueueQuery(query);
@@ -40,13 +43,13 @@ export class OperatorWithdrawalQueueService {
      else 'pending_approval' end as queue_state
    from peragus_customer_withdrawal_requests r
    left join peragus_withdrawal_operator_approvals a
-    on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.environment='test'
+    on a.withdrawal_request_id=r.id and a.customer_id=r.customer_id and a.environment='${this.e.mode}'
    left join peragus_sandbox_withdrawal_executions e
-    on e.withdrawal_request_id=r.id and e.customer_id=r.customer_id and e.environment='test'
-   left join peragus_customer_refund_requests rf on rf.purchase_intent_id=r.purchase_intent_id and rf.customer_id=r.customer_id and rf.environment='test'
+    on e.withdrawal_request_id=r.id and e.customer_id=r.customer_id and e.environment='${this.e.mode}'
+   left join peragus_customer_refund_requests rf on rf.purchase_intent_id=r.purchase_intent_id and rf.customer_id=r.customer_id and rf.environment='${this.e.mode}'
    left join peragus_manual_refund_decisions rd on rd.refund_request_id=rf.id and rd.customer_id=r.customer_id
    left join peragus_manual_refund_completions rc on rc.refund_request_id=rf.id and rc.customer_id=r.customer_id
-   where r.environment='test'
+   where r.environment='${this.e.mode}'
   ) select refund_id,refund_state,id,customer_id,purchase_intent_id,pix_id,amount_usdt,wallet_address,approved,approved_at,attempted,provider_completed,queue_state,
    to_char(created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
    from queue where ($1='all' or queue_state=$1)
@@ -55,10 +58,10 @@ export class OperatorWithdrawalQueueService {
   const rows=result.rows.slice(0,limit),last=rows.at(-1),hasMore=result.rows.length>limit;
   return {data:rows.map(row=>({
    id:row.id,customer_id:row.customer_id,purchase_intent_id:row.purchase_intent_id,pix_id:row.pix_id,
-   created_at:row.created_at,state:row.queue_state,environment:"test",real_money:false,
+   created_at:row.created_at,state:row.queue_state,environment:this.e.mode,real_money:this.e.mode==="live",
    refund_request:row.refund_id?{id:row.refund_id,state:row.refund_state}:null,
    source:{currency:"USDT",amount:row.amount_usdt},
-   destination:{wallet_address:row.wallet_address,network:"solana",proof_network:"solana:devnet"},
+   destination:{wallet_address:row.wallet_address,network:"solana",proof_network:this.e.network},
    approved:row.approved,approval_recorded_at:row.approved_at?new Date(row.approved_at).toISOString():null,
    withdrawal_started:row.attempted,provider_completed:row.provider_completed,
    recovery_required:row.queue_state==="uncertain",manual_review_required:row.queue_state==="needs_review",

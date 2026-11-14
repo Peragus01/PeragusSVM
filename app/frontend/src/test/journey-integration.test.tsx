@@ -48,6 +48,7 @@ describe("invited registration", () => {
     });
     fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "client@example.test" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "synthetic-password" } });
+    for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box);
     fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
     await waitFor(() =>
       expect(state.signup).toHaveBeenCalledWith("client@example.test", "synthetic-password"),
@@ -67,6 +68,7 @@ describe("invited registration", () => {
     });
     fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "client@example.test" } });
     fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "synthetic-password" } });
+    for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box);
     fireEvent.click(screen.getByRole("button", { name: "Criar minha conta" }));
     await screen.findByRole("alert");
     expect(state.signup).not.toHaveBeenCalled();

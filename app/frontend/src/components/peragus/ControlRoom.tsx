@@ -366,7 +366,7 @@ function CreateForm({ onCreated }: { onCreated: (s: Settlement, replay: boolean)
       </p>
       <Row label="Payer wallet">
         {wallet.address ? (
-          <Mono value={wallet.address} href={explorerAddress(wallet.address)} />
+          <Mono value={wallet.address} href={explorerAddress(wallet.address, "test")} />
         ) : (
           <Button type="button" size="sm" variant="outline" onClick={wallet.open}>
             Connect wallet
@@ -954,12 +954,15 @@ function SettlementPanel({ id, notice }: { id: string; notice: string }) {
             <Mono value={settlement.request_id} size={10} />
           </Row>
           <Row label="Payer">
-            <Mono value={settlement.payer_wallet} href={explorerAddress(settlement.payer_wallet)} />
+            <Mono
+              value={settlement.payer_wallet}
+              href={explorerAddress(settlement.payer_wallet, "test")}
+            />
           </Row>
           <Row label="Recipient">
             <Mono
               value={settlement.recipient_wallet}
-              href={explorerAddress(settlement.recipient_wallet)}
+              href={explorerAddress(settlement.recipient_wallet, "test")}
             />
           </Row>
           <Row label="Amounts (base units)">
@@ -1052,16 +1055,22 @@ function SettlementPanel({ id, notice }: { id: string; notice: string }) {
               <code>{reserve.amount_usdt} USDT</code>
             </Row>
             <Row label="Reserve PDA">
-              <Mono value={reserve.reserve_pda} href={explorerAddress(reserve.reserve_pda)} />
+              <Mono
+                value={reserve.reserve_pda}
+                href={explorerAddress(reserve.reserve_pda, "test")}
+              />
             </Row>
             <Row label="Funding tx">
-              <Mono value={reserve.create_signature} href={explorerTx(reserve.create_signature)} />
+              <Mono
+                value={reserve.create_signature}
+                href={explorerTx(reserve.create_signature, "test")}
+              />
             </Row>
             {reserve.resolution_signature && (
               <Row label="Resolution tx">
                 <Mono
                   value={reserve.resolution_signature}
-                  href={explorerTx(reserve.resolution_signature)}
+                  href={explorerTx(reserve.resolution_signature, "test")}
                 />
               </Row>
             )}
@@ -1105,7 +1114,7 @@ function SettlementPanel({ id, notice }: { id: string; notice: string }) {
                   <Row label="Failed Devnet transaction">
                     <Mono
                       value={rollbackEvidence.signature}
-                      href={explorerTx(rollbackEvidence.signature)}
+                      href={explorerTx(rollbackEvidence.signature, "test")}
                     />
                   </Row>
                   <Row label="Execution evidence">
@@ -1175,7 +1184,7 @@ function SettlementPanel({ id, notice }: { id: string; notice: string }) {
             )}
             {rollbackSignature && !rollbackEvidence && (
               <Row label="Expected failed transaction">
-                <Mono value={rollbackSignature} href={explorerTx(rollbackSignature)} />
+                <Mono value={rollbackSignature} href={explorerTx(rollbackSignature, "test")} />
               </Row>
             )}
             {rollbackError && (
@@ -1233,7 +1242,7 @@ function SettlementPanel({ id, notice }: { id: string; notice: string }) {
                 <Row label="Settlement PDA">
                   <Mono
                     value={prepared.settlement_pda}
-                    href={explorerAddress(prepared.settlement_pda)}
+                    href={explorerAddress(prepared.settlement_pda, "test")}
                   />
                 </Row>
               )}
@@ -1246,7 +1255,7 @@ function SettlementPanel({ id, notice }: { id: string; notice: string }) {
             <Row label="Transaction">
               <Mono
                 value={confirmed?.signature ?? signature}
-                href={explorerTx(confirmed?.signature ?? signature)}
+                href={explorerTx(confirmed?.signature ?? signature, "test")}
               />
             </Row>
           )}
@@ -1257,7 +1266,10 @@ function SettlementPanel({ id, notice }: { id: string; notice: string }) {
           )}
           {solana?.atomic_signature && (
             <Row label="Recorded atomic tx">
-              <Mono value={solana.atomic_signature} href={explorerTx(solana.atomic_signature)} />
+              <Mono
+                value={solana.atomic_signature}
+                href={explorerTx(solana.atomic_signature, "test")}
+              />
             </Row>
           )}
           {solana && (

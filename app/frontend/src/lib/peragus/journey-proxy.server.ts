@@ -3,6 +3,7 @@ const routes: Record<string, string[]> = {
   "registration/invite/check": ["POST"],
   "v1/admin/pilot-invites": ["GET", "POST"],
   "v1/me/pilot-invite/redeem": ["POST"],
+  "v1/me/legal-acceptances": ["GET", "POST"],
   "v1/me/purchase-capabilities": ["GET"],
   "v1/me/customer": ["PATCH"],
   "v1/me/onboarding/individual": ["GET", "PUT"],
