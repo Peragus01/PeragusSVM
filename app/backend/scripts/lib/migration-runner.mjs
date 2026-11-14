@@ -14,8 +14,24 @@ export const ENVIRONMENT_MIGRATION_PREFIX = "043_";
 
 const MIGRATION_FILENAME = /^\d+_[a-z0-9_]+\.sql$/;
 
-function checksum(content) {
+function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
+}
+
+// Line endings never change the SQL of these migrations, but git on Windows
+// checks files out with CRLF. The canonical checksum is of the LF-normalized
+// text; a ledger row written from the raw text or from a CRLF copy is accepted
+// too. Any other difference is a real edit.
+function checksum(content) {
+  return sha256(content.replace(/\r\n?/g, "\n"));
+}
+
+function acceptedChecksums(content) {
+  return new Set([
+    checksum(content),
+    sha256(content),
+    sha256(content.replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n")),
+  ]);
 }
 
 export async function listMigrationFilenames(migrationsDirectory) {
@@ -67,6 +83,7 @@ export async function runMigrations({
 
       const sql = await readFile(path.join(migrationsDirectory, filename), "utf8");
       const fileChecksum = checksum(sql);
+      const acceptable = acceptedChecksums(sql);
       const recordsEnvironment = filename.startsWith(ENVIRONMENT_MIGRATION_PREFIX);
 
       const existing = await client.query(
@@ -75,7 +92,7 @@ export async function runMigrations({
       );
 
       if (existing.rows.length === 1) {
-        if (existing.rows[0].checksum !== fileChecksum) {
+        if (!acceptable.has(existing.rows[0].checksum)) {
           throw new Error(`Migration ${filename} changed after being applied`);
         }
 

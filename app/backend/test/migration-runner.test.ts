@@ -1,3 +1,7 @@
+import {createHash} from "node:crypto";
+import {mkdtempSync,rmSync,writeFileSync} from "node:fs";
+import {tmpdir} from "node:os";
+import path from "node:path";
 import {randomUUID} from "node:crypto";
 import {fileURLToPath} from "node:url";
 import {PGlite} from "@electric-sql/pglite";
@@ -72,5 +76,66 @@ describe("scripts/lib/migration-runner (Ruling 40)",()=>{
   const db=new PGlite();dbs.push(db);
   await expect(runner(db,"development")).rejects.toThrow("DATABASE_DEPLOYMENT_ENV_INVALID");
   expect((await db.query("select to_regclass('peragus_schema_migrations') r")).rows).toEqual([{r:null}]);
+ });
+});
+
+describe("migration ledger checksums and line endings",()=>{
+ const sha=(text:string)=>createHash("sha256").update(text).digest("hex");
+ const LF="create table t (id int);\ninsert into t values (1);\n";
+ const CRLF=LF.replace(/\n/g,"\r\n");
+ const dirs:string[]=[];
+ afterEach(()=>{for(const d of dirs.splice(0))rmSync(d,{recursive:true,force:true});});
+
+ function setup(fileText:string,stored?:string){
+  const dir=mkdtempSync(path.join(tmpdir(),"mig-"));dirs.push(dir);
+  writeFileSync(path.join(dir,"001_demo.sql"),fileText);
+  const ledger=new Map<string,string>();
+  if(stored!==undefined)ledger.set("001_demo.sql",stored);
+  const executed:string[]=[];
+  const client={async query(text:string,params?:unknown[]){
+   if(/select checksum from peragus_schema_migrations/.test(text))return {rows:ledger.has(params![0] as string)?[{checksum:ledger.get(params![0] as string)}]:[]};
+   if(/insert into peragus_schema_migrations/.test(text))ledger.set(params![0] as string,params![1] as string);
+   if(/select environment from peragus_database_environment/.test(text))return {rows:[{environment:"test"}]};
+   return {rows:[]};
+  }};
+  const run=()=>runMigrations({client,migrationsDirectory:dir,deploymentEnv:"staging",executeScript:async(sql:string)=>{executed.push(sql);}}) as Promise<{appliedCount:number}>;
+  return {run,ledger,executed};
+ }
+ const edited=(t:string)=>t.replace("values (1)","values (2)");
+ const variants:Record<string,(t:string)=>string>={lf:t=>t,crlf:t=>t.replace(/\n/g,"\r\n"),cr:t=>t.replace(/\n/g,"\r")};
+
+ for(const [name,form] of Object.entries(variants)){
+  it(`accepts the stored LF hash for a ${name} file and does not re-run it`,async()=>{
+   const s=setup(form(LF),sha(LF));
+   expect((await s.run()).appliedCount).toBe(0);
+   expect(s.executed).toEqual([]);
+  });
+  it(`accepts the stored raw hash for a ${name} file`,async()=>{
+   const s=setup(form(LF),sha(form(LF)));
+   expect((await s.run()).appliedCount).toBe(0);
+   expect(s.executed).toEqual([]);
+  });
+  it(`accepts the stored CRLF hash for a ${name} file`,async()=>{
+   const s=setup(form(LF),sha(CRLF));
+   expect((await s.run()).appliedCount).toBe(0);
+  });
+  for(const [stored,storedForm] of Object.entries(variants)){
+   it(`still rejects an edited ${name} file against a ${stored} ledger hash`,async()=>{
+    const s=setup(form(edited(LF)),sha(storedForm(LF)));
+    await expect(s.run()).rejects.toThrow("Migration 001_demo.sql changed after being applied");
+    expect(s.executed).toEqual([]);
+   });
+  }
+  it(`stores the LF-normalized checksum for a new ${name} file`,async()=>{
+   const s=setup(form(LF));
+   expect((await s.run()).appliedCount).toBe(1);
+   expect(s.ledger.get("001_demo.sql")).toBe(sha(LF));
+   expect(s.executed).toEqual([form(LF)]);
+  });
+ }
+
+ it("rejects an unrelated checksum",async()=>{
+  const s=setup(CRLF,"0".repeat(64));
+  await expect(s.run()).rejects.toThrow("Migration 001_demo.sql changed after being applied");
  });
 });
