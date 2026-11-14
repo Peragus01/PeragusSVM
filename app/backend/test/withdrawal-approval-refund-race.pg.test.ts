@@ -29,10 +29,10 @@ describe.skipIf(!realUrl)("ruling 23 on real PostgreSQL: concurrent withdrawal a
  let admin:Pool,pool:Pool;
  const q=(sql:string,args?:unknown[])=>pool.query(sql,args as unknown[]);
  beforeAll(async()=>{
-  admin=new Pool({connectionString:realUrl,max:1});
+  admin=new Pool({connectionString:realUrl,max:1});admin.on("error",()=>{});
   await admin.query(`create database ${dbName}`);
   const url=new URL(realUrl!);url.pathname=`/${dbName}`;
-  pool=new Pool({connectionString:url.toString(),max:12});
+  pool=new Pool({connectionString:url.toString(),max:12});pool.on("error",()=>{});
   const dir=new URL("../migrations/",import.meta.url);
   for(const f of (await readdir(dir)).filter(f=>/^\d+_.*\.sql$/.test(f)).sort())await q(await readFile(new URL(f,dir),"utf8"));
   await q("insert into peragus_database_environment(environment) values('test')");
