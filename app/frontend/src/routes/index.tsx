@@ -89,7 +89,7 @@ const navigation = [
   ["How It Works", "#how-it-works"],
   ["Roadmap", "#roadmap"],
   ["Partnerships", "#partnerships"],
-];
+] as const;
 
 const capabilities = [
   {
@@ -157,7 +157,7 @@ const audiences = [
   ],
   ["Liquidity Providers", "Connect conversion and settlement services to payment workflows."],
   ["Technology Partners", "Build integrations across financial platforms and blockchain networks."],
-];
+] as const;
 
 const roadmap = [
   ["January 2027", "Pix NFC", "Implementation of Pix NFC payment acceptance."],
@@ -173,7 +173,7 @@ const roadmap = [
     "International Expansion",
     "Relocation of company headquarters to the United States and a target of 300 clients.",
   ],
-];
+] as const;
 
 function Brand({ locale }: { locale: HomeLocale }) {
   return (
