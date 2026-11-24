@@ -480,6 +480,7 @@ const customerTermsService =
       )
     : undefined;
 const app = await buildApp({
+  ...(pool ? { commercialLeadPool: pool } : {}),
   ...(pool
     ? {
         sandboxClosureService: new SandboxClosureService(
