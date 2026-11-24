@@ -525,6 +525,7 @@ const deliveryCheck =
       }
     : undefined;
 const app = await buildApp({
+  ...(pool ? { commercialLeadPool: pool } : {}),
   // GET /v1/admin/operator-status answers only whether the caller is allowlisted.
   operatorUserIds: new Set(env.WITHDRAWAL_OPERATOR_USER_IDS),
   moneyMode,

@@ -1,3 +1,4 @@
+import { forwardCommercialLead } from "@/lib/peragus/commercial-lead-proxy.server";
 import { documentMethods, forwardDocument } from "@/lib/peragus/document-proxy.server";
 import { journeyMethods, forwardJourney } from "@/lib/peragus/journey-proxy.server";
 import { forwardPurchase, purchaseMethods } from "@/lib/peragus/purchase-proxy.server";
@@ -40,6 +41,7 @@ function isAllowedPath(splat: string) {
     operatorMethods(splat).length > 0 ||
     isCustomerReadPath(splat) ||
     splat === "health" ||
+    splat === "public/commercial-leads" ||
     splat === "v1/settlements" ||
     splat.startsWith("v1/settlements/")
   );
@@ -56,6 +58,8 @@ async function forward({ request, params }: ProxyContext) {
   }
 
   try {
+    if (params._splat === "public/commercial-leads")
+      return await forwardCommercialLead(request, targetUrl(request, params._splat));
     if (documentMethods(params._splat).length)
       return await forwardDocument(request, targetUrl(request, params._splat), params._splat);
     if (journeyMethods(params._splat).length)
