@@ -138,9 +138,7 @@ export function LeadForm() {
   return (
     <div className="ih-form-panel">
       <h3>{t("Tell us about your business")}</h3>
-      <div role="status">
-        {received && <p>{t("Thank you. We have received your inquiry.")}</p>}
-      </div>
+      <div role="status">{received && <p>{t("Thank you. We have received your inquiry.")}</p>}</div>
       {received ? (
         <BookingLink />
       ) : (
