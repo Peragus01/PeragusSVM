@@ -1,6 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import { ArrowRight } from "lucide-react";
 import { BookingLink } from "./booking";
+import { useHomeTranslation } from "./home-locales";
 
 const fields = [
   { name: "fullName", label: "Full Name", autoComplete: "name", min: 2, max: 120, type: "text" },
@@ -49,18 +50,17 @@ const interests = [
 ];
 
 const invalidMessages = {
+  fullName: "Enter your full name.",
+  company: "Enter your company.",
+  position: "Enter your position.",
+  country: "Enter your country.",
   corporateEmail: "Enter a valid work email address.",
   website: "Enter a full website address starting with https:// or http://.",
   interest: "Select an area of interest.",
 };
 
-function fieldMessage(name: string) {
-  return Object.hasOwn(invalidMessages, name)
-    ? invalidMessages[name as keyof typeof invalidMessages]
-    : undefined;
-}
-
 export function LeadForm() {
+  const t = useHomeTranslation();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
@@ -83,8 +83,7 @@ export function LeadForm() {
       const input = form.elements.namedItem(field.name) as HTMLInputElement;
       const value = body[field.name] ?? "";
       if (value.length < field.min || value.length > field.max || input.validity.typeMismatch) {
-        nextErrors[field.name] =
-          fieldMessage(field.name) ?? `Enter your ${field.label.toLowerCase()}.`;
+        nextErrors[field.name] = invalidMessages[field.name];
       }
     }
     if (body["website"] && !/^https?:\/\//i.test(body["website"]))
@@ -121,9 +120,8 @@ export function LeadForm() {
       const serverErrors: Record<string, string> = {};
       for (const name of invalid) {
         const field = fields.find((item) => item.name === name);
-        if (field || name === "interest") {
-          serverErrors[name] = fieldMessage(name) ?? `Check your ${field?.label.toLowerCase()}.`;
-        }
+        if (field) serverErrors[name] = invalidMessages[field.name];
+        if (name === "interest") serverErrors[name] = invalidMessages.interest;
       }
       setErrors(serverErrors);
       const first = Object.keys(serverErrors)[0];
@@ -139,8 +137,10 @@ export function LeadForm() {
 
   return (
     <div className="ih-form-panel">
-      <h3>Tell us about your business</h3>
-      <div role="status">{received && <p>Thank you. We have received your inquiry.</p>}</div>
+      <h3>{t("Tell us about your business")}</h3>
+      <div role="status">
+        {received && <p>{t("Thank you. We have received your inquiry.")}</p>}
+      </div>
       {received ? (
         <BookingLink />
       ) : (
@@ -149,8 +149,8 @@ export function LeadForm() {
             {fields.map(({ name, label, autoComplete, min, max, type }) => (
               <div key={name}>
                 <label htmlFor={`lead-${name}`}>
-                  {label}
-                  {!min && <small> (optional)</small>}
+                  {t(label)}
+                  {!min && <small> {t("(optional)")}</small>}
                 </label>
                 <input
                   id={`lead-${name}`}
@@ -166,13 +166,13 @@ export function LeadForm() {
                 />
                 {errors[name] && (
                   <p className="ih-error" id={`lead-${name}-error`}>
-                    {errors[name]}
+                    {t(errors[name])}
                   </p>
                 )}
               </div>
             ))}
             <div className="ih-interest">
-              <label htmlFor="lead-interest">Area of Interest</label>
+              <label htmlFor="lead-interest">{t("Area of Interest")}</label>
               <select
                 id="lead-interest"
                 name="interest"
@@ -183,15 +183,17 @@ export function LeadForm() {
                 onChange={() => clearError("interest")}
               >
                 <option value="" disabled>
-                  Select an option
+                  {t("Select an option")}
                 </option>
                 {interests.map((interest) => (
-                  <option key={interest}>{interest}</option>
+                  <option key={interest} value={interest}>
+                    {t(interest)}
+                  </option>
                 ))}
               </select>
               {errors["interest"] && (
                 <p className="ih-error" id="lead-interest-error">
-                  {errors["interest"]}
+                  {t(errors["interest"])}
                 </p>
               )}
             </div>
@@ -200,16 +202,18 @@ export function LeadForm() {
             <input name="fax" tabIndex={-1} autoComplete="off" defaultValue="" />
           </div>
           <p className="ih-privacy">
-            Peragus uses these details to review and respond to your business inquiry. See our{" "}
-            <a href="/legal/politica-de-privacidade.html">Privacy Policy</a>.
+            {t(
+              "Peragus uses these details to review and respond to your business inquiry. See our",
+            )}{" "}
+            <a href="/legal/politica-de-privacidade.html">{t("Privacy Policy")}</a>.
           </p>
           {message && (
             <p role="alert" className="ih-error">
-              {message}
+              {t(message)}
             </p>
           )}
           <button className="ih-button" type="submit" disabled={sending}>
-            {sending ? "Sending inquiry…" : "Send inquiry"}{" "}
+            {sending ? t("Sending inquiry…") : t("Send inquiry")}{" "}
             <ArrowRight size={17} aria-hidden="true" />
           </button>
         </form>

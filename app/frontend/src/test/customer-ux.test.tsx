@@ -99,6 +99,23 @@ describe("customer UX", () => {
     expect(screen.queryByText(/Backend online|Checking backend|RPC unavailable/)).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
   });
+  it("localizes Portuguese and Spanish homepage copy while keeping lead values stable", () => {
+    const { rerender } = render(<PublicHome locale="pt-BR" />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "A infraestrutura para uma economia sem fronteiras.",
+    );
+    expect(screen.getByRole("link", { name: "Português" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("button", { name: "Enviar solicitação" }));
+    expect(screen.getByText("Informe seu nome completo.")).toBeInTheDocument();
+    rerender(<PublicHome locale="es" />);
+    expect(screen.getByText("Ingrese su nombre completo.")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Pagos transfronterizos" })).toHaveValue(
+      "Cross-Border Payments",
+    );
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "La infraestructura para una economía sin fronteras.",
+    );
+  });
   it("links authenticated homepage visitors to the existing client account", () => {
     state.status = "authenticated";
     render(<PublicHome />);

@@ -9,6 +9,7 @@ import {
   type ErrorComponentProps,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { homeLocale } from "@/components/institutional/home-locales";
 import { useLocation } from "@tanstack/react-router";
 import { CustomerSessionProvider } from "@/lib/peragus/customer-session";
 import { WalletProvider } from "@/components/peragus/Wallet";
@@ -111,9 +112,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootShell({ children }: { children: ReactNode }) {
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const lang = useLocation({
+    select: (location) =>
+      location.pathname === "/"
+        ? homeLocale(new URLSearchParams(location.searchStr).get("lang"))
+        : "pt-BR",
+  });
   return (
-    <html lang={pathname === "/" ? "en" : "pt-BR"}>
+    <html lang={lang}>
       <head>
         <HeadContent />
       </head>

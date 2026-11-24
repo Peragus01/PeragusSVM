@@ -1,9 +1,11 @@
 import { ArrowUpRight } from "lucide-react";
+import { useHomeTranslation } from "./home-locales";
 
 const bookingUrl =
   "https://calendar.google.com/calendar/appointments/schedules/AcZssZ3DZwsI1YR155FXCTNp23s_RKjrpdHqzSfqPgT7QS0La4iAsuWFuX2-N0y3yv4DPAF1oSm5f7b4?gv=true";
 
 export function BookingLink({ secondary = false }: { secondary?: boolean }) {
+  const t = useHomeTranslation();
   return (
     <a
       className={secondary ? "ih-button ih-secondary" : "ih-button"}
@@ -11,7 +13,7 @@ export function BookingLink({ secondary = false }: { secondary?: boolean }) {
       target="_blank"
       rel="noopener noreferrer"
     >
-      Schedule a Meeting <ArrowUpRight size={17} aria-hidden="true" />
+      {t("Schedule a Meeting")} <ArrowUpRight size={17} aria-hidden="true" />
     </a>
   );
 }

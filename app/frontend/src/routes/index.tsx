@@ -18,6 +18,14 @@ import {
 import { BookingLink } from "@/components/institutional/booking";
 import { LeadForm } from "@/components/institutional/lead-form";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
+import {
+  HomeLocaleContext,
+  homeLocale,
+  homeLocales,
+  translateHome,
+  useHomeTranslation,
+  type HomeLocale,
+} from "@/components/institutional/home-locales";
 import "@/public-home.css";
 
 const canonical = "https://www.peragus.com.br/";
@@ -26,23 +34,54 @@ const description =
   "Peragus connects currencies, markets, and financial infrastructure through cross-border payments, stablecoin settlement, and liquidity connectivity.";
 
 export const Route = createFileRoute("/")({
-  head: () => ({
-    meta: [
-      { title },
-      { name: "description", content: description },
-      { property: "og:title", content: title },
-      { property: "og:description", content: description },
-      { property: "og:url", content: canonical },
-      { property: "og:image", content: `${canonical}logo-peragus.png` },
-      { name: "twitter:card", content: "summary" },
-      { name: "twitter:title", content: title },
-      { name: "twitter:description", content: description },
-      { name: "twitter:image", content: `${canonical}logo-peragus.png` },
-    ],
-    links: [{ rel: "canonical", href: canonical }],
+  validateSearch: (search: Record<string, unknown>): { lang?: HomeLocale } => ({
+    lang: homeLocale(search["lang"]),
   }),
-  component: PublicHome,
+  loaderDeps: ({ search }) => ({ lang: search.lang }),
+  loader: ({ deps }) => deps,
+  head: ({ loaderData }) => {
+    const locale = loaderData?.lang ?? "en";
+    const pageTitle = translateHome(locale, title);
+    const pageDescription = translateHome(locale, description);
+    const pageUrl = localizedUrl(locale);
+    return {
+      meta: [
+        { title: pageTitle },
+        { name: "description", content: pageDescription },
+        { property: "og:title", content: pageTitle },
+        { property: "og:description", content: pageDescription },
+        { property: "og:url", content: pageUrl },
+        { property: "og:image", content: `${canonical}logo-peragus.png` },
+        { name: "twitter:card", content: "summary" },
+        { name: "twitter:title", content: pageTitle },
+        { name: "twitter:description", content: pageDescription },
+        { name: "twitter:image", content: `${canonical}logo-peragus.png` },
+      ],
+      links: [
+        { rel: "canonical", href: pageUrl },
+        ...homeLocales.map((lang) => ({
+          rel: "alternate",
+          hrefLang: lang,
+          href: localizedUrl(lang),
+        })),
+        { rel: "alternate", hrefLang: "x-default", href: canonical },
+      ],
+    };
+  },
+  component: LocalizedHome,
 });
+
+function homePath(locale: HomeLocale) {
+  return locale === "en" ? "/" : `/?lang=${locale}`;
+}
+
+function localizedUrl(locale: HomeLocale) {
+  return new URL(homePath(locale), canonical).href;
+}
+
+function LocalizedHome() {
+  return <PublicHome locale={Route.useSearch().lang ?? "en"} />;
+}
 
 const navigation = [
   ["Company", "#company"],
@@ -136,46 +175,48 @@ const roadmap = [
   ],
 ];
 
-function Brand() {
+function Brand({ locale }: { locale: HomeLocale }) {
   return (
-    <Link to="/" className="ih-brand">
+    <a href={homePath(locale)} className="ih-brand">
       <img src="/peragus-institutional-mark.webp" width="42" height="30" alt="" />
       <span>PERAGUS</span>
-    </Link>
+    </a>
   );
 }
 
 function AccountLinks() {
+  const t = useHomeTranslation();
   const { status } = useCustomerSession();
   return status === "authenticated" ? (
-    <Link to="/app">Client Account</Link>
+    <Link to="/app">{t("Client Account")}</Link>
   ) : (
     <>
-      <Link to="/login">Client Login</Link>
-      <Link to="/cadastro">Create Account</Link>
+      <Link to="/login">{t("Client Login")}</Link>
+      <Link to="/cadastro">{t("Create Account")}</Link>
     </>
   );
 }
 
-function Header() {
+function Header({ locale }: { locale: HomeLocale }) {
+  const t = useHomeTranslation();
   const [open, setOpen] = useState(false);
   return (
     <header className="ih-header">
       <div className="ih-wrap ih-header-inner">
-        <Brand />
+        <Brand locale={locale} />
         <button
           type="button"
           className="ih-menu"
           aria-expanded={open}
           aria-controls="ih-navigation"
-          aria-label={open ? "Close navigation" : "Open navigation"}
+          aria-label={open ? t("Close navigation") : t("Open navigation")}
           onClick={() => setOpen(!open)}
         >
           {open ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
         </button>
         <nav
           id="ih-navigation"
-          aria-label="Main navigation"
+          aria-label={t("Main navigation")}
           className={open ? "ih-nav is-open" : "ih-nav"}
           onKeyDown={(event) => {
             if (event.key === "Escape" && open) {
@@ -187,7 +228,7 @@ function Header() {
           <div className="ih-nav-links">
             {navigation.map(([label, href]) => (
               <a key={href} href={href} onClick={() => setOpen(false)}>
-                {label}
+                {t(label)}
               </a>
             ))}
           </div>
@@ -196,12 +237,27 @@ function Header() {
             <BookingLink />
           </div>
         </nav>
+        <div role="navigation" aria-label={t("Language")} className="ih-languages">
+          {homeLocales.map((language) => (
+            <a
+              key={language}
+              href={homePath(language)}
+              hrefLang={language}
+              lang={language}
+              aria-label={{ en: "English", "pt-BR": "Português", es: "Español" }[language]}
+              aria-current={locale === language ? "page" : undefined}
+            >
+              {{ en: "EN", "pt-BR": "PT", es: "ES" }[language]}
+            </a>
+          ))}
+        </div>
       </div>
     </header>
   );
 }
 
 function NetworkArtwork() {
+  const t = useHomeTranslation();
   return (
     <svg className="ih-art" viewBox="0 0 600 480" fill="none" aria-hidden="true">
       <defs>
@@ -248,43 +304,53 @@ function NetworkArtwork() {
       <path d="m286 241 10 10 18-21" stroke="#dce9ff" strokeWidth="2.5" />
       <g fill="#bbcdee" fontSize="13" fontFamily="inherit">
         <text x="65" y="122">
-          Local payments
+          {t("Local payments")}
         </text>
         <text x="65" y="375">
-          Liquidity providers
+          {t("Liquidity providers")}
         </text>
         <text x="535" y="120" textAnchor="end">
-          Blockchain networks
+          {t("Blockchain networks")}
         </text>
         <text x="535" y="375" textAnchor="end">
-          Settlement rails
+          {t("Settlement rails")}
         </text>
       </g>
     </svg>
   );
 }
 
-export function PublicHome() {
+export function PublicHome({ locale = "en" }: { locale?: HomeLocale } = {}) {
   return (
-    <div className="peragus-institutional" lang="en">
+    <HomeLocaleContext.Provider value={locale}>
+      <HomeContent locale={locale} />
+    </HomeLocaleContext.Provider>
+  );
+}
+
+function HomeContent({ locale }: { locale: HomeLocale }) {
+  const t = useHomeTranslation();
+  return (
+    <div className="peragus-institutional" lang={locale}>
       <a className="ih-skip" href="#main-content">
-        Skip to content
+        {t("Skip to content")}
       </a>
-      <Header />
+      <Header locale={locale} />
       <main id="main-content">
         <section className="ih-hero">
           <div className="ih-wrap ih-hero-grid">
             <div className="ih-hero-content">
-              <p className="ih-kicker">Cross-border payment infrastructure</p>
-              <h1>The infrastructure for a borderless economy.</h1>
+              <p className="ih-kicker">{t("Cross-border payment infrastructure")}</p>
+              <h1>{t("The infrastructure for a borderless economy.")}</h1>
               <p className="ih-lead">
-                Connecting currencies, markets, and opportunities through a more seamless financial
-                infrastructure.
+                {t(
+                  "Connecting currencies, markets, and opportunities through a more seamless financial infrastructure.",
+                )}
               </p>
               <div className="ih-actions">
                 <BookingLink />
                 <a href="#infrastructure" className="ih-button ih-secondary">
-                  Explore Our Infrastructure <ArrowDown size={16} aria-hidden="true" />
+                  {t("Explore Our Infrastructure")} <ArrowDown size={16} aria-hidden="true" />
                 </a>
               </div>
             </div>
@@ -294,38 +360,39 @@ export function PublicHome() {
 
         <section id="company" className="ih-section ih-wrap ih-split">
           <div>
-            <p className="ih-kicker">Who We Are</p>
-            <h2>The world moves across borders. Payments should too.</h2>
+            <p className="ih-kicker">{t("Who We Are")}</p>
+            <h2>{t("The world moves across borders. Payments should too.")}</h2>
           </div>
           <div className="ih-prose">
             <p>
-              International payments often require businesses to coordinate local payment methods,
-              currency conversion and settlement across separate providers. Each handoff adds work
-              for the teams that route payments and track delivery.
+              {t(
+                "International payments often require businesses to coordinate local payment methods, currency conversion and settlement across separate providers. Each handoff adds work for the teams that route payments and track delivery.",
+              )}
             </p>
             <p>
-              Peragus builds B2B infrastructure that connects local payment rails, liquidity
-              providers, stablecoins and blockchain settlement in one workflow. We work with
-              businesses and partners to define the payment routes and integrations their operations
-              require.
+              {t(
+                "Peragus builds B2B infrastructure that connects local payment rails, liquidity providers, stablecoins and blockchain settlement in one workflow. We work with businesses and partners to define the payment routes and integrations their operations require.",
+              )}
             </p>
           </div>
         </section>
 
         <section id="infrastructure" className="ih-section ih-band">
           <div className="ih-wrap">
-            <p className="ih-kicker">Our Infrastructure</p>
-            <h2>Connect the systems that move money.</h2>
+            <p className="ih-kicker">{t("Our Infrastructure")}</p>
+            <h2>{t("Connect the systems that move money.")}</h2>
             <p className="ih-lead">
-              Commercial availability depends on the corridor, providers and integrations involved.
+              {t(
+                "Commercial availability depends on the corridor, providers and integrations involved.",
+              )}
             </p>
             <div className="ih-capabilities">
               {capabilities.map(({ name, icon: Icon, text, strategy }) => (
                 <article key={name}>
                   <Icon aria-hidden="true" />
-                  {strategy && <span className="ih-stage">Strategic direction</span>}
-                  <h3>{name}</h3>
-                  <p>{text}</p>
+                  {strategy && <span className="ih-stage">{t("Strategic direction")}</span>}
+                  <h3>{t(name)}</h3>
+                  <p>{t(text)}</p>
                 </article>
               ))}
             </div>
@@ -333,15 +400,15 @@ export function PublicHome() {
         </section>
 
         <section id="how-it-works" className="ih-section ih-wrap">
-          <p className="ih-kicker">How It Works</p>
-          <h2>From payment origin to settlement.</h2>
-          <p className="ih-lead">A conceptual flow for a cross-border payment.</p>
+          <p className="ih-kicker">{t("How It Works")}</p>
+          <h2>{t("From payment origin to settlement.")}</h2>
+          <p className="ih-lead">{t("A conceptual flow for a cross-border payment.")}</p>
           <ol className="ih-flow">
             {steps.map(({ icon: Icon, name, text }) => (
               <li key={name}>
                 <Icon aria-hidden="true" />
-                <h3>{name}</h3>
-                <p>{text}</p>
+                <h3>{t(name)}</h3>
+                <p>{t(text)}</p>
               </li>
             ))}
           </ol>
@@ -350,14 +417,14 @@ export function PublicHome() {
         <section id="who-we-serve" className="ih-section ih-band">
           <div className="ih-wrap ih-split">
             <div>
-              <p className="ih-kicker">Who We Serve</p>
-              <h2>Built for businesses that move money across markets.</h2>
+              <p className="ih-kicker">{t("Who We Serve")}</p>
+              <h2>{t("Built for businesses that move money across markets.")}</h2>
             </div>
             <dl className="ih-audiences">
               {audiences.map(([name, text]) => (
                 <div key={name}>
-                  <dt>{name}</dt>
-                  <dd>{text}</dd>
+                  <dt>{t(name)}</dt>
+                  <dd>{t(text)}</dd>
                 </div>
               ))}
             </dl>
@@ -365,39 +432,39 @@ export function PublicHome() {
         </section>
 
         <section id="roadmap" className="ih-section ih-wrap">
-          <p className="ih-kicker">Roadmap 2027</p>
-          <h2>Building the future of global payments.</h2>
-          <p className="ih-lead">Our vision and strategic milestones for 2027.</p>
+          <p className="ih-kicker">{t("Roadmap 2027")}</p>
+          <h2>{t("Building the future of global payments.")}</h2>
+          <p className="ih-lead">{t("Our vision and strategic milestones for 2027.")}</p>
           <ol className="ih-timeline">
             {roadmap.map(([date, name, text]) => (
               <li key={date}>
                 <p className="ih-date">{date}</p>
-                <h3>{name}</h3>
-                <p>{text}</p>
+                <h3>{t(name)}</h3>
+                <p>{t(text)}</p>
               </li>
             ))}
           </ol>
           <p className="ih-roadmap-note">
-            These milestones represent Peragus’s strategic plans and targets for 2027.
+            {t("These milestones represent Peragus’s strategic plans and targets for 2027.")}
           </p>
         </section>
 
         <section id="partnerships" className="ih-section ih-band">
           <div className="ih-wrap ih-split">
             <div>
-              <p className="ih-kicker">Partnerships</p>
-              <h2>Let's build the future of financial infrastructure together.</h2>
+              <p className="ih-kicker">{t("Partnerships")}</p>
+              <h2>{t("Let's build the future of financial infrastructure together.")}</h2>
             </div>
             <div className="ih-prose">
               <Building2 aria-hidden="true" />
               <p>
-                We welcome conversations with liquidity providers, fintechs, financial institutions,
-                payment companies, technology integration partners, blockchain networks and
-                financial infrastructure providers.
+                {t(
+                  "We welcome conversations with liquidity providers, fintechs, financial institutions, payment companies, technology integration partners, blockchain networks and financial infrastructure providers.",
+                )}
               </p>
               <div className="ih-actions">
                 <a href="#commercial-inquiry" className="ih-button">
-                  Become a Partner <ArrowRight size={17} aria-hidden="true" />
+                  {t("Become a Partner")} <ArrowRight size={17} aria-hidden="true" />
                 </a>
                 <BookingLink secondary />
               </div>
@@ -408,13 +475,14 @@ export function PublicHome() {
         <section id="commercial-inquiry" className="ih-section ih-conversion">
           <div className="ih-wrap ih-split">
             <div>
-              <p className="ih-kicker">Contact</p>
-              <h2>Let's build a borderless economy together.</h2>
+              <p className="ih-kicker">{t("Contact")}</p>
+              <h2>{t("Let's build a borderless economy together.")}</h2>
               <p className="ih-lead">
-                Looking for cross-border payment infrastructure or exploring a strategic
-                partnership? Let's discuss how Peragus can connect with your business.
+                {t(
+                  "Looking for cross-border payment infrastructure or exploring a strategic partnership? Let's discuss how Peragus can connect with your business.",
+                )}
               </p>
-              <p>Book a 30-minute meeting with the founder of Peragus.</p>
+              <p>{t("Book a 30-minute meeting with the founder of Peragus.")}</p>
               <BookingLink />
             </div>
             <LeadForm />
@@ -426,29 +494,33 @@ export function PublicHome() {
         <div className="ih-wrap">
           <div className="ih-footer-grid">
             <div>
-              <Brand />
-              <p>Financial infrastructure for cross-border payments, liquidity and settlement.</p>
+              <Brand locale={locale} />
+              <p>
+                {t("Financial infrastructure for cross-border payments, liquidity and settlement.")}
+              </p>
             </div>
-            <nav aria-label="Company links">
+            <nav aria-label={t("Company links")}>
               {navigation.map(([label, href]) => (
                 <a href={href} key={href}>
-                  {label}
+                  {t(label)}
                 </a>
               ))}
             </nav>
-            <nav aria-label="Client links">
+            <nav aria-label={t("Client links")}>
               <AccountLinks />
               <a href="mailto:contato@peragus.com.br">
                 contato@peragus.com.br <ArrowUpRight size={13} aria-hidden="true" />
               </a>
             </nav>
-            <nav aria-label="Legal links">
-              <a href="/legal/termos-de-uso.html">Terms of Use</a>
-              <a href="/legal/politica-de-privacidade.html">Privacy Policy</a>
-              <a href="/legal/politica-de-reembolso.html">Refund Policy</a>
+            <nav aria-label={t("Legal links")}>
+              <a href="/legal/termos-de-uso.html">{t("Terms of Use")}</a>
+              <a href="/legal/politica-de-privacidade.html">{t("Privacy Policy")}</a>
+              <a href="/legal/politica-de-reembolso.html">{t("Refund Policy")}</a>
             </nav>
           </div>
-          <p className="ih-copyright">© {new Date().getUTCFullYear()} Peragus LTDA · Brazil</p>
+          <p className="ih-copyright">
+            © {new Date().getUTCFullYear()} Peragus LTDA · {t("Brazil")}
+          </p>
         </div>
       </footer>
     </div>
