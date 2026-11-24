@@ -1,3 +1,5 @@
+import type { Pool } from "pg";
+import { registerCommercialLeadRoute } from "./routes/commercial-leads.js";
 import { createReadinessChecker, type ReadinessProbes } from "./database/readiness.js";
 import { registerInviteDeliveryRoute, type InviteDeliveryOptions } from "./routes/invite-email-delivery.js";
 import { registerCustomerDocumentRoutes } from "./routes/customer-documents.js";
@@ -133,6 +135,7 @@ export interface BuildAppOptions {
   customerAccess?: CustomerAccess;
   /** Reverse-proxy hops to trust for request.ip (TRUST_PROXY_HOPS); 0 trusts none. */
   trustProxyHops?: number;
+  commercialLeadPool?: Pool;
   apiRateLimiter?: ApiRateLimiter;
   operatorAlertService?: OperatorAlertService;
   /** GET /v1/admin/operator-notifications (uncertain/failed e-mail alerts; operator + AAL2). */
@@ -181,6 +184,7 @@ export async function buildApp(
 
 
   await app.register(sensible);
+  if (options.commercialLeadPool) registerCommercialLeadRoute(app, options.commercialLeadPool);
   await registerInviteDeliveryRoute(app, options.inviteDelivery);
   await registerCustomerWebhookRoutes(app, options.customerWebhooks);
 

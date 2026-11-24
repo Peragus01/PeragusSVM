@@ -79,14 +79,33 @@ describe("customer UX", () => {
   it("exposes login on the public home without polling health or mounting the technical control room", () => {
     const fetcher = vi.spyOn(globalThis, "fetch");
     render(<PublicHome />);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Sem fronteiras");
-    expect(screen.getByRole("link", { name: "Acessar minha conta" })).toHaveAttribute(
-      "href",
-      "/login",
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "The infrastructure for a borderless economy.",
     );
+    for (const link of screen.getAllByRole("link", { name: "Client Login" })) {
+      expect(link).toHaveAttribute("href", "/login");
+    }
+    for (const link of screen.getAllByRole("link", { name: "Create Account" })) {
+      expect(link).toHaveAttribute("href", "/cadastro");
+    }
+    for (const link of screen.getAllByRole("link", { name: "Schedule a Meeting" })) {
+      expect(link).toHaveAttribute(
+        "href",
+        expect.stringContaining("https://calendar.google.com/calendar/appointments/schedules/"),
+      );
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    }
     expect(screen.queryByText(/Backend online|Checking backend|RPC unavailable/)).toBeNull();
-    expect(screen.getByText(/Operações reais ainda não disponíveis/)).toBeInTheDocument();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("links authenticated homepage visitors to the existing client account", () => {
+    state.status = "authenticated";
+    render(<PublicHome />);
+    for (const link of screen.getAllByRole("link", { name: "Client Account" })) {
+      expect(link).toHaveAttribute("href", "/app");
+    }
+    expect(screen.queryByRole("link", { name: "Create Account" })).toBeNull();
   });
   it("keeps login, password visibility and invitation access usable", async () => {
     state.login.mockResolvedValue(undefined);

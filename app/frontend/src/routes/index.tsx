@@ -1,268 +1,455 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useState } from "react";
 import {
+  ArrowDown,
   ArrowRight,
   ArrowUpRight,
-  Check,
-  ChevronDown,
+  Banknote,
+  Building2,
+  Coins,
   Globe2,
-  ShieldCheck,
+  Layers3,
+  Menu,
+  Network,
+  Route as RouteIcon,
   Wallet,
+  X,
 } from "lucide-react";
-import { PeragusBrand } from "@/components/peragus/customer-ui";
+import { BookingLink } from "@/components/institutional/booking";
+import { LeadForm } from "@/components/institutional/lead-form";
 import { useCustomerSession } from "@/lib/peragus/customer-session";
 import "@/public-home.css";
-import { useReveal } from "@/components/peragus/motion";
-import { moneyMode, useMoneyMode } from "@/lib/peragus/config";
+
+const canonical = "https://www.peragus.com.br/";
+const title = "Peragus | Infrastructure for a Borderless Economy";
+const description =
+  "Peragus connects currencies, markets, and financial infrastructure through cross-border payments, stablecoin settlement, and liquidity connectivity.";
+
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Peragus — Reais em USDT, com clareza em cada etapa" },
-      {
-        name: "description",
-        content:
-          moneyMode() === "test"
-            ? "Conheça a experiência Peragus para comprar USDT em reais e acompanhar a entrega na sua carteira Solana. Acesso atual em ambiente de testes."
-            : "Conheça a experiência Peragus para comprar USDT em reais e acompanhar a entrega na sua carteira Solana.",
-      },
+      { title },
+      { name: "description", content: description },
+      { property: "og:title", content: title },
+      { property: "og:description", content: description },
+      { property: "og:url", content: canonical },
+      { property: "og:image", content: `${canonical}logo-peragus.png` },
+      { name: "twitter:card", content: "summary" },
+      { name: "twitter:title", content: title },
+      { name: "twitter:description", content: description },
+      { name: "twitter:image", content: `${canonical}logo-peragus.png` },
     ],
+    links: [{ rel: "canonical", href: canonical }],
   }),
   component: PublicHome,
 });
-export function PublicHome() {
-  useReveal();
-  const test = useMoneyMode() === "test";
-  const { status } = useCustomerSession();
+
+const navigation = [
+  ["Company", "#company"],
+  ["Infrastructure", "#infrastructure"],
+  ["How It Works", "#how-it-works"],
+  ["Roadmap", "#roadmap"],
+  ["Partnerships", "#partnerships"],
+];
+
+const capabilities = [
+  {
+    name: "Cross-Border Payments",
+    icon: Globe2,
+    text: "Connect local payment methods with international settlement flows as supported corridors are enabled.",
+  },
+  {
+    name: "Stablecoin Settlement",
+    icon: Coins,
+    text: "Use stablecoins as a settlement component, with Solana as the initial blockchain integration.",
+  },
+  {
+    name: "Liquidity Connectivity",
+    icon: Network,
+    text: "Connect payment flows to liquidity providers for conversion and settlement on eligible routes.",
+  },
+  {
+    name: "Payment Infrastructure",
+    icon: Layers3,
+    text: "Integrate payment initiation, provider routing and settlement tracking into your product workflow.",
+  },
+  {
+    name: "Multi-Network Connectivity",
+    icon: RouteIcon,
+    text: "Extend routing across blockchain networks as network and liquidity integrations become available.",
+    strategy: true,
+  },
+];
+
+const steps = [
+  {
+    icon: Banknote,
+    name: "Payment Origin",
+    text: "A business initiates payment in the origin market.",
+  },
+  {
+    icon: Layers3,
+    name: "Peragus Infrastructure",
+    text: "Peragus connects the instruction to the payment workflow.",
+  },
+  {
+    icon: RouteIcon,
+    name: "Conversion & Routing",
+    text: "Connected providers handle conversion and routing as required.",
+  },
+  {
+    icon: Wallet,
+    name: "Destination Settlement",
+    text: "The selected rail settles the payment at its destination.",
+  },
+];
+
+const audiences = [
+  ["Fintechs", "Integrate cross-border payments and settlement into financial products."],
+  ["Payment Service Providers", "Connect payment systems to new markets and financial providers."],
+  ["Financial Institutions", "Explore collaboration on payment infrastructure and settlement."],
+  [
+    "International Businesses",
+    "Discuss payment flows for suppliers and operations across markets.",
+  ],
+  [
+    "Merchants & Payment Platforms",
+    "Explore ways to accept payments from customers in other markets.",
+  ],
+  ["Liquidity Providers", "Connect conversion and settlement services to payment workflows."],
+  ["Technology Partners", "Build integrations across financial platforms and blockchain networks."],
+];
+
+const roadmap = [
+  ["January 2027", "Pix NFC", "Implementation of Pix NFC payment acceptance."],
+  [
+    "April 2027",
+    "Digital Asset Development",
+    "Development of a proprietary Peragus token and a Paraguayan guaraní token.",
+  ],
+  ["July 2027", "POS Development", "Completion of Point of Sale development."],
+  ["October 2027", "Business Expansion", "Team expansion and a target of 100 clients."],
+  [
+    "December 2027",
+    "International Expansion",
+    "Relocation of company headquarters to the United States and a target of 300 clients.",
+  ],
+];
+
+function Brand() {
   return (
-    <div className="peragus-home">
-      <a className="peragus-skip" href="#principal">
-        Ir para o conteúdo
-      </a>
-      <header className="public-nav">
-        <Link to="/" aria-label="Peragus — início">
-          <PeragusBrand />
-        </Link>
-        <nav aria-label="Navegação principal">
-          <a href="#como-funciona">Como funciona</a>
-          <a href="#para-empresas">Para empresas</a>
-          <a href="#duvidas">Dúvidas</a>
+    <Link to="/" className="ih-brand">
+      <img src="/peragus-institutional-mark.webp" width="42" height="30" alt="" />
+      <span>PERAGUS</span>
+    </Link>
+  );
+}
+
+function AccountLinks() {
+  const { status } = useCustomerSession();
+  return status === "authenticated" ? (
+    <Link to="/app">Client Account</Link>
+  ) : (
+    <>
+      <Link to="/login">Client Login</Link>
+      <Link to="/cadastro">Create Account</Link>
+    </>
+  );
+}
+
+function Header() {
+  const [open, setOpen] = useState(false);
+  return (
+    <header className="ih-header">
+      <div className="ih-wrap ih-header-inner">
+        <Brand />
+        <button
+          type="button"
+          className="ih-menu"
+          aria-expanded={open}
+          aria-controls="ih-navigation"
+          aria-label={open ? "Close navigation" : "Open navigation"}
+          onClick={() => setOpen(!open)}
+        >
+          {open ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
+        </button>
+        <nav
+          id="ih-navigation"
+          aria-label="Main navigation"
+          className={open ? "ih-nav is-open" : "ih-nav"}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && open) {
+              setOpen(false);
+              event.currentTarget.parentElement?.querySelector("button")?.focus();
+            }
+          }}
+        >
+          <div className="ih-nav-links">
+            {navigation.map(([label, href]) => (
+              <a key={href} href={href} onClick={() => setOpen(false)}>
+                {label}
+              </a>
+            ))}
+          </div>
+          <div className="ih-nav-actions">
+            <AccountLinks />
+            <BookingLink />
+          </div>
         </nav>
-        <div className="public-nav-actions">
-          <Link to="/login" className="public-login">
-            Entrar
-          </Link>
-          <Link to={status === "authenticated" ? "/app" : "/cadastro"} className="public-button">
-            {status === "authenticated" ? "Minha conta" : "Tenho um convite"}
-            <ArrowUpRight size={16} />
-          </Link>
-        </div>
-      </header>
-      <main id="principal">
-        <section className="public-hero">
-          <img
-            src="/peragus-life.webp"
-            alt="Empreendedora usando o celular em seu café"
-            width="1672"
-            height="941"
-            fetchPriority="high"
-          />
-          <div className="public-hero-shade" />
-          <div className="public-hero-content">
-            <span className="public-eyebrow">REAIS → USDT · SOLANA</span>
-            <h1>
-              Seu próximo passo.
-              <br />
-              Em reais.
-              <br />
-              <em>Sem fronteiras.</em>
-            </h1>
-            <p>
-              Reais para começar. USDT para ir além. Uma experiência de compra com valores claros e
-              acompanhamento até sua carteira Solana.
-            </p>
-            <Link to="/login" className="public-button">
-              Acessar minha conta <ArrowRight size={19} />
-            </Link>
-            <a href="#como-funciona" className="public-hero-more">
-              Conheça a Peragus <ChevronDown size={16} />
-            </a>
-            <span className="public-pilot-note">
-              {test
-                ? "Piloto fechado em ambiente de testes. Operações reais ainda não disponíveis."
-                : "Piloto fechado, com acesso por convite."}
-            </span>
+      </div>
+    </header>
+  );
+}
+
+function NetworkArtwork() {
+  return (
+    <svg className="ih-art" viewBox="0 0 600 480" fill="none" aria-hidden="true">
+      <defs>
+        <pattern id="ih-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="1" fill="#6c91c7" opacity=".35" />
+        </pattern>
+        <radialGradient id="ih-glow">
+          <stop stopColor="#284eaa" stopOpacity=".57" />
+          <stop offset="1" stopColor="#0b1426" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id="ih-route">
+          <stop stopColor="#4a6ba3" />
+          <stop offset=".55" stopColor="#b9d2ff" />
+          <stop offset="1" stopColor="#5688f0" />
+        </linearGradient>
+      </defs>
+      <rect width="600" height="480" fill="url(#ih-glow)" />
+      <rect x="20" y="20" width="560" height="440" rx="20" fill="url(#ih-grid)" />
+      <g stroke="#34517d">
+        <circle cx="300" cy="240" r="170" />
+        <circle cx="300" cy="240" r="135" strokeDasharray="3 7" />
+        <ellipse cx="300" cy="240" rx="78" ry="170" />
+        <ellipse cx="300" cy="240" rx="170" ry="68" />
+        <path d="M130 240h340M300 70v340" />
+      </g>
+      <g stroke="url(#ih-route)" strokeWidth="1.7">
+        <path d="M78 144h68c79 0 65 96 154 96s72-98 152-98h70" />
+        <path d="M78 348h78c65 0 62-108 144-108s67 108 154 108h68" />
+        <path
+          className="ih-art-signal"
+          d="M78 144h68c79 0 65 96 154 96s72-98 152-98h70"
+          strokeDasharray="15 600"
+          stroke="#e3eeff"
+          strokeWidth="3"
+        />
+      </g>
+      <g fill="#101e37" stroke="#85aaff">
+        <circle cx="78" cy="144" r="7" />
+        <circle cx="78" cy="348" r="7" />
+        <circle cx="522" cy="142" r="7" />
+        <circle cx="522" cy="348" r="7" />
+        <rect x="274" y="214" width="52" height="52" rx="11" transform="rotate(45 300 240)" />
+      </g>
+      <path d="m286 241 10 10 18-21" stroke="#dce9ff" strokeWidth="2.5" />
+      <g fill="#bbcdee" fontSize="13" fontFamily="inherit">
+        <text x="65" y="122">
+          Local payments
+        </text>
+        <text x="65" y="375">
+          Liquidity providers
+        </text>
+        <text x="535" y="120" textAnchor="end">
+          Blockchain networks
+        </text>
+        <text x="535" y="375" textAnchor="end">
+          Settlement rails
+        </text>
+      </g>
+    </svg>
+  );
+}
+
+export function PublicHome() {
+  return (
+    <div className="peragus-institutional" lang="en">
+      <a className="ih-skip" href="#main-content">
+        Skip to content
+      </a>
+      <Header />
+      <main id="main-content">
+        <section className="ih-hero">
+          <div className="ih-wrap ih-hero-grid">
+            <div className="ih-hero-content">
+              <p className="ih-kicker">Cross-border payment infrastructure</p>
+              <h1>The infrastructure for a borderless economy.</h1>
+              <p className="ih-lead">
+                Connecting currencies, markets, and opportunities through a more seamless financial
+                infrastructure.
+              </p>
+              <div className="ih-actions">
+                <BookingLink />
+                <a href="#infrastructure" className="ih-button ih-secondary">
+                  Explore Our Infrastructure <ArrowDown size={16} aria-hidden="true" />
+                </a>
+              </div>
+            </div>
+            <NetworkArtwork />
           </div>
-          <div className="public-conversion-visual" aria-label="Jornada de compra de USDT">
-            <div className="public-conversion-top">
-              <span>UMA CONEXÃO. MAIS POSSIBILIDADES.</span>
-              <span>↗</span>
-            </div>
-            <div className="public-asset">
-              <span className="asset-icon brl-icon">R$</span>
-              <div>
-                <small>Você paga</small>
-                <strong>Real brasileiro</strong>
-              </div>
-              <b>BRL</b>
-            </div>
-            <div className="public-conversion-arrow">↓</div>
-            <div className="public-asset">
-              <span className="asset-icon usdt-icon">₮</span>
-              <div>
-                <small>Você recebe</small>
-                <strong>Tether USD</strong>
-              </div>
-              <b>USDT</b>
-            </div>
-            <div className="public-conversion-foot">
-              <span>Solana</span>
-              <span>Na sua carteira</span>
-            </div>
+        </section>
+
+        <section id="company" className="ih-section ih-wrap ih-split">
+          <div>
+            <p className="ih-kicker">Who We Are</p>
+            <h2>The world moves across borders. Payments should too.</h2>
+          </div>
+          <div className="ih-prose">
             <p>
-              Jornada planejada: cotação → revisão → Pix → entrega.
-              {test && (
-                <>
-                  <br />
-                  No ambiente atual, apenas estimativa e registro de teste.
-                </>
-              )}
+              International payments often require businesses to coordinate local payment methods,
+              currency conversion and settlement across separate providers. Each handoff adds work
+              for the teams that route payments and track delivery.
+            </p>
+            <p>
+              Peragus builds B2B infrastructure that connects local payment rails, liquidity
+              providers, stablecoins and blockchain settlement in one workflow. We work with
+              businesses and partners to define the payment routes and integrations their operations
+              require.
             </p>
           </div>
         </section>
-        <section className="public-section" id="como-funciona">
-          <div className="public-section-heading">
-            <span className="public-eyebrow">SIMPLES EM CADA ETAPA</span>
-            <h2>
-              Da cotação
-              <br />à sua carteira.
-            </h2>
-            <p>Informações claras para você saber onde está e qual é o próximo passo.</p>
+
+        <section id="infrastructure" className="ih-section ih-band">
+          <div className="ih-wrap">
+            <p className="ih-kicker">Our Infrastructure</p>
+            <h2>Connect the systems that move money.</h2>
+            <p className="ih-lead">
+              Commercial availability depends on the corridor, providers and integrations involved.
+            </p>
+            <div className="ih-capabilities">
+              {capabilities.map(({ name, icon: Icon, text, strategy }) => (
+                <article key={name}>
+                  <Icon aria-hidden="true" />
+                  {strategy && <span className="ih-stage">Strategic direction</span>}
+                  <h3>{name}</h3>
+                  <p>{text}</p>
+                </article>
+              ))}
+            </div>
           </div>
-          <div className="public-feature-grid">
-            {[
-              {
-                icon: ShieldCheck,
-                title: "Confira quanto recebe",
-                text: "Informe o valor em reais e consulte a estimativa de USDT, com os custos disponíveis antes de avançar.",
-              },
-              {
-                icon: Wallet,
-                title: "Revise antes de pagar",
-                text: "Confira a carteira de destino e os detalhes. O Pix só fica disponível quando o pagamento estiver habilitado.",
-              },
-              {
-                icon: Globe2,
-                title: "Acompanhe cada etapa",
-                text: "Do pagamento à entrega, acompanhe as confirmações disponíveis no seu histórico. Sem confundir estimativa com USDT recebido.",
-              },
-            ].map(({ icon: Icon, title, text }, i) => (
-              <article key={title}>
-                <span className="public-feature-icon">
-                  <Icon size={23} />
-                </span>
-                <small>0{i + 1}</small>
-                <h3>{title}</h3>
+        </section>
+
+        <section id="how-it-works" className="ih-section ih-wrap">
+          <p className="ih-kicker">How It Works</p>
+          <h2>From payment origin to settlement.</h2>
+          <p className="ih-lead">A conceptual flow for a cross-border payment.</p>
+          <ol className="ih-flow">
+            {steps.map(({ icon: Icon, name, text }) => (
+              <li key={name}>
+                <Icon aria-hidden="true" />
+                <h3>{name}</h3>
                 <p>{text}</p>
-              </article>
+              </li>
             ))}
+          </ol>
+        </section>
+
+        <section id="who-we-serve" className="ih-section ih-band">
+          <div className="ih-wrap ih-split">
+            <div>
+              <p className="ih-kicker">Who We Serve</p>
+              <h2>Built for businesses that move money across markets.</h2>
+            </div>
+            <dl className="ih-audiences">
+              {audiences.map(([name, text]) => (
+                <div key={name}>
+                  <dt>{name}</dt>
+                  <dd>{text}</dd>
+                </div>
+              ))}
+            </dl>
           </div>
         </section>
-        <section className="public-business public-section" id="para-empresas">
-          <div>
-            <span className="public-eyebrow">PERAGUS PARA NEGÓCIOS</span>
-            <h2>
-              Conexões que vão
-              <br />
-              além das fronteiras.
-            </h2>
-            <p>
-              Estamos construindo infraestrutura de pagamentos com stablecoins para aproximar
-              empresas, plataformas e clientes na América Latina.
-            </p>
-            <ul>
-              <li>
-                <Check size={17} /> Foco em pagamentos transfronteiriços
+
+        <section id="roadmap" className="ih-section ih-wrap">
+          <p className="ih-kicker">Roadmap 2027</p>
+          <h2>Building the future of global payments.</h2>
+          <p className="ih-lead">Our vision and strategic milestones for 2027.</p>
+          <ol className="ih-timeline">
+            {roadmap.map(([date, name, text]) => (
+              <li key={date}>
+                <p className="ih-date">{date}</p>
+                <h3>{name}</h3>
+                <p>{text}</p>
               </li>
-              <li>
-                <Check size={17} /> Acompanhamento das etapas da operação
-              </li>
-              <li>
-                <Check size={17} /> Integração entre moeda local e ativos digitais
-              </li>
-            </ul>
-          </div>
-          <div className="public-business-card">
-            <span>BRASIL ↔ AMÉRICA LATINA</span>
-            <Globe2 size={120} strokeWidth={0.8} />
-            <h3>
-              Uma região.
-              <br />
-              Muitas possibilidades.
-            </h3>
-            <p>
-              Reais na origem. USDT na rede Solana. Cada etapa visível, da cotação à confirmação
-              disponível.
-            </p>
-          </div>
-        </section>
-        <section className="public-section public-faq" id="duvidas">
-          <div className="public-section-heading">
-            <span className="public-eyebrow">ANTES DE COMEÇAR</span>
-            <h2>
-              Suas dúvidas,
-              <br />
-              com clareza.
-            </h2>
-          </div>
-          <div>
-            {[
-              [
-                "Como acesso minha conta?",
-                "Use o botão Entrar no topo da página. Se você já participa do piloto, utilize seu e-mail e senha cadastrados.",
-              ],
-              [
-                "Posso criar uma conta agora?",
-                "O piloto é fechado e o cadastro depende de convite e da disponibilidade de adesão. A página de cadastro informa a situação atual.",
-              ],
-              ...(test
-                ? [
-                    [
-                      "As operações deste ambiente movimentam dinheiro real?",
-                      "Não. O ambiente atual é de testes. Uma cotação indicativa ou registro de teste não representa pagamento, conversão concluída ou entrega na carteira.",
-                    ],
-                  ]
-                : []),
-              [
-                "O valor estimado é o valor final?",
-                "Não. A estimativa pode variar. Taxas e valores líquidos só são apresentados quando informados e confirmados pelo serviço responsável.",
-              ],
-            ].map(([question, answer]) => (
-              <details key={question}>
-                <summary>
-                  {question}
-                  <ChevronDown size={18} />
-                </summary>
-                <p>{answer}</p>
-              </details>
             ))}
+          </ol>
+          <p className="ih-roadmap-note">
+            These milestones represent Peragus’s strategic plans and targets for 2027.
+          </p>
+        </section>
+
+        <section id="partnerships" className="ih-section ih-band">
+          <div className="ih-wrap ih-split">
+            <div>
+              <p className="ih-kicker">Partnerships</p>
+              <h2>Let's build the future of financial infrastructure together.</h2>
+            </div>
+            <div className="ih-prose">
+              <Building2 aria-hidden="true" />
+              <p>
+                We welcome conversations with liquidity providers, fintechs, financial institutions,
+                payment companies, technology integration partners, blockchain networks and
+                financial infrastructure providers.
+              </p>
+              <div className="ih-actions">
+                <a href="#commercial-inquiry" className="ih-button">
+                  Become a Partner <ArrowRight size={17} aria-hidden="true" />
+                </a>
+                <BookingLink secondary />
+              </div>
+            </div>
           </div>
         </section>
-        <section className="public-end">
-          <span className="public-eyebrow">SEU PRÓXIMO PASSO</span>
-          <h2>Já faz parte do piloto?</h2>
-          <p>Acesse sua conta e acompanhe suas operações.</p>
-          <Link to="/login" className="public-button">
-            Entrar na Peragus <ArrowRight size={18} />
-          </Link>
+
+        <section id="commercial-inquiry" className="ih-section ih-conversion">
+          <div className="ih-wrap ih-split">
+            <div>
+              <p className="ih-kicker">Contact</p>
+              <h2>Let's build a borderless economy together.</h2>
+              <p className="ih-lead">
+                Looking for cross-border payment infrastructure or exploring a strategic
+                partnership? Let's discuss how Peragus can connect with your business.
+              </p>
+              <p>Book a 30-minute meeting with the founder of Peragus.</p>
+              <BookingLink />
+            </div>
+            <LeadForm />
+          </div>
         </section>
       </main>
-      <footer className="public-footer">
-        <PeragusBrand />
-        <p>Infraestrutura para uma América Latina mais conectada.</p>
-        <Link to="/login">Entrar</Link>
-        <Link to="/cadastro">Acesso por convite</Link>
-        <small>
-          © {new Date().getFullYear()} Peragus.{test ? " Piloto em ambiente de testes." : ""}
-        </small>
+
+      <footer className="ih-footer">
+        <div className="ih-wrap">
+          <div className="ih-footer-grid">
+            <div>
+              <Brand />
+              <p>Financial infrastructure for cross-border payments, liquidity and settlement.</p>
+            </div>
+            <nav aria-label="Company links">
+              {navigation.map(([label, href]) => (
+                <a href={href} key={href}>
+                  {label}
+                </a>
+              ))}
+            </nav>
+            <nav aria-label="Client links">
+              <AccountLinks />
+              <a href="mailto:contato@peragus.com.br">
+                contato@peragus.com.br <ArrowUpRight size={13} aria-hidden="true" />
+              </a>
+            </nav>
+            <nav aria-label="Legal links">
+              <a href="/legal/termos-de-uso.html">Terms of Use</a>
+              <a href="/legal/politica-de-privacidade.html">Privacy Policy</a>
+              <a href="/legal/politica-de-reembolso.html">Refund Policy</a>
+            </nav>
+          </div>
+          <p className="ih-copyright">© {new Date().getUTCFullYear()} Peragus LTDA · Brazil</p>
+        </div>
       </footer>
     </div>
   );

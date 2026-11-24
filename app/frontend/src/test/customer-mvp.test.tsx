@@ -211,8 +211,11 @@ describe("test-environment copy follows the money mode", () => {
   const screens: [string, () => ReactNode][] = [
     ["registration", () => <RegistrationPage />],
     ["dashboard", () => <Dashboard />],
-    ["public home", () => <PublicHome />],
   ];
+  it("keeps institutional copy independent of the money mode", () => {
+    const { container } = render(<PublicHome />);
+    expect(container.textContent).not.toMatch(testCopy);
+  });
   for (const [name, Screen] of screens) {
     it(`${name} shows no test copy in live`, () => {
       vi.stubEnv("VITE_PERAGUS_MONEY_MODE", "live");
