@@ -87,6 +87,10 @@ describe("persistent per-tab session", () => {
     const first = mount();
     fireEvent.click(screen.getByText("Login"));
     await screen.findByText("login.access");
+    await waitFor(() => {
+      const persisted = JSON.parse(window.sessionStorage.getItem(KEY) ?? "null");
+      expect(persisted?.access_token).toBe("login.access");
+    });
     const raw = JSON.parse(window.sessionStorage.getItem(KEY)!);
     expect(raw.access_token).toBe("login.access");
     expect(raw.refresh_token).toBe("login.refresh");
@@ -247,6 +251,10 @@ describe("persistent per-tab session", () => {
     await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("authenticated"));
     fireEvent.click(screen.getByText("MFA"));
     await screen.findByText("aal2.access");
+    await waitFor(() => {
+      const persisted = JSON.parse(window.sessionStorage.getItem(KEY) ?? "null");
+      expect(persisted?.access_token).toBe("aal2.access");
+    });
     const raw = JSON.parse(window.sessionStorage.getItem(KEY)!);
     expect(raw.access_token).toBe("aal2.access");
     expect(raw.refresh_token).toBe("aal2.refresh");
